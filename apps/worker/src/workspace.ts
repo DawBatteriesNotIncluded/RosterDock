@@ -10,7 +10,12 @@ import { spawn } from "node:child_process";
 import { lstat, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { renderBinaryFileDiff, renderNewFileDiff, type RunArtifactInput } from "@rosterdock/shared";
+import {
+  parseUnifiedDiff,
+  renderBinaryFileDiff,
+  renderNewFileDiff,
+  type RunArtifactInput,
+} from "@rosterdock/shared";
 import { clip } from "./text.js";
 
 export const HANDOVER_FILE = "handover-summary.md";
@@ -200,6 +205,28 @@ export interface Harvest {
   filesWritten: string[];
   /** HEAD of the clone the diff was taken against; null without a repository. */
   baseSha: string | null;
+  /** Files whose changes did not fit in the diff the board takes, so the review does not show them. */
+  diffOmitted: string[];
+}
+
+/**
+ * The diff within `maxBytes` as the board counts them (UTF-8), in whole files: a file that does not fit
+ * is left out and named, never cut inside a hunk, so the review never shows (and a merge never applies)
+ * half a change.
+ */
+export function fitDiff(diffText: string, maxBytes: number): { text: string; omitted: string[] } {
+  if (Buffer.byteLength(diffText, "utf8") <= maxBytes) return { text: diffText, omitted: [] };
+  const kept: string[] = [];
+  const omitted: string[] = [];
+  let used = 0;
+  for (const file of diffText.split(/^(?=diff --git )/m).filter(Boolean)) {
+    const bytes = Buffer.byteLength(file, "utf8");
+    if (used + bytes <= maxBytes) {
+      kept.push(file);
+      used += bytes;
+    } else omitted.push(parseUnifiedDiff(file)[0]?.path || file.split("\n", 1)[0]!);
+  }
+  return { text: kept.join(""), omitted };
 }
 
 async function readText(file: string, maxBytes: number): Promise<string | null> {
@@ -245,6 +272,7 @@ export async function harvestWorkspace(
     missingOutputs: [],
     filesWritten: [],
     baseSha: null,
+    diffOmitted: [],
   };
   if (ws.repo) await restoreGitDir(ws);
   out.handover =
@@ -306,13 +334,10 @@ export async function harvestWorkspace(
       )
       .join("");
   }
-  if (diffText.trim()) {
-    out.artifacts.push({
-      path: "changes.diff",
-      kind: "diff",
-      content: diffText.slice(0, maxBytes),
-      encoding: "utf8",
-    });
+  const fitted = fitDiff(diffText, maxBytes);
+  out.diffOmitted = fitted.omitted;
+  if (fitted.text.trim()) {
+    out.artifacts.push({ path: "changes.diff", kind: "diff", content: fitted.text, encoding: "utf8" });
   }
   return out;
 }

@@ -267,6 +267,10 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       const harvest = await harvestWorkspace(ws, spec.task.declaredOutputs, {
         maxArtifactBytes: spec.limits?.artifactBytes,
       });
+      const omitted = harvest.diffOmitted.length
+        ? ` The diff was over the size the board takes, so the review leaves out: ${harvest.diffOmitted.join(", ")}.`
+        : "";
+      if (omitted) emit({ type: "stderr", payload: { text: clip(omitted.trim(), 500) } });
       await deps.board
         .checkpoint(token, runId, { filesWritten: harvest.filesWritten, attempt: run.attempt })
         .catch(() => {});
@@ -337,7 +341,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
           : "";
         completion = {
           status: "completed",
-          summary: clip(`${harvest.handover ?? result.resultText ?? "Finished."}${missing}`, 4000),
+          summary: clip(`${harvest.handover ?? result.resultText ?? "Finished."}${missing}${omitted}`, 4000),
           usage,
           durationMs,
           ...(harvest.baseSha ? { baseSha: harvest.baseSha } : {}),

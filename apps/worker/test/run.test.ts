@@ -42,6 +42,8 @@ function fakeBoard(
     claimDetails?: Record<string, unknown>;
     stopAfterHeartbeats?: number | null;
     repoUrl?: string;
+    sandbox?: ClaimedRun["spec"]["sandbox"];
+    limits?: ClaimedRun["spec"]["limits"];
   } = {},
 ): FakeBoard {
   const claimed: ClaimedRun = {
@@ -64,6 +66,7 @@ function fakeBoard(
       project: { repoUrl: opts.repoUrl ?? null, defaultBranch: "main", name: "P" },
       teammate: { name: "Cody", handle: "cody", model: "stub", engine: "stub" },
       sandbox: opts.sandbox ?? { allowedTools: null, envNames: null, timeoutSeconds: 3600 },
+      ...(opts.limits ? { limits: opts.limits } : {}),
       checkpoint: null,
     },
   };
@@ -193,6 +196,25 @@ describe("executeRun", () => {
     expect(board.completion?.status).toBe("failed");
     expect(board.completion?.error?.length).toBeLessThanOrEqual(4000);
     expect(board.completion?.error).toMatch(/^Claude Code exited with code 1: e+$/);
+  });
+
+  it("names in the summary and the run log the files a diff over the board's limit leaves out", async () => {
+    const writer: EngineAdapter = {
+      id: "stub",
+      async run(ctx) {
+        await writeFile(path.join(ctx.workdir, "one.md"), `${"1".repeat(199)}\n`, "utf8");
+        await writeFile(path.join(ctx.workdir, "two.md"), `${"2".repeat(199)}\n`, "utf8");
+        return { ok: true, exitCode: 0, usage: {}, resultText: "Wrote two files." };
+      },
+    };
+    const board = fakeBoard(PACK(), [], { limits: { artifactBytes: 400 } });
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board, { engines: { stub: writer } }));
+    expect(board.completion?.status).toBe("completed");
+    expect(board.completion?.summary).toBe(
+      "Wrote two files. The diff was over the size the board takes, so the review leaves out: two.md.",
+    );
+    expect(board.shipped.some((e) => String(e.payload?.text).includes("leaves out: two.md"))).toBe(true);
+    expect(board.artifacts.find((a) => a.kind === "diff")?.content).not.toContain("two.md");
   });
 
   it("turns blocked.md into a blocked completion routed to the mentioned teammate", async () => {

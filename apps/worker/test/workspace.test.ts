@@ -3,10 +3,11 @@ import { existsSync } from "node:fs";
 import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { parseUnifiedDiff } from "@rosterdock/shared";
+import { applyFilePatch, parseUnifiedDiff, renderNewFileDiff } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   cleanupWorkspace,
+  fitDiff,
   git,
   gitEnvironment,
   harvestWorkspace,
@@ -129,6 +130,40 @@ describe("workspace", () => {
     const diff = raised.artifacts.find((a) => a.kind === "diff")!;
     expect(diff.content.length).toBeGreaterThan(512 * 1024);
     expect(diff.content).toContain("+++ b/small.md");
+    await cleanupWorkspace(ws);
+  });
+
+  it("keeps the diff within the board's limit in bytes and in whole files, naming what it leaves out", () => {
+    // 3,000 é is 3,000 characters and 6,000 bytes: over a 4,000-byte limit, though not by characters.
+    const diff = [
+      renderNewFileDiff("a.md", "first\n"),
+      renderNewFileDiff("accents.md", `${"é".repeat(3000)}\n`),
+      renderNewFileDiff("c.md", "last\n"),
+    ].join("");
+    const fitted = fitDiff(diff, 4000);
+    expect(fitted.omitted).toEqual(["accents.md"]);
+    expect(Buffer.byteLength(fitted.text, "utf8")).toBeLessThanOrEqual(4000);
+    const files = parseUnifiedDiff(fitted.text);
+    expect(files.map((f) => f.path)).toEqual(["a.md", "c.md"]);
+    // What is left applies whole.
+    expect(files.map((f) => applyFilePatch(null, f))).toEqual(["first\n", "last\n"]);
+    expect(fitDiff(diff, 1_000_000)).toEqual({ text: diff, omitted: [] });
+  });
+
+  it("leaves a changed file that does not fit out of a repository's diff instead of cutting it", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-fit",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    await writeFile(path.join(ws.dir, "long.md"), "a long line of notes\n".repeat(200), "utf8");
+    const h = await harvestWorkspace(ws, ["README.md"], { maxArtifactBytes: 2000 });
+    expect(h.diffOmitted).toEqual(["long.md"]);
+    const files = parseUnifiedDiff(h.artifacts.find((a) => a.kind === "diff")!.content);
+    expect(files.map((f) => f.path)).toEqual(["README.md"]);
+    expect(applyFilePatch("# demo\n", files[0]!)).toBe("# demo\n\nchanged\n");
     await cleanupWorkspace(ws);
   });
 

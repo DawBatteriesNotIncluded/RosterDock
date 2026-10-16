@@ -200,8 +200,9 @@ function joinLines(lines: TextLine[]): string {
 
 /**
  * Apply one file's hunks to its base text. The base must match the context and
- * deleted lines exactly (the diff was taken from that base), otherwise PatchError.
- * Returns null for a deletion.
+ * deleted lines exactly (the diff was taken from that base), and every hunk must
+ * hold as many lines as its header counts (a diff cut short inside a hunk would
+ * otherwise apply as a deletion), otherwise PatchError. Returns null for a deletion.
  */
 export function applyFilePatch(base: string | null, file: DiffFile): string | null {
   if (file.binary) throw new PatchError(`${file.path}: binary files cannot be patched from a text diff`);
@@ -210,6 +211,10 @@ export function applyFilePatch(base: string | null, file: DiffFile): string | nu
   const out: TextLine[] = [];
   let cursor = 0; // 0-based index into src
   for (const hunk of file.hunks) {
+    const oldCount = hunk.lines.filter((l) => l.kind !== "add").length;
+    const newCount = hunk.lines.filter((l) => l.kind !== "del").length;
+    if (oldCount !== hunk.oldLines || newCount !== hunk.newLines)
+      throw new PatchError(`${file.path}: hunk ${hunk.index + 1} is incomplete; the diff was cut inside it`);
     const start = Math.max(0, hunk.oldStart - 1);
     // Hunks with oldLines = 0 sit AFTER line oldStart (git convention).
     const target = hunk.oldLines === 0 ? hunk.oldStart : start;

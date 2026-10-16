@@ -86,6 +86,14 @@ describe("applyFilePatch", () => {
     expect(() => applyFilePatch(null, json)).toThrow(/does not match/);
   });
 
+  it("refuses a hunk cut short, which would otherwise apply as a deletion", () => {
+    const json = files.find((f) => f.path === "workflows/vms-digest.json")!;
+    const hunk = json.hunks[0]!;
+    // The diff ends before the hunk's added lines: what a cut by length used to leave.
+    const cut = { ...json, hunks: [{ ...hunk, lines: hunk.lines.filter((l) => l.kind !== "add") }] };
+    expect(() => applyFilePatch(base[json.path]!, cut)).toThrow(/hunk 1 is incomplete/);
+  });
+
   it("refuses binary files", () => {
     const bin = files.find((f) => f.binary)!;
     expect(() => applyFilePatch("x", bin)).toThrow(/binary/);
