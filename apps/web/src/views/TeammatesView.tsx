@@ -256,12 +256,6 @@ function Editor({
   );
 }
 
-export const TOOL_MODE_HINT: Record<ToolMode, string> = {
-  off: "Not in the toolbox.",
-  read: "Reads run; writes are refused.",
-  ask: "Reads run; every write waits for you in Approvals.",
-};
-
 function toolboxMap(t: Teammate): Record<string, ToolMode> {
   return Object.fromEntries(t.toolbox.map((e) => [e.connection, e.mode]));
 }

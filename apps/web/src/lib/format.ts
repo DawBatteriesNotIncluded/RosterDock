@@ -277,6 +277,11 @@ export function describeEvent(
       const routed = mentions.length ? ` and mentioned ${mentions.map((m) => m.name).join(", ")}` : "";
       return { text: `${who} wrote on ${n}${routed}`, go: { view: "board", taskId } };
     }
+    case "decision.logged": {
+      const sure =
+        typeof p(ev).confidence === "number" ? ` (${Math.round(p(ev).confidence * 100)}% sure)` : "";
+      return { text: `${who} decided on ${n}: ${p(ev).decision}${sure}`, go: { view: "board", taskId } };
+    }
     case "task.chased":
       return {
         text: `${who} chased ${p(ev).teammateName ?? "a teammate"} about ${n}`,

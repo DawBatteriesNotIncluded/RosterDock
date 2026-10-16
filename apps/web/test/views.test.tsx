@@ -1,5 +1,6 @@
 // Headless smoke: every view renders to HTML with sample data and shows the
 // things the prototype shows. No DOM, no network.
+import { EVENT_TYPES } from "@rosterdock/shared";
 import { renderToString } from "react-dom/server";
 import type { CompanyData } from "../src/api/types.ts";
 import { describe, expect, it } from "vitest";
@@ -1248,6 +1249,25 @@ describe("pure helpers", () => {
       describeEvent(ev("goal.escalated", peter, { title: "Digest", reason: "#3 failed 3 times" }), fixture)
         .text,
     ).toBe("Peter needs you on Digest: #3 failed 3 times");
+    // A teammate's decision reads as one, with how sure it is.
+    expect(
+      describeEvent(
+        ev(
+          "decision.logged",
+          { kind: "teammate", id: fixture.teammates[1]!.id },
+          {
+            number: 12,
+            decision: "Read the Gong calls from the v2 API",
+            confidence: 0.8,
+          },
+        ),
+        fixture,
+      ).text,
+    ).toBe("Cody decided on #12: Read the Gong calls from the v2 API (80% sure)");
+    // Every event type has its own sentence: none falls through to its raw name.
+    for (const type of EVENT_TYPES) {
+      expect(describeEvent(ev(type, peter, {}), fixture).text, type).not.toContain(type);
+    }
     expect(describeEvent(ev("task.replanned", peter, { number: 3, replans: 1 }), fixture).text).toBe(
       "Peter re-planned #3 after a failed run (attempt 2)",
     );

@@ -39,7 +39,7 @@ describe("blocker taxonomy", () => {
 
   it("marks approval and evidence blockers as not retry-safe", () => {
     expect(blockerFor("approval_required").retrySafe).toBe(false);
-    expect(blockerFor("approval_required").resumeInstructions).toMatch(/do not re-dispatch/);
+    expect(blockerFor("approval_required").resumeInstructions).toMatch(/do not start the task again/);
     expect(blockerFor("evidence_failed").retrySafe).toBe(false);
   });
 });

@@ -31,13 +31,6 @@ export const DEPT_TEMPLATES: Record<
   blank: { name: "Blank", roles: [], policy: "ask" },
 };
 
-export const COMPANY_TEMPLATES: { id: string; label: string; blurb: string }[] = [
-  { id: "GTM company", label: "GTM company", blurb: "Engineering, Research, Marketing Ops" },
-  { id: "Product studio", label: "Product studio", blurb: "Build cell, Docs shop, Audit office" },
-  { id: "Research agency", label: "Research agency", blurb: "Research only" },
-  { id: "Blank", label: "Blank", blurb: "Start from nothing" },
-];
-
 function Footer({
   onClose,
   submitLabel,
@@ -84,28 +77,18 @@ export function CreateCompanyModal({
   onCreate,
 }: {
   onClose(): void;
-  onCreate(input: { name: string; template: string }): Promise<void>;
+  onCreate(input: { name: string }): Promise<void>;
 }) {
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState(COMPANY_TEMPLATES[0]!.id);
   const { busy, submit } = useSubmit(onCreate);
   return (
     <Modal title="Create a company" onClose={onClose}>
-      <form className="flex flex-col gap-3" onSubmit={submit({ name: name.trim(), template })}>
-        <Field label="Name">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Studio" autoFocus />
-        </Field>
+      <form className="flex flex-col gap-3" onSubmit={submit({ name: name.trim() })}>
         <Field
-          label="Template"
-          hint="A label for now. Departments come from the Departments page; Peter proposes a whole org from M4."
+          label="Name"
+          hint="It starts with Peter. Import a company file in Settings, Templates, or describe the company you need with Design from a brief, and Peter drafts its departments."
         >
-          <select value={template} onChange={(e) => setTemplate(e.target.value)}>
-            {COMPANY_TEMPLATES.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label} · {t.blurb}
-              </option>
-            ))}
-          </select>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Studio" autoFocus />
         </Field>
         <Footer onClose={onClose} submitLabel="Create company" busy={busy} disabled={!name.trim()} />
       </form>

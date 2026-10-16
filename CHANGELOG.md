@@ -82,6 +82,8 @@ install built from that tree changes each of these:
 
 - A teammate hired from the built-in 'Cody 3' template, or put on OpenCode in its editor, failed every run:
   no worker runs OpenCode yet. The template runs on Claude Code, and the pickers no longer offer OpenCode.
+- Activity and the Company page showed a teammate's logged decision by its raw event name, and a task a
+  person marked blocked explained itself as waiting on a teammate's answer.
 
 ### Security
 

@@ -83,7 +83,7 @@ export function eventLine(ev: RunEvent): { text: string; tone: "muted" | "ink" |
   switch (ev.type) {
     case "run.claimed":
       return {
-        text: `Claimed by ${String(p.workerId ?? "a worker")} (attempt ${String(p.attempt ?? 1)})`,
+        text: `Picked up (attempt ${String(p.attempt ?? 1)})`,
         tone: "muted",
       };
     case "step":
