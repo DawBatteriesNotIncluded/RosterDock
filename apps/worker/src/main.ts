@@ -14,7 +14,7 @@ import type { EngineAdapter } from "./engines/types.js";
 import { createWorkerMetrics, startMetricsServer } from "./metrics.js";
 import { createPodMetricsSampler, podMetricsConfig } from "./pod-metrics.js";
 import { createResourceSampler } from "./resources.js";
-import { engineEnvironment, executeRun } from "./run.js";
+import { engineEnvironment, executeRun, RunInterrupted } from "./run.js";
 
 const config = loadConfig();
 const log = createLog(logFormatFrom(process.env, process.stdout.isTTY === true), {
@@ -98,6 +98,10 @@ await boss.work<{ runId: string; companyId: string }>(
           },
         );
         status = outcome.status;
+      } catch (err) {
+        // Thrown on to pg-boss, which retries the job; the retry resumes the run.
+        if (err instanceof RunInterrupted) status = "interrupted";
+        throw err;
       } finally {
         metrics.runFinished(status, Date.now() - startedAt);
       }

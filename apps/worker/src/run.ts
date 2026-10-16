@@ -40,6 +40,21 @@ export interface RunOutcome {
 
 const TERMINAL = ["completed", "failed", "stopped", "blocked"];
 
+/** The abort reason when the worker itself is going away (SIGTERM: a drain, a rollout). */
+const SHUTDOWN = "worker shutdown";
+
+/**
+ * The worker shut down while the run's engine (or clone) was still going. Nothing is reported: the
+ * handler throws this, the queue retries the job, and the retry takes the run over from the checkpoint
+ * once the board sees it gone quiet, as operator.md describes for an interrupted run.
+ */
+export class RunInterrupted extends Error {
+  constructor(runId: string) {
+    super(`run ${runId}: interrupted by the worker shutting down; the queue retries it`);
+    this.name = "RunInterrupted";
+  }
+}
+
 const BASE_ENV_KEYS = [
   "PATH",
   "Path",
@@ -122,6 +137,8 @@ export function engineEnvironment(
 }
 
 export async function executeRun(job: { runId: string; jobId: string }, deps: RunDeps): Promise<RunOutcome> {
+  // A job handed over while the worker stops is left for another worker.
+  if (deps.shutdown.aborted) throw new RunInterrupted(job.runId);
   let claimed: ClaimedRun;
   try {
     claimed = await deps.board.claim(job.runId, job.jobId, deps.workerId);
@@ -147,8 +164,9 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
 
   const abort = new AbortController();
   let timedOut = false;
-  const onShutdown = () => abort.abort();
+  const onShutdown = () => abort.abort(SHUTDOWN);
   deps.shutdown.addEventListener("abort", onShutdown, { once: true });
+  const byShutdown = () => abort.signal.aborted && abort.signal.reason === SHUTDOWN;
 
   // Event buffer: batched to the board every second or every 20 events.
   const buffer: RunEventInput[] = [];
@@ -194,7 +212,8 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
   }, deps.heartbeatMs);
 
   let ws: Workspace | null = null;
-  let completion: RunCompleteInput;
+  /** Null: the worker's shutdown cut the run short, and the queue's retry finishes it. */
+  let completion: RunCompleteInput | null;
   const startedAt = Date.now();
   const phases = createPhaseRecorder();
   const sandbox = spec.sandbox ?? { allowedTools: null, envNames: null, timeoutSeconds: 3600 };
@@ -305,7 +324,10 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       const durationMs = Date.now() - startedAt;
       if (timedOut) {
         completion = timeLimit(harvest.handover ?? undefined);
-      } else if (abort.signal.aborted) {
+      } else if (byShutdown() && !result.ok) {
+        // Not a stop anyone asked for: what the run wrote is stored, and the retry picks it up.
+        completion = null;
+      } else if (abort.signal.aborted && !byShutdown()) {
         completion = {
           status: "stopped",
           summary: harvest.handover ?? "Stopped on request.",
@@ -353,17 +375,34 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
     phases.end(clip((err as Error).message, 500));
     completion = timedOut
       ? timeLimit()
-      : {
-          status: abort.signal.aborted ? "stopped" : "failed",
-          error: clip((err as Error).message, 4000),
-          usage,
-          durationMs: Date.now() - startedAt,
-        };
+      : byShutdown()
+        ? null
+        : {
+            status: abort.signal.aborted ? "stopped" : "failed",
+            error: clip((err as Error).message, 4000),
+            usage,
+            durationMs: Date.now() - startedAt,
+          };
   } finally {
     phases.end();
     clearInterval(heartbeatTimer);
     clearInterval(flushTimer);
     deps.shutdown.removeEventListener("abort", onShutdown);
+  }
+  const finish = async () => {
+    if (ws) await cleanupWorkspace(ws).catch(() => {});
+    if (deps.otlp && phases.phases.length) {
+      const out = await exportWorkerTrace(deps.otlp, runId, deps.workerId, phases.phases);
+      if (!out.ok) deps.log.warn(`run ${runId}: trace not exported: ${out.error}`);
+    }
+  };
+  if (!completion) {
+    emit({ type: "step", payload: { text: "the worker is shutting down; the run will be picked up again" } });
+    await flush();
+    await finish();
+    const err = new RunInterrupted(runId);
+    deps.log.info(err.message);
+    throw err;
   }
   await flush();
   completion = fitCompletion(completion);
@@ -375,10 +414,6 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       deps.log.info(`run ${runId}: board already closed it (${err.message})`);
     else deps.log.warn(`run ${runId}: could not report completion: ${(err as Error).message}`);
   }
-  if (ws) await cleanupWorkspace(ws).catch(() => {});
-  if (deps.otlp && phases.phases.length) {
-    const out = await exportWorkerTrace(deps.otlp, runId, deps.workerId, phases.phases);
-    if (!out.ok) deps.log.warn(`run ${runId}: trace not exported: ${out.error}`);
-  }
+  await finish();
   return { runId, status: completion.status };
 }

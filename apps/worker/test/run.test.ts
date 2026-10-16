@@ -13,7 +13,7 @@ import {
 import { BoardError, type BoardClient, type ClaimedRun } from "../src/board-client.js";
 import { stubEngine } from "../src/engines/stub.js";
 import type { EngineAdapter } from "../src/engines/types.js";
-import { engineEnvironment, executeRun, fitCompletion, type RunDeps } from "../src/run.js";
+import { engineEnvironment, executeRun, fitCompletion, RunInterrupted, type RunDeps } from "../src/run.js";
 import { runRootSpanId, traceIdForRun } from "@rosterdock/shared";
 import { git } from "../src/workspace.js";
 
@@ -259,12 +259,44 @@ describe("executeRun", () => {
     expect(slow.completion?.usage).toMatchObject({ inputTokens: 10, cacheWriteTokens: 37471 });
   });
 
-  it("stops on worker shutdown", async () => {
-    const board = fakeBoard(PACK("[stub:hang]"), []);
+  it("leaves a run the worker's shutdown cut short to the queue's retry instead of reporting it stopped", async () => {
+    const board = fakeBoard(PACK("[stub:hang]"), ["vms-architecture.md"]);
     const shutdown = new AbortController();
     const p = executeRun({ runId: "run-1", jobId: "job-1" }, deps(board, { shutdown: shutdown.signal }));
     setTimeout(() => shutdown.abort(), 100);
-    expect((await p).status).toBe("stopped");
+    // Thrown to pg-boss, which retries the job; the retry takes the run over from the checkpoint.
+    await expect(p).rejects.toBeInstanceOf(RunInterrupted);
+    expect(board.completion).toBeNull();
+    expect(board.checkpoints).toHaveLength(1);
+    expect(board.shipped.some((e) => String(e.payload?.text).includes("shutting down"))).toBe(true);
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
+  });
+
+  it("reports a run whose engine finished before the shutdown, and claims nothing once it began", async () => {
+    const shutdown = new AbortController();
+    const finished: EngineAdapter = {
+      id: "stub",
+      async run(ctx) {
+        const result = await stubEngine.run(ctx);
+        shutdown.abort();
+        return result;
+      },
+    };
+    const board = fakeBoard(PACK(), ["vms-architecture.md", "notes.md"]);
+    await executeRun(
+      { runId: "run-1", jobId: "job-1" },
+      deps(board, { engines: { stub: finished }, shutdown: shutdown.signal }),
+    );
+    expect(board.completion?.status).toBe("completed");
+
+    const late = fakeBoard(PACK(), []);
+    late.claim = async () => {
+      throw new Error("claimed during shutdown");
+    };
+    await expect(
+      executeRun({ runId: "run-1", jobId: "job-1" }, deps(late, { shutdown: shutdown.signal })),
+    ).rejects.toBeInstanceOf(RunInterrupted);
   });
 
   it("skips quietly when the run already finished, but rethrows when it is still running elsewhere", async () => {

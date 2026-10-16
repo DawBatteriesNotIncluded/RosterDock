@@ -66,7 +66,8 @@ var name in Settings) and a row in the Approvals or Company page:
 - **Interrupted.** A worker stopped heartbeating (the pod died, the node drained). The reaper marks the
   run interrupted after `ROSTERDOCK_RUN_STALE_AFTER_MS` (60 s) and pg-boss retries the job; a retry that finds
   the run reaped resumes from the checkpoint. After five retries the task lands in Blocked with the
-  reason, and Peter re-plans it.
+  reason, and Peter re-plans it. A worker that is shut down (a drain, a rollout) stops its engine, stores
+  what the run wrote and its checkpoint, and leaves the run to that retry; it never reports it stopped.
 - **Stuck queued.** No worker is taking the queue: check the worker pods, their `DATABASE_URL` and
   `ROSTERDOCK_WORKER_TOKEN` (must equal the board's), and, for a pooled department, that a fleet with
   `ROSTERDOCK_WORKER_POOL=<pool>` exists. `rosterdock_runs_live{status="queued"}` shows it.
