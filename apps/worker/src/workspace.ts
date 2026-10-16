@@ -1,10 +1,14 @@
 // One ephemeral directory per run. With a repository: shallow clone, run, then
 // capture the diff. Without: an empty directory the outputs land in.
 // The git token, when present, goes into the clone URL only and is never
-// logged or written to the board.
+// logged or written to the board. git itself sees none of the worker's
+// environment and no config but the clone's own: the harvest runs git in a
+// checkout the run has just changed, and a filter, an fsmonitor or a hook the
+// run wrote into it would otherwise run with the worker's credentials.
 
 import { spawn } from "node:child_process";
-import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { renderBinaryFileDiff, renderNewFileDiff, type RunArtifactInput } from "@rosterdock/shared";
 import { clip } from "./text.js";
@@ -18,17 +22,49 @@ export const MAX_UNDECLARED_FILES = 50;
 export interface Workspace {
   dir: string;
   repo: boolean;
+  /** .git/config as the clone left it, put back before the harvest runs git. */
+  gitConfig?: string;
 }
 
+/** Where programs live, the temp directory, the locale: all git needs from the worker's environment. */
+const GIT_ENV_KEYS = [
+  "PATH",
+  "Path",
+  "SYSTEMROOT",
+  "SystemRoot",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "LANG",
+  "TZ",
+];
+
+/** git's environment: the keys above, no prompt, and no system or global config (a credential helper, an include, a ~/.gitconfig an earlier run wrote). */
+export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of GIT_ENV_KEYS) {
+    const v = env[key];
+    if (v !== undefined) out[key] = v;
+  }
+  return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull };
+}
+
+/** Every command: no fsmonitor and no hooks, whatever the repository's config says. */
+const GIT_SAFE_ARGS = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${os.devNull}`];
+
+/** Run git with gitEnvironment; `extraEnv` is for the worker's own tests (an author for a commit). */
 export function git(
   args: string[],
   cwd: string,
-  env: NodeJS.ProcessEnv = process.env,
+  extraEnv: Record<string, string | undefined> = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn("git", args, {
+    const child = spawn("git", [...GIT_SAFE_ARGS, ...args], {
       cwd,
-      env: { ...env, GIT_TERMINAL_PROMPT: "0" },
+      env: { ...gitEnvironment(), ...extraEnv },
       shell: false,
       windowsHide: true,
     });
@@ -92,7 +128,27 @@ export async function prepareWorkspace(
   }
   // Never leave the credential in the checkout.
   if (gitToken) await git(["remote", "set-url", "origin", project.repoUrl], dir);
-  return { dir, repo: true };
+  return { dir, repo: true, gitConfig: await readFile(path.join(dir, ".git", "config"), "utf8") };
+}
+
+/**
+ * Before the harvest runs git in the changed checkout: .git must still be the clone's directory, and its
+ * config goes back to what the clone wrote, so a filter, textconv, fsmonitor or include the run added
+ * never runs. A .git the run replaced cannot be read back safely, so the harvest refuses it.
+ */
+async function restoreGitDir(ws: Workspace): Promise<void> {
+  const gitDir = path.join(ws.dir, ".git");
+  const st = await lstat(gitDir).catch(() => null);
+  const shared = await lstat(path.join(gitDir, "commondir")).catch(() => null);
+  if (!st?.isDirectory() || shared)
+    throw new Error(
+      "the run replaced the repository's .git directory, so its changes cannot be read back for review",
+    );
+  if (ws.gitConfig === undefined) return;
+  const config = path.join(gitDir, "config");
+  // Removed first: a symlink the run left there must not redirect the write.
+  await rm(config, { force: true });
+  await writeFile(config, ws.gitConfig, "utf8");
 }
 
 export async function cleanupWorkspace(ws: Workspace): Promise<void> {
@@ -153,6 +209,7 @@ export async function harvestWorkspace(
     filesWritten: [],
     baseSha: null,
   };
+  if (ws.repo) await restoreGitDir(ws);
   out.handover =
     clip((await readText(path.join(ws.dir, HANDOVER_FILE), maxBytes))?.trim() ?? "", 4000) || null;
   out.blocked = clip((await readText(path.join(ws.dir, BLOCKED_FILE), maxBytes))?.trim() ?? "", 1000) || null;
@@ -199,7 +256,10 @@ export async function harvestWorkspace(
     const head = await git(["rev-parse", "HEAD"], ws.dir);
     if (head.code === 0) out.baseSha = head.stdout.trim() || null;
     await git(["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`], ws.dir);
-    const diff = await git(["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff"], ws.dir);
+    const diff = await git(
+      ["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv"],
+      ws.dir,
+    );
     if (diff.code === 0) diffText = diff.stdout;
   } else {
     diffText = out.artifacts

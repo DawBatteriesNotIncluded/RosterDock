@@ -1,5 +1,6 @@
 // Workspace against a local bare repository: no network.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseUnifiedDiff } from "@rosterdock/shared";
@@ -7,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   cleanupWorkspace,
   git,
+  gitEnvironment,
   harvestWorkspace,
   prepareWorkspace,
   redactGit,
@@ -177,6 +179,70 @@ describe("workspace", () => {
     const out = await git(["show", ":big.txt"], ws.dir);
     expect(out.stdout.includes("\ufffd")).toBe(false);
     expect(out.stdout).toBe(content);
+    await cleanupWorkspace(ws);
+  });
+
+  it("runs git with none of the worker's credentials and no system or global config", () => {
+    const env = gitEnvironment({
+      PATH: "/usr/bin",
+      HOME: "/home/node",
+      LANG: "C.UTF-8",
+      DATABASE_URL: "postgres://board",
+      ROSTERDOCK_WORKER_TOKEN: "fleet-token",
+      ROSTERDOCK_GIT_TOKEN: "git-token",
+      ANTHROPIC_API_KEY: "model-key",
+      OTEL_EXPORTER_OTLP_HEADERS: "x-key=v",
+    });
+    expect(env).toEqual({
+      PATH: "/usr/bin",
+      LANG: "C.UTF-8",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: os.devNull,
+    });
+  });
+
+  it("runs nothing the run wrote into .git when it reads the changes back", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-gitconfig",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    const marker = (name: string) => path.join(root, `${name}-ran`);
+    // What a run with write access could leave: its own config (behind a symlink, even) with a filter,
+    // a textconv and an fsmonitor, and an attribute that points every Markdown file at them.
+    const evil = path.join(root, "evil-config");
+    const evilConfig =
+      (await readFile(path.join(ws.dir, ".git", "config"), "utf8")) +
+      `[core]\n\tfsmonitor = "touch '${marker("fsmonitor")}'; false"\n` +
+      `[filter "evil"]\n\tclean = "touch '${marker("filter")}'; cat"\n` +
+      `[diff "evil"]\n\ttextconv = "touch '${marker("textconv")}'; cat"\n`;
+    await writeFile(evil, evilConfig, "utf8");
+    await rm(path.join(ws.dir, ".git", "config"));
+    await symlink(evil, path.join(ws.dir, ".git", "config"));
+    await writeFile(path.join(ws.dir, ".gitattributes"), "*.md filter=evil diff=evil\n", "utf8");
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    const h = await harvestWorkspace(ws, []);
+    expect(h.artifacts.find((a) => a.kind === "diff")?.content).toContain("+changed");
+    for (const name of ["fsmonitor", "filter", "textconv"])
+      expect(existsSync(marker(name)), name).toBe(false);
+    // The config is the clone's again, a plain file, and what the symlink pointed at is untouched.
+    expect((await lstat(path.join(ws.dir, ".git", "config"))).isSymbolicLink()).toBe(false);
+    expect(await readFile(evil, "utf8")).toBe(evilConfig);
+    await cleanupWorkspace(ws);
+  });
+
+  it("refuses to read back a checkout whose .git the run replaced", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-gitfile",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await rm(path.join(ws.dir, ".git"), { recursive: true, force: true });
+    await writeFile(path.join(ws.dir, ".git"), `gitdir: ${path.join(root, "elsewhere")}\n`, "utf8");
+    await expect(harvestWorkspace(ws, [])).rejects.toThrow(/replaced the repository's .git/);
     await cleanupWorkspace(ws);
   });
 

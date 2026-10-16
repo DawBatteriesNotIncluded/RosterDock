@@ -116,8 +116,15 @@ What they cannot reach:
 
 ## Workers run model output
 
-- Each run gets a fresh directory on an ephemeral volume that dies with the pod; nothing persists
-  between runs but what the board stores (artifacts, checkpoints, usage).
+- Each run gets a fresh directory on an ephemeral volume that dies with the pod; the next run sees
+  nothing of it, and only what the board stores (artifacts, checkpoints, usage) outlives the run. The
+  pod's home and temp directories last as long as the pod, so runs the pod takes in turn share them.
+- git in the worker gets PATH, the temp directory and the locale, none of the worker's credentials, and
+  reads no system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL` empty), so a
+  `~/.gitconfig` an earlier run left behind changes nothing. It runs no hook and no fsmonitor, and the
+  diff runs no textconv. Before the worker reads a run's changes back, it puts the clone's `.git/config`
+  back as the clone wrote it, so a filter the run added never runs; a run that replaced `.git` gets no
+  review of its changes.
 - An artifact over 512 KB goes to the object store as bytes the board has already scanned for raw
   secrets, under a key of the company, the run and its hash; the board signs each request itself with a
   key pair it reads by name, and the worker never holds that pair.
