@@ -75,6 +75,8 @@ spec:
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
+            # The engine, git and the package manager write only to the emptyDirs below (/work, /home/node, /tmp).
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
             seccompProfile:
