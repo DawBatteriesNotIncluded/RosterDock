@@ -110,6 +110,8 @@ What they cannot reach:
 - Roles: owner, admin, reviewer, viewer, teammate. Owners and admins manage the company, connections,
   toolboxes, templates and approvals; reviewers decide reviews; viewers read; teammates act only through
   the board's tools with their run token.
+- Only an owner grants owner, or changes or removes an owner, and a company always keeps one: neither an
+  admin nor the last owner can leave it with none.
 - The dev login (`ROSTERDOCK_DEV_LOGIN=1`) signs anyone in as anyone. Never in production; the chart warns.
   `docker-compose.yml`, which runs with it on, publishes its ports (the web, the board, Postgres, MinIO) on
   127.0.0.1 only, so another machine on your network reaches none of them.

@@ -1,5 +1,6 @@
 import { CreateCompanySchema, GrantMembershipSchema, UpdateCompanySchema } from "@rosterdock/shared";
 import type { FastifyInstance } from "fastify";
+import type pg from "pg";
 import type { Db } from "../db/pool.js";
 import { withTransaction } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
@@ -36,6 +37,16 @@ export function companyToJson(row: CompanyRow) {
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+// The company's owners, locked in one order, so two owners who demote or remove each other at once cannot
+// both count the other and leave the company with none.
+async function lockOwners(client: pg.PoolClient, companyId: string): Promise<string[]> {
+  const res = await client.query<{ user_id: string }>(
+    "SELECT user_id FROM memberships WHERE company_id = $1 AND role = 'owner' ORDER BY user_id FOR UPDATE",
+    [companyId],
+  );
+  return res.rows.map((r) => r.user_id);
 }
 
 export function registerCompanyRoutes(app: FastifyInstance, db: Db, operator: OperatorPolicy): void {
@@ -175,6 +186,12 @@ export function registerCompanyRoutes(app: FastifyInstance, db: Db, operator: Op
           [body.email, body.email.split("@")[0] ?? body.email],
         );
         const u = user.rows[0]!;
+        const owners = await lockOwners(ctx.client, req.companyId);
+        if (owners.includes(u.id) && body.role !== "owner") {
+          if (req.companyRole !== "owner")
+            throw new HttpError(403, "only an owner can change an owner's role");
+          if (owners.length <= 1) throw new HttpError(409, "a company keeps at least one owner");
+        }
         await ctx.client.query(
           `INSERT INTO memberships (company_id, user_id, role) VALUES ($1, $2, $3)
          ON CONFLICT (company_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
@@ -205,11 +222,9 @@ export function registerCompanyRoutes(app: FastifyInstance, db: Db, operator: Op
         const role = existing.rows[0]?.role;
         if (!role) throw notFound("membership");
         if (role === "owner") {
-          const owners = await ctx.client.query<{ n: number }>(
-            "SELECT count(*)::int AS n FROM memberships WHERE company_id = $1 AND role = 'owner'",
-            [req.companyId],
-          );
-          if ((owners.rows[0]?.n ?? 0) <= 1) throw new HttpError(409, "a company keeps at least one owner");
+          if (req.companyRole !== "owner") throw new HttpError(403, "only an owner can remove an owner");
+          const owners = await lockOwners(ctx.client, req.companyId);
+          if (owners.length <= 1) throw new HttpError(409, "a company keeps at least one owner");
         }
         await ctx.client.query("DELETE FROM memberships WHERE company_id = $1 AND user_id = $2", [
           req.companyId,
