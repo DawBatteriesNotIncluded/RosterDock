@@ -3,8 +3,9 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { WorkerCheckSchema } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { detectPackageManager, runRepoTests, type Exec } from "../src/tests.js";
+import { detectPackageManager, MAX_TEST_OUTPUT_CHARS, runRepoTests, type Exec } from "../src/tests.js";
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 let root: string;
@@ -25,7 +26,9 @@ async function repo(name: string, files: Record<string, string>) {
   return { dir, repo: true };
 }
 
-function recorded(outputs: Record<string, { code: number; file?: string; timedOut?: boolean }>) {
+function recorded(
+  outputs: Record<string, { code: number; file?: string; repeat?: number; timedOut?: boolean }>,
+) {
   const calls: { command: string; args: string[] }[] = [];
   const exec: Exec = async (command, args) => {
     calls.push({ command, args });
@@ -34,7 +37,7 @@ function recorded(outputs: Record<string, { code: number; file?: string; timedOu
     if (!hit) throw new Error(`unexpected command ${key}`);
     return {
       code: hit.code,
-      output: hit.file ? await readFile(path.join(fixtures, hit.file), "utf8") : "",
+      output: hit.file ? (await readFile(path.join(fixtures, hit.file), "utf8")).repeat(hit.repeat ?? 1) : "",
       timedOut: hit.timedOut ?? false,
     };
   };
@@ -76,6 +79,19 @@ describe("runRepoTests", () => {
     expect(check).toMatchObject({ ok: false, title: "npm test failed (exit 1)" });
     expect(check?.detail).toContain("AssertionError");
     expect(calls).toHaveLength(1);
+  });
+
+  it("keeps the end of a recorded output longer than the limit, within what the board accepts", async () => {
+    const ws = await repo("long-fail", { "package.json": PKG, "node_modules/.keep": "" });
+    const { exec } = recorded({ "npm test": { code: 1, file: "npm-test-fail.txt", repeat: 30 } });
+    const output = (await readFile(path.join(fixtures, "npm-test-fail.txt"), "utf8")).repeat(30);
+    expect(output.length).toBeGreaterThan(MAX_TEST_OUTPUT_CHARS);
+    const check = await runRepoTests(ws, { exec, env, timeoutMs: 1000 });
+    expect(WorkerCheckSchema.safeParse(check).success).toBe(true);
+    const detail = check?.detail ?? "";
+    expect(detail.startsWith("…")).toBe(true);
+    expect(detail.length).toBeLessThanOrEqual(MAX_TEST_OUTPUT_CHARS);
+    expect(output.endsWith(detail.slice(1))).toBe(true);
   });
 
   it("a failed install or a timeout is reported, never thrown", async () => {
