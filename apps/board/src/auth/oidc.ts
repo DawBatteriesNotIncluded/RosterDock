@@ -11,13 +11,7 @@
 // No SDK: discovery, JWKS and the token exchange are plain fetch (injected so
 // tests replay a recorded provider), and signatures are checked with node:crypto.
 
-import {
-  createHash,
-  createPublicKey,
-  randomBytes,
-  verify as cryptoVerify,
-  type JsonWebKey,
-} from "node:crypto";
+import { createHash, createPublicKey, randomBytes, verify as cryptoVerify } from "node:crypto";
 import type { Queryable } from "../db/pool.js";
 
 export interface OidcConfig {
@@ -64,9 +58,25 @@ export interface Discovery {
 const DISCOVERY_TTL_MS = 60 * 60_000;
 const JWKS_REFETCH_MIN_MS = 60_000;
 
+// One of the provider's signing keys (RSA or EC) as its JWKS lists it. A type alias, not an interface:
+// it keeps the implicit index signature that makes it assignable to node:crypto's JsonWebKey in
+// @types/node 22, and every field it shares with webcrypto.JsonWebKey (what createPublicKey takes in 26)
+// is an optional string, so it is assignable there too.
+type Jwk = {
+  kty?: string;
+  kid?: string;
+  use?: string;
+  alg?: string;
+  n?: string;
+  e?: string;
+  crv?: string;
+  x?: string;
+  y?: string;
+};
+
 interface Cache {
   discovery: { at: number; doc: Discovery } | null;
-  jwks: { at: number; keys: JsonWebKey[] } | null;
+  jwks: { at: number; keys: Jwk[] } | null;
 }
 const caches = new Map<string, Cache>();
 
@@ -106,7 +116,7 @@ export async function discover(config: OidcConfig, deps: OidcDeps): Promise<Disc
   return doc as Discovery;
 }
 
-async function fetchJwks(config: OidcConfig, deps: OidcDeps, force = false): Promise<JsonWebKey[]> {
+async function fetchJwks(config: OidcConfig, deps: OidcDeps, force = false): Promise<Jwk[]> {
   const cache = cacheFor(config.issuer);
   const now = deps.now?.() ?? Date.now();
   if (cache.jwks && (!force || now - cache.jwks.at < JWKS_REFETCH_MIN_MS)) return cache.jwks.keys;
@@ -117,7 +127,7 @@ async function fetchJwks(config: OidcConfig, deps: OidcDeps, force = false): Pro
       throw new OidcError("provider", `could not fetch the provider's keys: ${err.message}`);
     });
   if (!res.ok) throw new OidcError("provider", `the identity provider answered ${res.status} for its keys`);
-  const body = (await res.json()) as { keys?: JsonWebKey[] };
+  const body = (await res.json()) as { keys?: Jwk[] };
   const keys = Array.isArray(body.keys) ? body.keys : [];
   cache.jwks = { at: now, keys };
   return keys;
@@ -166,7 +176,7 @@ function b64json(part: string): Record<string, unknown> {
 }
 
 /** Verify a compact JWS with one of the provider's keys and return its claims. Pure given the keys. */
-export function verifyJwt(token: string, keys: JsonWebKey[]): IdClaims {
+export function verifyJwt(token: string, keys: Jwk[]): IdClaims {
   const parts = token.split(".");
   if (parts.length !== 3) throw new OidcError("token", "the id_token is not well formed");
   const [h, p, s] = parts as [string, string, string];
