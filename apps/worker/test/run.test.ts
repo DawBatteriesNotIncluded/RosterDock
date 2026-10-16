@@ -265,13 +265,16 @@ describe("repository tests", () => {
 
     const board = fakeBoard(PACK(), ["notes.md"], { repoUrl: bare });
     const commands: string[] = [];
+    const envs: Record<string, string>[] = [];
     await executeRun(
       { runId: "run-1", jobId: "job-1" },
       deps(board, {
+        engineEnv: { PATH: process.env.PATH ?? "/usr/bin", ANTHROPIC_API_KEY: "model-key" },
         repoTests: {
           timeoutMs: 1000,
-          exec: async (command, args) => {
+          exec: async (command, args, opts) => {
             commands.push(`${command} ${args.join(" ")}`);
+            envs.push(opts.env);
             return { code: args[0] === "test" ? 0 : 0, output: "1 passing\n", timedOut: false };
           },
         },
@@ -283,6 +286,8 @@ describe("repository tests", () => {
       { kind: "tests", ok: true, title: "npm test passed", detail: "1 passing\n" },
     ]);
     expect(commands).toEqual(["npm ci --ignore-scripts --no-audit --no-fund", "npm test"]);
+    // The engine's key stays with the engine: the repository's scripts never see it.
+    expect(envs.every((e) => !("ANTHROPIC_API_KEY" in e) && e.CI === "1")).toBe(true);
     // The diff was captured before the tests ran.
     expect(board.artifacts.find((a) => a.kind === "diff")?.content).toContain("+++ b/notes.md");
     expect(board.shipped.some((e) => e.type === "check")).toBe(true);

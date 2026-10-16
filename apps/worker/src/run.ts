@@ -234,9 +234,10 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       if (deps.repoTests && ws.repo && result.ok && !abort.signal.aborted && !harvest.blocked) {
         emit({ type: "step", payload: { text: "running the repository's tests" } });
         phases.begin("tests");
+        // Not the engine's environment: runRepoTests keeps only PATH, HOME, the temp directory and the locale.
         const check = await runRepoTests(ws, {
           exec: deps.repoTests.exec,
-          env: narrowEnv(deps.engineEnv, sandbox.envNames),
+          env: deps.engineEnv,
           timeoutMs: deps.repoTests.timeoutMs,
         });
         if (check) {

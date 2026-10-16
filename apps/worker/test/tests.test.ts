@@ -29,9 +29,9 @@ async function repo(name: string, files: Record<string, string>) {
 function recorded(
   outputs: Record<string, { code: number; file?: string; repeat?: number; timedOut?: boolean }>,
 ) {
-  const calls: { command: string; args: string[] }[] = [];
-  const exec: Exec = async (command, args) => {
-    calls.push({ command, args });
+  const calls: { command: string; args: string[]; env: Record<string, string> }[] = [];
+  const exec: Exec = async (command, args, opts) => {
+    calls.push({ command, args, env: opts.env });
     const key = `${command} ${args.join(" ")}`;
     const hit = outputs[key];
     if (!hit) throw new Error(`unexpected command ${key}`);
@@ -107,6 +107,31 @@ describe("runRepoTests", () => {
       ok: false,
       title: "npm test timed out after 5 s",
     });
+  });
+
+  it("runs the repository's scripts with a bare environment: no model keys, no board or git credentials", async () => {
+    const ws = await repo("bare-env", { "package.json": PKG, "pnpm-lock.yaml": "" });
+    const { exec, calls } = recorded({
+      "pnpm install --frozen-lockfile --ignore-scripts": { code: 0 },
+      "pnpm test": { code: 0, file: "npm-test-pass.txt" },
+    });
+    const engineEnv = {
+      PATH: "/usr/bin",
+      HOME: "/home/node",
+      TMPDIR: "/tmp",
+      USER: "node",
+      ANTHROPIC_API_KEY: "model-key",
+      CLAUDE_CODE_OAUTH_TOKEN: "oauth-token",
+      OPENAI_API_KEY: "model-key",
+      CODEX_API_KEY: "model-key",
+      DATABASE_URL: "postgres://board",
+      ROSTERDOCK_WORKER_TOKEN: "fleet-token",
+      ROSTERDOCK_GIT_TOKEN: "git-token",
+    };
+    await runRepoTests(ws, { exec, env: engineEnv, timeoutMs: 1000 });
+    expect(calls).toHaveLength(2);
+    for (const call of calls)
+      expect(call.env).toEqual({ PATH: "/usr/bin", HOME: "/home/node", TMPDIR: "/tmp", CI: "1" });
   });
 
   it("detects the package manager from the lockfile", async () => {

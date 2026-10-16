@@ -131,6 +131,13 @@ What they cannot reach:
   narrows further, down to the board and Postgres only, and a department's sandbox chooses the pool.
 - The engine sees only the env var names the worker was told to pass, narrowed again by the department's
   sandbox; the department's sandbox also sets the engine's tool allowlist and a time limit.
+- After the engine, the worker runs the repository's own `test` script in the workspace
+  (`ROSTERDOCK_RUN_REPO_TESTS`, on by default), once the diff is captured. That script is the
+  repository's code and the run may have rewritten it, so it gets PATH, HOME, the temp directory, the
+  locale and `CI=1`, and no model key, board token or git token. It still runs as the worker's user in
+  the worker's pod, so it reaches what that user reaches, the worker process's own environment under
+  `/proc` included, and its output becomes the review's tests check as written. Turn the step off on a
+  fleet that runs repositories you would not run yourself.
 - The engine reaches no external MCP server. Every tool call goes to the board (`board_tool_call`),
   where the broker decides: run a read, propose a write, or refuse.
 - A run's diff is scanned for secret-shaped values before review; a hit fails the check.

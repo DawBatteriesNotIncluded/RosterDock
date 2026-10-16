@@ -1,8 +1,10 @@
 // The repository's own tests, run in the workspace after the diff is captured
 // (so nothing the tests write pollutes the review). The result is one review
 // check: the board shows it next to the secret scan and the declared outputs.
-// The command runner is injected so tests here use recorded output, never a
-// live npm.
+// The test script is the repository's code, which the run may have rewritten,
+// so it runs with a bare environment: no model keys, no board or git
+// credentials. The command runner is injected so tests here use recorded
+// output, never a live npm.
 
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
@@ -23,6 +25,36 @@ export type Exec = (
 ) => Promise<ExecResult>;
 
 export const MAX_TEST_OUTPUT_CHARS = 20_000;
+
+/** All a package manager needs: where programs live, a home, a temp directory, the locale. */
+const TEST_ENV_KEYS = [
+  "PATH",
+  "Path",
+  "SYSTEMROOT",
+  "SystemRoot",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "HOME",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "LANG",
+  "TZ",
+];
+
+/** The environment the repository's scripts see: the keys above from `env` and CI=1, nothing else. */
+export function testEnvironment(env: Record<string, string | undefined>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of TEST_ENV_KEYS) {
+    const v = env[key];
+    if (v !== undefined) out[key] = v;
+  }
+  return { ...out, CI: "1" };
+}
 
 /** Run a package-manager command, capturing interleaved stdout and stderr. */
 export const execCommand: Exec = (command, args, opts) =>
@@ -86,6 +118,7 @@ function tail(output: string): string {
  * The tests check for a workspace: null when there is no repository (nothing
  * to run); `ok: null` when the repository has no test script or its
  * dependencies cannot be installed; otherwise the exit status of `<pm> test`.
+ * `env` is narrowed to testEnvironment whatever the caller passes.
  */
 export async function runRepoTests(
   ws: Workspace,
@@ -93,6 +126,7 @@ export async function runRepoTests(
 ): Promise<WorkerCheckInput | null> {
   if (!ws.repo) return null;
   const exec = opts.exec ?? execCommand;
+  const env = testEnvironment(opts.env);
   let pkg: { scripts?: Record<string, string> };
   try {
     pkg = JSON.parse(await readFile(path.join(ws.dir, "package.json"), "utf8")) as typeof pkg;
@@ -105,7 +139,7 @@ export async function runRepoTests(
   if (!(await exists(path.join(ws.dir, "node_modules")))) {
     const install = await exec(pm, INSTALL_ARGS[pm], {
       cwd: ws.dir,
-      env: opts.env,
+      env,
       timeoutMs: opts.timeoutMs,
     });
     if (install.code !== 0) {
@@ -119,7 +153,7 @@ export async function runRepoTests(
       };
     }
   }
-  const res = await exec(pm, ["test"], { cwd: ws.dir, env: opts.env, timeoutMs: opts.timeoutMs });
+  const res = await exec(pm, ["test"], { cwd: ws.dir, env, timeoutMs: opts.timeoutMs });
   if (res.timedOut) {
     return {
       kind: "tests",
