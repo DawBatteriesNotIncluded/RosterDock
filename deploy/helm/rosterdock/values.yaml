@@ -185,6 +185,11 @@ worker:
   engineEnvNames: [ANTHROPIC_API_KEY]
   engineSecret:
     name: rosterdock-engines
+  # The most a Claude Code teammate may use without asking (ROSTERDOCK_CLAUDE_ALLOWED_TOOLS). A department's
+  # sandbox only narrows it: a tool listed there and not here is left out of the run. Empty: the worker's
+  # default, Read, Write, Edit, Glob and Grep inside the workspace. A department that needs the web
+  # (WebSearch, WebFetch) gets it from a pool that lists them. Codex runs in its own sandbox instead.
+  claudeAllowedTools: []
   # Optional git token the worker clones private repositories with, by NAME from a Secret.
   gitSecret:
     name: ""
@@ -205,16 +210,17 @@ worker:
     enabled: false
   # Extra worker fleets, one per department sandbox pool. A department whose sandbox names the pool
   # sends its runs to that fleet's queue (runs.<name>) and only that fleet takes them. Each pool may set
-  # replicas, resources, autoscaling bounds, engineEnvNames, engineSecret, workVolumeSize, image (a full
-  # worker image reference, for a fleet on its own engine build or a pinned tag; default: worker.image),
-  # and its own network policy egress (egressTo, egressPorts; default: the pool reaches only the board and
-  # Postgres).
+  # replicas, resources, autoscaling bounds, engineEnvNames, engineSecret, claudeAllowedTools, workVolumeSize,
+  # image (a full worker image reference, for a fleet on its own engine build or a pinned tag; default:
+  # worker.image), and its own network policy egress (egressTo, egressPorts; default: the pool reaches only
+  # the board and Postgres).
   #  - name: secure
   #    replicas: 1
   #    egressTo: []          # nothing but the board and Postgres
   #    egressPorts: []
   #  - name: research
   #    image: ghcr.io/example/rosterdock-worker-research:1.4.0
+  #    claudeAllowedTools: [Read(./**), Write(./**), Edit(./**), Glob(./**), Grep(./**), WebSearch, WebFetch]
   #    egressPorts: [443]
   #    egressTo:
   #      - ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16] }

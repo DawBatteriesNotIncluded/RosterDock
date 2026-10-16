@@ -7,8 +7,11 @@ import type { RunEventInput } from "@rosterdock/shared";
 import {
   buildArgs,
   createClaudeCodeEngine,
+  DEFAULT_ALLOWED_TOOLS,
+  narrowTools,
   parseStream,
   resolveClaudeBin,
+  splitToolList,
 } from "../src/engines/claude-code.js";
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -83,6 +86,103 @@ describe("invocation", () => {
       "--model",
       "claude-sonnet-5",
     ]);
+  });
+
+  it("narrows the worker's allowlist with the department's list and never widens it", () => {
+    // The Lighthouse template's Research department, against the worker's default list.
+    const research = [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "WebSearch",
+      "WebFetch",
+    ];
+    expect(narrowTools(DEFAULT_ALLOWED_TOOLS, research)).toEqual({
+      tools: ["Read(./**)", "Write(./**)", "Edit(./**)", "Glob(./**)", "Grep(./**)"],
+      dropped: ["WebSearch", "WebFetch"],
+    });
+    // A worker that allows the web tools hands them on.
+    expect(narrowTools(`${DEFAULT_ALLOWED_TOOLS},WebSearch,WebFetch`, research).dropped).toEqual([]);
+    // A department cannot add Bash, and can keep less than the worker allows.
+    expect(narrowTools(DEFAULT_ALLOWED_TOOLS, ["Read(./**)", "Bash", "Bash(npm test:*)"])).toEqual({
+      tools: ["Read(./**)"],
+      dropped: ["Bash", "Bash(npm test:*)"],
+    });
+    // A bare name keeps the worker's own rules for that tool; a rule under a tool the worker allows whole stays.
+    expect(narrowTools(DEFAULT_ALLOWED_TOOLS, ["Read", "Write"]).tools).toEqual([
+      "Read(./**)",
+      "Write(./**)",
+    ]);
+    expect(narrowTools("Read,Bash", ["Read(./src/**)", "Bash(git diff:*)"]).tools).toEqual([
+      "Read(./src/**)",
+      "Bash(git diff:*)",
+    ]);
+    // The board's own tools are always there and never reported as dropped.
+    expect(narrowTools(DEFAULT_ALLOWED_TOOLS, ["mcp__rosterdock", "Read(./**)"])).toEqual({
+      tools: ["Read(./**)"],
+      dropped: [],
+    });
+    // No department list: the worker's list as it is.
+    expect(narrowTools("Read,Write", null).tools).toEqual(["Read", "Write"]);
+  });
+
+  it("splits a tool list on commas and spaces, never inside a rule", () => {
+    expect(splitToolList("Bash(git diff:*), Read  Edit(./a,b/**)")).toEqual([
+      "Bash(git diff:*)",
+      "Read",
+      "Edit(./a,b/**)",
+    ]);
+  });
+
+  it("passes only the narrowed list, the board's tools added, and no list at all when nothing is left", () => {
+    const opts = { bin: "claude", allowedTools: DEFAULT_ALLOWED_TOOLS };
+    const tools = (args: string[]) =>
+      args.includes("--allowedTools") ? args[args.indexOf("--allowedTools") + 1] : null;
+    expect(tools(buildArgs(opts, "m", ["Read(./**)", "Bash"], "/tmp/mcp.json"))).toBe(
+      "Read(./**),mcp__rosterdock",
+    );
+    expect(tools(buildArgs(opts, "m", null, null))).toBe(DEFAULT_ALLOWED_TOOLS);
+    expect(tools(buildArgs(opts, "m", ["WebFetch"], "/tmp/mcp.json"))).toBe("mcp__rosterdock");
+    expect(tools(buildArgs(opts, "m", ["WebFetch"], null))).toBeNull();
+  });
+
+  it("tells the run log which of the department's tools the worker left out", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-cc-"));
+    const stub = path.join(dir, "args.mjs");
+    await writeFile(
+      stub,
+      `for await (const _ of process.stdin);
+const a = process.argv.slice(2);
+process.stderr.write("tools=" + a[a.indexOf("--allowedTools") + 1] + "\\n");`,
+      "utf8",
+    );
+    const events: RunEventInput[] = [];
+    try {
+      await createClaudeCodeEngine({
+        bin: process.execPath,
+        allowedTools: DEFAULT_ALLOWED_TOOLS,
+        prefixArgs: [stub],
+      }).run({
+        workdir: dir,
+        pack: "x",
+        model: "m",
+        signal: new AbortController().signal,
+        emit: (e) => events.push(e),
+        onUsage: () => {},
+        env: {},
+        allowedTools: ["Write(./**)", "WebSearch", "WebFetch"],
+        mcp: null,
+      });
+      const texts = events.filter((e) => e.type === "stderr").map((e) => String(e.payload?.text));
+      expect(texts).toContain(
+        "The department's sandbox names tools this worker does not allow, so the run goes without them: WebSearch, WebFetch",
+      );
+      expect(texts).toContain("tools=Write(./**)");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("resolves the Windows npm shim to cli.js run by this Node", async () => {

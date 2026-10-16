@@ -126,6 +126,11 @@ spec:
             {{- $envNames := $pool.engineEnvNames | default $w.engineEnvNames }}
             - name: ROSTERDOCK_ENGINE_PASS_ENV
               value: {{ join "," $envNames | quote }}
+            {{- with ($pool.claudeAllowedTools | default $w.claudeAllowedTools) }}
+            # The ceiling a department's sandbox narrows; never widened by it.
+            - name: ROSTERDOCK_CLAUDE_ALLOWED_TOOLS
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- if $root.Values.observability.otlp.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ $root.Values.observability.otlp.endpoint | quote }}

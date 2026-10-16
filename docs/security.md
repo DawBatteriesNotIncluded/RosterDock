@@ -130,7 +130,11 @@ What they cannot reach:
   API, the git host), with every private range excluded; nothing reaches it. A pool (`worker.pools`)
   narrows further, down to the board and Postgres only, and a department's sandbox chooses the pool.
 - The engine sees only the env var names the worker was told to pass, narrowed again by the department's
-  sandbox; the department's sandbox also sets the engine's tool allowlist and a time limit.
+  sandbox, which also sets a time limit. A department's tool list narrows the worker's Claude Code
+  allowlist (`ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`, chart `worker.claudeAllowedTools`, per pool too) and never
+  widens it: a tool the worker does not allow is left out of the run, and the run log says which. Codex
+  has no per-tool list: it runs in the worker's Codex sandbox (`ROSTERDOCK_CODEX_SANDBOX`) whatever the
+  department lists.
 - After the engine, the worker runs the repository's own `test` script in the workspace
   (`ROSTERDOCK_RUN_REPO_TESTS`, on by default), once the diff is captured. That script is the
   repository's code and the run may have rewritten it, so it gets PATH, HOME, the temp directory, the

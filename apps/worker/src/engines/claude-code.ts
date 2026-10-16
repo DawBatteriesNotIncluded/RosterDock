@@ -61,6 +61,54 @@ export function mcpConfig(mcp: { url: string; token: string }): string {
 
 export const MCP_TOOL_PATTERN = "mcp__rosterdock";
 
+/** A tool list as Claude Code takes it: comma or space separated, never inside a rule's parentheses. */
+export function splitToolList(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of list) {
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth = Math.max(0, depth - 1);
+    if (depth === 0 && (ch === "," || /\s/.test(ch))) {
+      if (cur.trim()) out.push(cur.trim());
+      cur = "";
+    } else cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+const toolName = (rule: string) => rule.replace(/\(.*$/s, "");
+
+/**
+ * The department's tool list narrows the worker's, never widens it. A rule the worker holds as written
+ * stays; `Name(spec)` stays where the worker allows all of `Name`; a bare `Name` keeps the worker's own
+ * rules for that tool. Anything else is dropped. Null: the worker's list as it is.
+ */
+export function narrowTools(
+  workerList: string,
+  department: string[] | null | undefined,
+): { tools: string[]; dropped: string[] } {
+  const allowed = splitToolList(workerList || DEFAULT_ALLOWED_TOOLS);
+  if (!department?.length) return { tools: allowed, dropped: [] };
+  const tools: string[] = [];
+  const dropped: string[] = [];
+  for (const rule of department.flatMap(splitToolList)) {
+    // The board's own tools are always there; the board's broker governs them, not this list.
+    if (toolName(rule).startsWith(MCP_TOOL_PATTERN)) continue;
+    const name = toolName(rule);
+    const kept =
+      rule === name
+        ? allowed.filter((a) => toolName(a) === name)
+        : allowed.includes(rule) || allowed.includes(name)
+          ? [rule]
+          : [];
+    if (kept.length) tools.push(...kept);
+    else dropped.push(rule);
+  }
+  return { tools: [...new Set(tools)], dropped };
+}
+
 export function buildArgs(
   opts: ClaudeCodeOptions,
   model: string,
@@ -68,7 +116,8 @@ export function buildArgs(
   mcpConfigPath?: string | null,
   effort?: string | null,
 ): string[] {
-  const tools = allowedTools?.length ? allowedTools.join(",") : opts.allowedTools || DEFAULT_ALLOWED_TOOLS;
+  const { tools } = narrowTools(opts.allowedTools, allowedTools);
+  if (mcpConfigPath && !tools.includes(MCP_TOOL_PATTERN)) tools.push(MCP_TOOL_PATTERN);
   return [
     ...(opts.prefixArgs ?? []),
     "-p",
@@ -81,8 +130,8 @@ export function buildArgs(
     "--no-session-persistence",
     "--permission-mode",
     opts.permissionMode ?? "acceptEdits",
-    "--allowedTools",
-    mcpConfigPath ? `${tools},${MCP_TOOL_PATTERN}` : tools,
+    // Nothing left after the department narrowed it: no tool is allowed up front.
+    ...(tools.length ? ["--allowedTools", tools.join(",")] : []),
     ...(mcpConfigPath ? ["--mcp-config", mcpConfigPath] : []),
     "--model",
     model,
@@ -218,6 +267,17 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
       const cleanupMcp = () =>
         mcpDir ? rm(mcpDir, { recursive: true, force: true }).catch(() => {}) : Promise.resolve();
       const args = [...resolved.prefix, ...buildArgs(opts, ctx.model, ctx.allowedTools, mcpPath, ctx.effort)];
+      const { dropped } = narrowTools(opts.allowedTools, ctx.allowedTools);
+      if (dropped.length)
+        ctx.emit({
+          type: "stderr",
+          payload: {
+            text: `The department's sandbox names tools this worker does not allow, so the run goes without them: ${dropped.join(", ")}`.slice(
+              0,
+              500,
+            ),
+          },
+        });
       const acc: ParsedStream = {
         events: [],
         usage: {},

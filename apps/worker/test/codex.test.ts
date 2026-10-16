@@ -238,6 +238,34 @@ process.exit(1);`,
     await rm(dir, { recursive: true, force: true });
   });
 
+  it("says in the run log that a department's tool list does not narrow Codex", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-codex-"));
+    const quiet = path.join(dir, "quiet.mjs");
+    await writeFile(quiet, "for await (const c of process.stdin) {}", "utf8");
+    const events: RunEventInput[] = [];
+    try {
+      await createCodexEngine({ bin: process.execPath, sandbox: "read-only", prefixArgs: [quiet] }).run({
+        workdir: dir,
+        pack: "x",
+        model: "m",
+        signal: new AbortController().signal,
+        emit: (e) => events.push(e),
+        onUsage: () => {},
+        env: {},
+        allowedTools: ["Read(./**)"],
+        mcp: null,
+      });
+      expect(events).toContainEqual({
+        type: "stderr",
+        payload: {
+          text: "The department's tool list applies to Claude Code teammates; Codex runs in this worker's read-only sandbox.",
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("says Codex is not installed when the worker has no binary", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-codex-"));
     const bin = path.join(dir, "codex");

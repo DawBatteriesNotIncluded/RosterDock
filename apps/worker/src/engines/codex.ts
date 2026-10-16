@@ -3,9 +3,10 @@
 // board shows what the teammate is doing while it runs. The run pack is the
 // entire prompt; nothing from the operator's own Codex setup leaks in
 // (--ignore-user-config, --ephemeral, approvals off, the sandbox from the
-// worker's config). Codex's final message is written as the handover, so the
-// board always has one. The board MCP server is passed as config, the run
-// token by env var NAME (never on the command line).
+// worker's config; a department's tool list does not apply). Codex's final
+// message is written as the handover, so the board always has one. The board
+// MCP server is passed as config, the run token by env var NAME (never on the
+// command line).
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -234,6 +235,14 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
       const resolved = resolveCodexBin(opts.bin);
       const args = [...resolved.prefix, ...buildArgs(opts, ctx.model, ctx.mcp, ctx.workdir, ctx.effort)];
       const acc = emptyCodexStream();
+      // Codex has no per-tool allowlist to narrow; its sandbox mode is the worker's.
+      if (ctx.allowedTools?.length)
+        ctx.emit({
+          type: "stderr",
+          payload: {
+            text: `The department's tool list applies to Claude Code teammates; Codex runs in this worker's ${opts.sandbox} sandbox.`,
+          },
+        });
       let child: ReturnType<typeof spawn>;
       try {
         child = spawn(resolved.bin, args, {
