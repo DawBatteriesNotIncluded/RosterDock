@@ -4,7 +4,13 @@
 // evidence is the diff itself, the declared outputs, the repository's tests and
 // the reviewer's scores against the task's weighted criteria.
 
-import { addedText, findRawSecrets, type Criterion, type DiffFile } from "@rosterdock/shared";
+import {
+  addedText,
+  containsRawSecret,
+  findRawSecrets,
+  type Criterion,
+  type DiffFile,
+} from "@rosterdock/shared";
 import type { FetchedSource } from "./sources.js";
 
 export type CheckKind = "secrets" | "outputs" | "tests" | "evaluation" | "sources";
@@ -28,7 +34,10 @@ export function secretsCheck(files: DiffFile[]): CheckResult {
     for (const h of f.hunks) {
       for (const l of h.lines) {
         if (l.kind !== "add") continue;
-        const shaped = findRawSecrets({ text: l.text }).length > 0 || ASSIGNED_SECRET_RE.test(l.text);
+        const shaped =
+          findRawSecrets({ text: l.text }).length > 0 ||
+          containsRawSecret(l.text) ||
+          ASSIGNED_SECRET_RE.test(l.text);
         if (shaped) lines.push({ path: f.path, line: l.new ?? 0 });
       }
     }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertNoRawSecrets,
+  containsRawSecret,
   findRawSecrets,
   isEnvVarName,
   looksLikeRawSecret,
@@ -91,5 +92,53 @@ describe("findRawSecrets / assertNoRawSecrets", () => {
     expect(findRawSecrets(null)).toEqual([]);
     expect(findRawSecrets(42)).toEqual([]);
     expect(findRawSecrets("sk-abcdef0123456789")).toEqual([{ path: "", reason: "secret-shaped string" }]);
+  });
+});
+
+// Every key below is a made-up fake in the shape of the real thing.
+describe("containsRawSecret", () => {
+  it("finds a key anywhere in a line, not only at its start", () => {
+    for (const line of [
+      "OPENAI_API_KEY=sk-proj-FAKE0123456789abcdefghij",
+      "export ANTHROPIC_API_KEY=sk-ant-api03-FAKE0123456789abcdef",
+      'const key = "sk-ant-api03-FAKE0123456789abcdef";',
+      "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+      "  token: ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+      "  pat = github_pat_11FAKE0123456789abcdef",
+      "SLACK_BOT=xoxb-1234567890-FAKEfakeFAKE",
+      "aws_access_key_id = AKIAIOSFODNN7EXAMPLE",
+      "cookie: session=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2ln",
+      "key: |\n-----BEGIN OPENSSH PRIVATE KEY-----",
+    ])
+      expect(containsRawSecret(line), line).toBe(true);
+  });
+
+  it("finds an unquoted value given to a secret-named variable, as a shell or an .env file writes it", () => {
+    for (const line of [
+      "DB_PASSWORD=hunter2hunter2",
+      "export GITHUB_TOKEN=FAKEfake0123456789",
+      "S3_SECRET_KEY=fake-secret-value",
+      "RUN CLIENT_SECRET=fakefakefake npm test",
+    ])
+      expect(containsRawSecret(line), line).toBe(true);
+  });
+
+  it("leaves names, references, placeholders and prose alone", () => {
+    for (const line of [
+      "const apiKey = process.env.OPENAI_API_KEY;",
+      "OPENAI_API_KEY=${OPENAI_API_KEY}",
+      "GITHUB_TOKEN=$GITHUB_TOKEN",
+      "API_KEY=<your key>",
+      "TOKEN_URL=https://example.com/oauth/token",
+      "if (password === confirmPassword) {",
+      "const parts = raw.split(',').map((token)=>token.trim());",
+      "this.token=next;",
+      "Bearer tokens are sent in the Authorization header.",
+      'headers.authorization = "Bearer " + token;',
+      "pip install scikit-learn; the task-runner moved",
+      "integrity: sha512-Q2xhdWRlIGlzIGEgZ29vZCBhc3Npc3RhbnQgYW5kIHRoaXMgaXMgYSBrZXk+/w==",
+      "N8N_API_KEY",
+    ])
+      expect(containsRawSecret(line), line).toBe(false);
   });
 });

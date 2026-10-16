@@ -161,6 +161,42 @@ describe("secretsCheck", () => {
     expect(JSON.stringify(c)).not.toContain("hunter2");
     expect(JSON.stringify(c)).not.toContain("ghp_");
   });
+
+  it("flags a key in the middle of a line and an unquoted secret assignment, and passes code that names them", () => {
+    // Made-up fakes in the shape of the real keys.
+    const leaky = parseUnifiedDiff(
+      renderNewFileDiff(
+        "setup.sh",
+        [
+          "#!/bin/sh",
+          "OPENAI_API_KEY=sk-proj-FAKE0123456789abcdefghij",
+          "export ANTHROPIC_API_KEY=sk-ant-api03-FAKE0123456789abcdef",
+          'const key = "sk-ant-api03-FAKE0123456789abcdef";',
+          'curl -H "Authorization: Bearer abcdefghijklmnopqrstuvwxyz" https://api.example.com',
+          "DB_PASSWORD=hunter2hunter2",
+          "",
+        ].join("\n"),
+      ),
+    );
+    const c = secretsCheck(leaky);
+    expect(c.ok).toBe(false);
+    expect((c.detail.lines as { line: number }[]).map((l) => l.line)).toEqual([2, 3, 4, 5, 6]);
+    for (const value of ["sk-proj", "sk-ant", "abcdefghijklmnop", "hunter2"])
+      expect(JSON.stringify(c)).not.toContain(value);
+
+    const named = parseUnifiedDiff(
+      renderNewFileDiff(
+        "src/client.ts",
+        [
+          "const apiKey = process.env.OPENAI_API_KEY;",
+          'const headers = { authorization: "Bearer " + apiKey };',
+          "// export OPENAI_API_KEY=${OPENAI_API_KEY} before you run it",
+          "",
+        ].join("\n"),
+      ),
+    );
+    expect(secretsCheck(named).ok).toBe(true);
+  });
 });
 
 describe("outputsCheck", () => {

@@ -136,7 +136,9 @@ What they cannot reach:
   sandbox; the department's sandbox also sets the engine's tool allowlist and a time limit.
 - The engine reaches no external MCP server. Every tool call goes to the board (`board_tool_call`),
   where the broker decides: run a read, propose a write, or refuse.
-- A run's diff is scanned for secret-shaped values before review; a hit fails the check.
+- A run's diff is scanned for secret-shaped values before review, anywhere in an added line (a key after
+  `NAME=`, in a string, behind `Bearer`), and for values given to secret-named keys, quoted or as
+  `NAME=value`; a hit fails the check.
 
 ## The board
 
