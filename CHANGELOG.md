@@ -20,7 +20,12 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
 - A shared kanban, messages and an inbox between teammates, and hunk-level reviews with checks. An approved
   review, never a teammate, marks work done, and may open a pull request (GitHub) or a merge request (GitLab).
 - Writes to live systems as propose, approve, execute, bound to the exact payload by its sha256.
+- Connections to MCP servers over HTTP or stdio, and to OpenAPI services, with OAuth where the server offers
+  it; each company keeps its own credentials as write-only secrets under Settings.
+- Needs-you notifications to a webhook (Slack's works as is) or by email.
 - Costs, budgets and drift alerts per company; Prometheus metrics, OpenTelemetry traces and JSON logs.
+- Companies, departments and teammates exported and imported as files, and style packs: published rule
+  files every teammate's brief carries, pinned by commit and sha256.
 - Sign-in through OpenID Connect, and the roles owner, admin, reviewer, viewer and teammate.
 - The Helm chart: board, web and worker against your Postgres and S3-compatible bucket, every credential by
   Secret name, network policies, KEDA scaling and worker pools.
@@ -33,8 +38,12 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
 
 ### Changed
 
-Against the images built from the tree before this release:
+Against the images built from the pre-release tree (then called Pharo, not public):
 
+- A company reaches only its own secrets and the names the operator shares, and four things are closed by
+  default: the board's environment (`board.sharedEnvNames` lists what companies may name), stdio commands
+  (`board.stdioCommands`), who creates companies (`board.companyCreators`), and a public sign-in provider
+  with no `board.oidc.allowedDomains`. `docs/operator.md` (Upgrades and backups) says what to set.
 - The worker image leaves Claude Code out: its licence (Anthropic's Commercial Terms) does not allow a public
   image to pass it on. The chart's `worker.image` points the workers at one you build with it on top of the
   published image (`docs/install.md`, Engines on the worker), and a run on Claude Code that reaches a worker

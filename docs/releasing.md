@@ -58,5 +58,8 @@ their parsers' fixtures were recorded with; moving one means recording the fixtu
   commit SHA" can be turned on.
 - **Dependabot.** Version updates run from `.github/dependabot.yml`; turn on alerts and security updates in
   Settings, Code security.
+- **Private vulnerability reporting.** `SECURITY.md` and the issue template send reporters to the advisory
+  form, which exists only once the repository is public and the feature is on: Settings, Code security,
+  Private vulnerability reporting, Enable. Then check that `/security/advisories/new` opens.
 - **Who may release.** Anyone who can push a `v*` tag publishes. A tag ruleset on `v*` (Settings, Rules)
   can keep creating release tags to the maintainers and forbid moving or deleting one.

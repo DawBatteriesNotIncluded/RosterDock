@@ -17,13 +17,15 @@ You need Node.js 22.12 or later, pnpm 10 (`corepack enable` picks the pinned ver
 pnpm install
 cp apps/board/.env.example apps/board/.env
 cp apps/worker/.env.example apps/worker/.env
-docker compose up -d postgres
+pnpm db:up          # Postgres, and MinIO for artifacts over 512 KB
 pnpm db:migrate
 pnpm dev            # the board on :3000, the web on http://localhost:5173
 pnpm dev:worker     # a worker, in a second terminal
 ```
 
 The README's quick start takes it from there with the stub engine, which needs no model and costs nothing.
+The web's dev server sends `/api` to the board at `http://127.0.0.1:3000`; `ROSTERDOCK_BOARD_URL` points it at
+another.
 
 ## Tests
 

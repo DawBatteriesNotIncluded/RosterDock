@@ -93,7 +93,7 @@ cd RosterDock
 pnpm install
 cp apps/board/.env.example apps/board/.env
 cp apps/worker/.env.example apps/worker/.env
-docker compose up -d postgres
+pnpm db:up          # Postgres, and MinIO for artifacts over 512 KB
 pnpm db:migrate
 pnpm dev
 ```

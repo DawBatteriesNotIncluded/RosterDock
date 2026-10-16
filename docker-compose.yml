@@ -53,16 +53,18 @@ services:
       ROSTERDOCK_WORKER_TOKEN: dev-worker-token
       # Peter plans with a model when the host has this key (by name); empty means heuristic plans.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # Governed tools: connection credentials by NAME, resolved here; add the names your connections use.
-      HUBSPOT_MCP_TOKEN: ${HUBSPOT_MCP_TOKEN:-}
-      N8N_MCP_TOKEN: ${N8N_MCP_TOKEN:-}
+      # Governed tools: a company keeps its connection credentials in Settings > Connections > Secrets (the
+      # store below). A value set here reaches companies only when its name is listed here, and an unlisted
+      # name set here is the board's own, which a connection may not name. To share one value with every
+      # company, set it and list it, e.g. HUBSPOT_MCP_TOKEN: ${HUBSPOT_MCP_TOKEN} and this: HUBSPOT_MCP_TOKEN.
+      ROSTERDOCK_SHARED_ENV_NAMES: ${ROSTERDOCK_SHARED_ENV_NAMES:-}
       # Needs-you notifications: a webhook URL (a Slack incoming webhook works as is); empty means none.
       ROSTERDOCK_NOTIFY_WEBHOOK_URL: ${ROSTERDOCK_NOTIFY_WEBHOOK_URL:-}
       # Traces: one per run to an OTLP/HTTP collector when set (the /v1/traces path is added).
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
-      # A secret store the board may write to (the tokens a connection's OAuth flow obtains): files on a
-      # volume here; the cluster's Secrets under the chart.
+      # A secret store the board may write to (the values people set per company in Settings, and the tokens
+      # a connection's OAuth flow obtains): files on a volume here; the cluster's Secrets under the chart.
       ROSTERDOCK_SECRET_STORE: file:/var/lib/rosterdock/secrets
     volumes:
       - boardsecrets:/var/lib/rosterdock/secrets
