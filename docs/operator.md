@@ -81,6 +81,9 @@ var name in Settings) and a row in the Approvals or Company page:
 - **Failed with "git clone failed"**: the project's repository URL or branch, or the worker's git token
   (`worker.gitSecret`). A clone that moves under 1 KB a second for a minute gives up, and the run's time
   limit counts from the start of the clone.
+- **The board was down when a run finished.** The worker retries the report for about five minutes,
+  heartbeating meanwhile, then leaves the run to pg-boss's retry, which runs it again. A report the board
+  refuses outright is replaced by a failed run that says why.
 - **Stop a run.** The run panel's Stop: a queued run stops at once; a running one at its next heartbeat,
   a clone in progress included.
 

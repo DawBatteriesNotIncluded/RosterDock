@@ -299,6 +299,37 @@ describe("executeRun", () => {
     ).rejects.toBeInstanceOf(RunInterrupted);
   });
 
+  it("hands the run back to the queue when the board stays unreachable for the report", async () => {
+    const board = fakeBoard(PACK(), ["vms-architecture.md", "notes.md"]);
+    // What the client throws once its five minutes of retries are spent.
+    board.complete = async () => {
+      throw new BoardError(503, "HTTP 503");
+    };
+    await expect(executeRun({ runId: "run-1", jobId: "job-1" }, deps(board))).rejects.toThrow(
+      /could not report the result \(HTTP 503\); the queue retries the run/,
+    );
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
+  });
+
+  it("reports a failure in words the board takes when it refuses the report", async () => {
+    const board = fakeBoard(PACK(), ["vms-architecture.md", "notes.md"]);
+    const sent: RunCompleteInput[] = [];
+    board.complete = async (_t, _r, c) => {
+      sent.push(c);
+      if (sent.length === 1) throw new BoardError(422, "a value where a name belongs");
+      board.completion = c;
+    };
+    const outcome = await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board));
+    expect(sent[0]?.status).toBe("completed");
+    expect(board.completion).toMatchObject({
+      status: "failed",
+      error: "The board refused this run's report: a value where a name belongs",
+      usage: { inputTokens: 1200, outputTokens: 300 },
+    });
+    expect(outcome.status).toBe("failed");
+  });
+
   it("skips quietly when the run already finished, but rethrows when it is still running elsewhere", async () => {
     const finished = fakeBoard(PACK(), [], { claimStatus: 409, claimDetails: { status: "completed" } });
     const outcome = await executeRun({ runId: "run-1", jobId: "job-1" }, deps(finished));

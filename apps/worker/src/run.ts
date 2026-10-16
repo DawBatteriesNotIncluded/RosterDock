@@ -385,11 +385,11 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
           };
   } finally {
     phases.end();
-    clearInterval(heartbeatTimer);
     clearInterval(flushTimer);
     deps.shutdown.removeEventListener("abort", onShutdown);
   }
   const finish = async () => {
+    clearInterval(heartbeatTimer);
     if (ws) await cleanupWorkspace(ws).catch(() => {});
     if (deps.otlp && phases.phases.length) {
       const out = await exportWorkerTrace(deps.otlp, runId, deps.workerId, phases.phases);
@@ -406,13 +406,37 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
   }
   await flush();
   completion = fitCompletion(completion);
+  // The heartbeat goes on while the report is retried, so a board that comes back finds the run alive.
   try {
     await deps.board.complete(token, runId, completion);
     deps.log.info(`run ${runId}: ${completion.status}`);
   } catch (err) {
-    if (err instanceof BoardError && err.status === 409)
+    if (err instanceof BoardError && err.status === 409) {
       deps.log.info(`run ${runId}: board already closed it (${err.message})`);
-    else deps.log.warn(`run ${runId}: could not report completion: ${(err as Error).message}`);
+    } else if (err instanceof BoardError && err.status < 500) {
+      // A refusal will not change on a retry: report the failure in words the board takes.
+      deps.log.warn(
+        `run ${runId}: the board refused the report (${err.status} ${err.message}); reporting a failure`,
+      );
+      const refused = fitCompletion({
+        status: "failed",
+        error: `The board refused this run's report: ${err.message}`,
+        usage,
+        durationMs: Date.now() - startedAt,
+      });
+      await deps.board
+        .complete(token, runId, refused)
+        .then(() => (completion = refused))
+        .catch((e: Error) =>
+          deps.log.warn(`run ${runId}: could not report the failure either: ${e.message}`),
+        );
+    } else {
+      // The board stayed unreachable: throw, so pg-boss retries the job and the run is not lost.
+      await finish();
+      throw new Error(
+        `run ${runId}: could not report the result (${(err as Error).message}); the queue retries the run`,
+      );
+    }
   }
   await finish();
   return { runId, status: completion.status };
