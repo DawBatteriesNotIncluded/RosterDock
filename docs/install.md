@@ -142,7 +142,7 @@ and which optional secrets exist. Everything in `values.yaml` is commented. The 
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `board.devLogin`                 | `false` in production. On, anyone reaching the board signs in with any email.                         |
 | `board.autoscaling`              | An HPA on CPU. Boards are interchangeable: sessions and the event stream are in Postgres.             |
-| `board.podDisruptionBudget`      | Keep one board up through node drains.                                                                |
+| `board.podDisruptionBudget`      | Keep one board up through node drains, when there is more than one board.                             |
 | `board.oauth.enabled`            | Connections may authorise by OAuth; the board keeps the tokens in Secrets of its own (a Role).        |
 | `board.sharedEnvNames`           | Keys of `rosterdock-connections` every company may name; no other key reaches a company. Empty: none. |
 | `board.stdioCommands`            | Command lines a stdio connection may run inside the board, exactly (a final `*`: more arguments).     |

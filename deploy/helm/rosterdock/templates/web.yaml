@@ -31,6 +31,8 @@ spec:
         runAsNonRoot: true
         runAsUser: 101
         fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: web
           image: "{{ .Values.image.registry }}/rosterdock-web:{{ include "rosterdock.imageTag" . }}"

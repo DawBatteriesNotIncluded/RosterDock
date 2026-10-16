@@ -139,7 +139,8 @@ board:
     minReplicas: 2
     maxReplicas: 6
     targetCPUUtilizationPercentage: 70
-  # Keep at least this many boards up through node drains; only rendered when replicas or autoscaling allow it.
+  # Keep at least this many boards up through node drains. Rendered only over more than one board (replicas
+  # above 1, or autoscaling, and no persistence): over one, it would refuse every eviction and block drains.
   podDisruptionBudget:
     enabled: false
     minAvailable: 1
