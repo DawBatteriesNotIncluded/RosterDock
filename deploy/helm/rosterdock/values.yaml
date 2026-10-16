@@ -190,6 +190,14 @@ worker:
   # default, Read, Write, Edit, Glob and Grep inside the workspace. A department that needs the web
   # (WebSearch, WebFetch) gets it from a pool that lists them. Codex runs in its own sandbox instead.
   claudeAllowedTools: []
+  # More environment for the worker container, as Kubernetes env entries, for the settings with no value of
+  # their own above (docs/operator.md, Environment reference): ROSTERDOCK_RUN_REPO_TESTS ("0" turns the
+  # repository's tests off), ROSTERDOCK_TEST_TIMEOUT_MS, ROSTERDOCK_LOG_FORMAT, ROSTERDOCK_HEARTBEAT_MS
+  # and the like. A pool's own extraEnv replaces this list. A credential belongs in a Secret, named with
+  # valueFrom, never as a value here.
+  extraEnv: []
+  #  - name: ROSTERDOCK_RUN_REPO_TESTS
+  #    value: "0"
   # Optional git token the worker clones private repositories with, by NAME from a Secret.
   gitSecret:
     name: ""
@@ -210,10 +218,10 @@ worker:
     enabled: false
   # Extra worker fleets, one per department sandbox pool. A department whose sandbox names the pool
   # sends its runs to that fleet's queue (runs.<name>) and only that fleet takes them. Each pool may set
-  # replicas, resources, autoscaling bounds, engineEnvNames, engineSecret, claudeAllowedTools, workVolumeSize,
-  # image (a full worker image reference, for a fleet on its own engine build or a pinned tag; default:
-  # worker.image), and its own network policy egress (egressTo, egressPorts; default: the pool reaches only
-  # the board and Postgres).
+  # replicas, resources, autoscaling bounds, engineEnvNames, engineSecret, claudeAllowedTools, extraEnv,
+  # workVolumeSize, image (a full worker image reference, for a fleet on its own engine build or a pinned
+  # tag; default: worker.image), and its own network policy egress (egressTo, egressPorts; default: the pool
+  # reaches only the board and Postgres).
   #  - name: secure
   #    replicas: 1
   #    egressTo: []          # nothing but the board and Postgres

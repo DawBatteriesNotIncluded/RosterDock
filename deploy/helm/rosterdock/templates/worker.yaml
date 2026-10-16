@@ -161,6 +161,9 @@ spec:
                   key: {{ . }}
                   optional: true
             {{- end }}
+            {{- with ($pool.extraEnv | default $w.extraEnv) }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           volumeMounts:
             - name: work
               mountPath: /work
