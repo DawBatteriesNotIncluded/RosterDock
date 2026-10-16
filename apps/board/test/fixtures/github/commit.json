@@ -1,0 +1,28 @@
+{
+  "sha": "0253df7ed00df5f84097e01499f26e4be2f011cf",
+  "node_id": "C_kwDOExample",
+  "url": "https://api.github.com/repos/acme/gtm-automations/git/commits/0253df7ed00df5f84097e01499f26e4be2f011cf",
+  "html_url": "https://github.com/acme/gtm-automations/commit/0253df7ed00df5f84097e01499f26e4be2f011cf",
+  "author": {
+    "name": "t",
+    "email": "t@example.com",
+    "date": "2026-09-12T15:00:00Z"
+  },
+  "committer": {
+    "name": "t",
+    "email": "t@example.com",
+    "date": "2026-09-12T15:00:00Z"
+  },
+  "tree": {
+    "sha": "3c2d7f1b9a0e5d4c8b7a6f5e4d3c2b1a0f9e8d7c",
+    "url": "https://api.github.com/repos/acme/gtm-automations/git/trees/3c2d7f1b9a0e5d4c8b7a6f5e4d3c2b1a0f9e8d7c"
+  },
+  "message": "base",
+  "parents": [],
+  "verification": {
+    "verified": false,
+    "reason": "unsigned",
+    "signature": null,
+    "payload": null
+  }
+}

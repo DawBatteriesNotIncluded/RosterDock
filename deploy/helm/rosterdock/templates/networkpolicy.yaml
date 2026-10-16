@@ -1,0 +1,192 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $dns := .Values.networkPolicy.dns }}
+{{- $pg := .Values.postgres }}
+{{- $s3 := .Values.storage }}
+# The web reaches only the board. Anyone the ingress controller forwards may reach the web.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-web
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rosterdock.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - port: 8080
+      {{- with .Values.networkPolicy.webIngressFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "rosterdock.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: board
+      ports:
+        - port: {{ .Values.board.service.port }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $dns.podSelector | nindent 14 }}
+      ports:
+        - port: {{ $dns.port }}
+          protocol: UDP
+        - port: {{ $dns.port }}
+          protocol: TCP
+---
+# The board is reached by the web and the workers (and whoever boardIngressFrom names); it reaches
+# Postgres, storage and the outside world on the listed ports (model API, git host, MCP servers, webhooks).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-board
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: board
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rosterdock.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: board
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "rosterdock.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: web
+        - podSelector:
+            matchLabels:
+              {{- include "rosterdock.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: worker
+        {{- with .Values.networkPolicy.boardIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.board.service.port }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $dns.podSelector | nindent 14 }}
+      ports:
+        - port: {{ $dns.port }}
+          protocol: UDP
+        - port: {{ $dns.port }}
+          protocol: TCP
+    - {{ if $pg.cidr }}to:
+        - ipBlock:
+            cidr: {{ $pg.cidr }}
+      {{ end }}ports:
+        - port: {{ $pg.port }}
+    {{- if $s3.endpoint }}
+    - {{ if $s3.cidr }}to:
+        - ipBlock:
+            cidr: {{ $s3.cidr }}
+      {{ end }}ports:
+        - port: {{ $s3.port }}
+    {{- end }}
+    - {{ with .Values.networkPolicy.board.egressTo }}to:
+        {{- toYaml . | nindent 8 }}
+      {{ end }}ports:
+        {{- range .Values.networkPolicy.board.egressPorts }}
+        - port: {{ . }}
+        {{- end }}
+    {{- if .Values.board.oauth.enabled }}
+    # The API server, for the board's own Secrets (its service is 443; the endpoints behind it often 6443).
+    - ports:
+        - port: 443
+        - port: 6443
+    {{- end }}
+{{- if .Values.worker.enabled }}
+{{- $pools := list (dict "name" "" "egressTo" .Values.networkPolicy.worker.egressTo "egressPorts" .Values.networkPolicy.worker.egressPorts) }}
+{{- range .Values.worker.pools }}
+{{- $pools = append $pools (dict "name" .name "egressTo" (.egressTo | default list) "egressPorts" (.egressPorts | default list)) }}
+{{- end }}
+{{- range $pool := $pools }}
+---
+# Worker pods run model output. Nothing reaches them; they reach the board, Postgres (the queue), storage
+# and, for the default fleet, public HTTPS only: the model API and the git host. A pool reaches what its
+# own egress lists, and nothing else: an empty list is a fleet that reaches only the board and Postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rosterdock.fullname" $ }}-worker{{ if $pool.name }}-{{ $pool.name }}{{ end }}
+  labels:
+    {{- include "rosterdock.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: worker
+    rosterdock.dev/pool: {{ $pool.name | default "default" | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rosterdock.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: worker
+      rosterdock.dev/pool: {{ $pool.name | default "default" | quote }}
+  policyTypes: [Ingress, Egress]
+  {{- if $.Values.worker.metrics.enabled }}
+  # Only the metrics port, and only from who networkPolicy.worker.metricsFrom names (anyone in the cluster when empty).
+  ingress:
+    - {{- with $.Values.networkPolicy.worker.metricsFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      ports:
+        - port: {{ $.Values.worker.metrics.port }}
+  {{- else }}
+  ingress: []
+  {{- end }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $dns.podSelector | nindent 14 }}
+      ports:
+        - port: {{ $dns.port }}
+          protocol: UDP
+        - port: {{ $dns.port }}
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "rosterdock.selectorLabels" $ | nindent 14 }}
+              app.kubernetes.io/component: board
+      ports:
+        - port: {{ $.Values.board.service.port }}
+    - {{ if $pg.cidr }}to:
+        - ipBlock:
+            cidr: {{ $pg.cidr }}
+      {{ end }}ports:
+        - port: {{ $pg.port }}
+    {{- if $.Values.worker.podMetrics.enabled }}
+    # The API server, for the pod's own metrics (its service is 443; the endpoints behind it often 6443).
+    - ports:
+        - port: 443
+        - port: 6443
+    {{- end }}
+    {{- if $pool.egressPorts }}
+    - {{ with $pool.egressTo }}to:
+        {{- toYaml . | nindent 8 }}
+      {{ end }}ports:
+        {{- range $pool.egressPorts }}
+        - port: {{ . }}
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

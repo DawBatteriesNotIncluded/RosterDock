@@ -1,0 +1,8 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "result": {
+    "content": [{ "type": "text", "text": "unauthorized: no credential was presented" }],
+    "isError": true
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "results": [
+    {
+      "id": "c-101",
+      "email": "ana@globex.example",
+      "name": "Ana Ruiz",
+      "apiToken": "should-never-travel-000"
+    },
+    { "id": "c-102", "email": "ben@globex.example", "name": "Ben Osei" }
+  ],
+  "total": 2
+}

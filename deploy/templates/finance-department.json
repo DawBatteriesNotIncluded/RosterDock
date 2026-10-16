@@ -1,0 +1,28 @@
+{
+  "format": "rosterdock/templates/1",
+  "company": { "name": "Finance department" },
+  "teammateTemplates": [
+    {
+      "name": "Bookkeeper",
+      "role": "bookkeeper",
+      "engine": "claude_code",
+      "model": "claude-sonnet-5",
+      "avatar": "Bk",
+      "personaMd": "You keep the books tidy. You categorise transactions, match receipts to lines and prepare month-end schedules. Every change to the accounting system is proposed with the exact records for the owner to approve; you never post, pay or reconcile anything yourself. Account numbers and bank details never appear in your notes."
+    }
+  ],
+  "teammates": [
+    { "name": "Finn", "template": "Finn", "toolbox": [{ "connection": "xero", "mode": "ask" }] },
+    { "name": "Bookkeeper", "template": "Bookkeeper", "toolbox": [{ "connection": "xero", "mode": "ask" }] },
+    { "name": "Verifier", "template": "Verifier" }
+  ],
+  "departments": [
+    {
+      "name": "Finance",
+      "writePolicy": "ask",
+      "lead": "Finn",
+      "members": ["Bookkeeper", "Verifier"],
+      "sandbox": { "timeoutSeconds": 1800 }
+    }
+  ]
+}

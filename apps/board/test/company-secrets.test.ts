@@ -1,0 +1,174 @@
+// Company secrets: a value set from Settings goes write-only into the secret
+// store (files in a temporary directory here); the row, the list, the event
+// and every response carry the name only; a connection naming that env var
+// resolves it before a name the board shares; removing it falls back to the
+// shared value, or to a refusal by name. The MCP server is the fake behind an
+// injected fetch; no network.
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { companyEnv, sharedEnv } from "../src/secrets/company.js";
+import { fileSecretStore } from "../src/secrets/file.js";
+import { fakeMcp } from "./mcp-fake.js";
+import { seedCompany, startTestBoard, type TestBoard } from "./helpers.js";
+
+const MCP_URL = "https://mcp.hubspot.test/mcp";
+const dir = mkdtempSync(path.join(os.tmpdir(), "rosterdock-company-secrets-"));
+let board: TestBoard;
+let bare: TestBoard;
+const mcp = fakeMcp();
+const FROM_ENV = "from-the-environment-000000";
+const FROM_SETTINGS = "set-from-settings-000000";
+
+beforeAll(async () => {
+  board = await startTestBoard(
+    { secretStore: { kind: "file", dir }, sharedEnvNames: ["HUBSPOT_MCP_TOKEN"] },
+    { mcpFetch: mcp.fetch, env: { HUBSPOT_MCP_TOKEN: FROM_ENV } },
+  );
+  bare = await startTestBoard({}, { mcpFetch: mcp.fetch });
+});
+afterAll(async () => {
+  await board.destroy();
+  await bare.destroy();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+const lastListBearer = () =>
+  mcp.requests.filter((r) => r.body?.method === "tools/list").at(-1)?.headers.authorization ?? null;
+
+describe("company secrets", () => {
+  it("sets a value: the store keeps it, the row and the event keep the name, no response carries it", async () => {
+    const { api, base } = await seedCompany(board, "cs1@example.com");
+    const companyId = base.split("/").pop()!;
+    const set = await api.put(`${base}/secrets/HUBSPOT_MCP_TOKEN`, { value: FROM_SETTINGS });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({ name: "HUBSPOT_MCP_TOKEN", updatedBy: { kind: "user" } });
+    expect(JSON.stringify(set.body)).not.toContain(FROM_SETTINGS);
+
+    const list = await api.get(`${base}/secrets`);
+    expect(list.status).toBe(200);
+    expect(list.body.map((s: { name: string }) => s.name)).toEqual(["HUBSPOT_MCP_TOKEN"]);
+    expect(JSON.stringify(list.body)).not.toContain(FROM_SETTINGS);
+
+    const file = `rosterdock-company-${companyId}.json`;
+    expect(readdirSync(dir)).toContain(file);
+    expect(JSON.parse(readFileSync(path.join(dir, file), "utf8"))).toEqual({
+      HUBSPOT_MCP_TOKEN: FROM_SETTINGS,
+    });
+
+    const events = (await api.get(`${base}/events?limit=10`)).body as { type: string; payload: any }[];
+    const ev = events.find((e) => e.type === "secret.set");
+    expect(ev?.payload).toEqual({ name: "HUBSPOT_MCP_TOKEN", replaced: false });
+    expect(JSON.stringify(events)).not.toContain(FROM_SETTINGS);
+
+    // Replacing says so; the store holds the new value only.
+    const again = await api.put(`${base}/secrets/HUBSPOT_MCP_TOKEN`, { value: `${FROM_SETTINGS}-2` });
+    expect(again.status).toBe(200);
+    expect(JSON.parse(readFileSync(path.join(dir, file), "utf8"))).toEqual({
+      HUBSPOT_MCP_TOKEN: `${FROM_SETTINGS}-2`,
+    });
+    const replaced = (await api.get(`${base}/events?limit=10`)).body.find(
+      (e: { type: string; payload: any }) => e.type === "secret.set" && e.payload.replaced,
+    );
+    expect(replaced).toBeTruthy();
+  });
+
+  it("a connection resolves the name from the store before the environment, and falls back when it goes", async () => {
+    const { api, base } = await seedCompany(board, "cs2@example.com");
+    const created = await api.post(`${base}/connections`, {
+      name: "hubspot",
+      catalogId: "hubspot",
+      url: MCP_URL,
+      authEnvName: "HUBSPOT_MCP_TOKEN",
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+
+    // Nothing set for the company: the board's environment answers.
+    let checked = await api.post(`${base}/connections/${id}/check`, {});
+    expect(checked.status).toBe(200);
+    expect(checked.body.lastCheck.ok).toBe(true);
+    expect(lastListBearer()).toBe(`Bearer ${FROM_ENV}`);
+
+    // Set in Settings: the company's value wins.
+    expect((await api.put(`${base}/secrets/HUBSPOT_MCP_TOKEN`, { value: FROM_SETTINGS })).status).toBe(200);
+    checked = await api.post(`${base}/connections/${id}/check`, {});
+    expect(checked.body.lastCheck.ok).toBe(true);
+    expect(lastListBearer()).toBe(`Bearer ${FROM_SETTINGS}`);
+
+    // Removed: back to the environment.
+    expect((await api.del(`${base}/secrets/HUBSPOT_MCP_TOKEN`)).status).toBe(200);
+    checked = await api.post(`${base}/connections/${id}/check`, {});
+    expect(checked.body.lastCheck.ok).toBe(true);
+    expect(lastListBearer()).toBe(`Bearer ${FROM_ENV}`);
+    expect((await api.get(`${base}/secrets`)).body).toEqual([]);
+    expect(readdirSync(dir).filter((f) => f.includes(base.split("/").pop()!))).toEqual([]);
+
+    // A name the environment does not have: set, it works; removed, the refusal names it and nothing is called.
+    const other = await api.post(`${base}/connections`, {
+      name: "other",
+      url: "https://other.test/mcp",
+      authEnvName: "OTHER_MCP_TOKEN",
+    });
+    expect(other.status).toBe(201);
+    expect((await api.put(`${base}/secrets/OTHER_MCP_TOKEN`, { value: "other-value-000000" })).status).toBe(
+      200,
+    );
+    checked = await api.post(`${base}/connections/${other.body.id}/check`, {});
+    expect(checked.body.lastCheck.ok).toBe(true);
+    expect(lastListBearer()).toBe("Bearer other-value-000000");
+    const before = mcp.requests.length;
+    expect((await api.del(`${base}/secrets/OTHER_MCP_TOKEN`)).status).toBe(200);
+    checked = await api.post(`${base}/connections/${other.body.id}/check`, {});
+    expect(checked.body.lastCheck.ok).toBe(false);
+    expect(checked.body.lastCheck.error).toContain("OTHER_MCP_TOKEN is not set");
+    expect(checked.body.lastCheck.error).not.toContain("other-value");
+    expect(mcp.requests.length).toBe(before);
+  });
+
+  it("is per company: another company's connection never sees the value", async () => {
+    const a = await seedCompany(board, "cs3a@example.com");
+    const b = await seedCompany(board, "cs3b@example.com");
+    expect((await a.api.put(`${a.base}/secrets/ONLY_A_TOKEN`, { value: "a-only-000000" })).status).toBe(200);
+    expect((await b.api.get(`${b.base}/secrets`)).body).toEqual([]);
+    const conn = await b.api.post(`${b.base}/connections`, {
+      name: "shared",
+      url: "https://shared.test/mcp",
+      authEnvName: "ONLY_A_TOKEN",
+    });
+    const checked = await b.api.post(`${b.base}/connections/${conn.body.id}/check`, {});
+    expect(checked.body.lastCheck.ok).toBe(false);
+    expect(checked.body.lastCheck.error).toContain("ONLY_A_TOKEN is not set");
+  });
+
+  it("refuses what it must: a bad name, an empty value, an unknown name, and a board without a store", async () => {
+    const { api, base } = await seedCompany(board, "cs4@example.com");
+    expect((await api.put(`${base}/secrets/not-a-name`, { value: "x-000000" })).status).toBe(400);
+    expect((await api.put(`${base}/secrets/A_TOKEN`, { value: "" })).status).toBe(400);
+    expect((await api.put(`${base}/secrets/A_TOKEN`, {})).status).toBe(400);
+    expect((await api.del(`${base}/secrets/A_TOKEN`)).status).toBe(404);
+
+    const none = await seedCompany(bare, "cs4-bare@example.com");
+    const refused = await none.api.put(`${none.base}/secrets/A_TOKEN`, { value: "x-000000" });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toContain("secret store");
+    expect((await none.api.get(`${none.base}/secrets`)).body).toEqual([]);
+  });
+
+  it("companyEnv: the store entry over the shared names, empty values ignored, the shared names alone without a store", async () => {
+    const store = fileSecretStore(path.join(dir, "unit"));
+    const board = { A: "base-a", B: "base-b", DATABASE_URL: "postgres://board:pw@db/rosterdock" };
+    // Only the names the operator shares are keys; the rest of the board's environment is not there.
+    const base = sharedEnv(board, ["A", "B", "UNSET"]);
+    expect(Object.keys(base)).not.toContain("DATABASE_URL");
+    expect(await companyEnv(base, null, "c1")).toEqual({ A: "base-a", B: "base-b" });
+    expect(await companyEnv(base, store, "c1")).toEqual({ A: "base-a", B: "base-b" });
+    await store.put("rosterdock-company-c1", { A: "store-a", C: "store-c", D: "" });
+    expect(await companyEnv(base, store, "c1")).toEqual({ A: "store-a", B: "base-b", C: "store-c" });
+    expect(board.A).toBe("base-a");
+    // The view reads the board's value when it is used.
+    board.B = "rotated-b";
+    expect(await companyEnv(base, null, "c1")).toEqual({ A: "base-a", B: "rotated-b" });
+  });
+});

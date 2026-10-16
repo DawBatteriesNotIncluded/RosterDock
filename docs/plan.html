@@ -1,0 +1,309 @@
+<title>RosterDock Plan</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root { --ground:#f6f5f2; --surface:#ffffff; --panel:#f1efea; --border:#e6e3dc; --ink:#1c1b19; --ink2:#4a4741; --muted:#6b675f; --accent:#1f7a5c; --accent-soft:#e2f1ea; --warn:#c98a1c; --warn-soft:#fbf1dd; --warn-ink:#8a5a0e; --bad:#b3261e; --bad-soft:#fdecec; --info:#4f6bd8; --info-soft:#e3e8fa; --sans:'Schibsted Grotesk','Helvetica Neue',Arial,sans-serif; --mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ground:#141513; --surface:#1e1f1c; --panel:#191a17; --border:#2c2e29; --ink:#ecebe6; --ink2:#c9c7c0; --muted:#9a9d95; --accent:#4fb58a; --accent-soft:#1b3a2e; --warn:#e2b75a; --warn-soft:#3a2f16; --warn-ink:#f0d08a; --bad:#e07a72; --bad-soft:#3d1f1c; --info:#8fa3ea; --info-soft:#1f2640; } }
+  :root[data-theme="dark"] { --ground:#141513; --surface:#1e1f1c; --panel:#191a17; --border:#2c2e29; --ink:#ecebe6; --ink2:#c9c7c0; --muted:#9a9d95; --accent:#4fb58a; --accent-soft:#1b3a2e; --warn:#e2b75a; --warn-soft:#3a2f16; --warn-ink:#f0d08a; --bad:#e07a72; --bad-soft:#3d1f1c; --info:#8fa3ea; --info-soft:#1f2640; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans); font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .page { max-width: 860px; margin: 0 auto; padding: 48px 28px 96px; }
+  header { border-bottom:1px solid var(--border); padding-bottom:22px; margin-bottom:34px; }
+  .eyebrow { font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  h1 { font-size:32px; font-weight:700; letter-spacing:-0.02em; margin:6px 0 10px; text-wrap:balance; }
+  .lede { font-size:17px; color:var(--ink2); max-width:64ch; margin:0; }
+  h2 { font-size:21px; font-weight:700; letter-spacing:-0.01em; margin:44px 0 12px; text-wrap:balance; }
+  h3 { font-size:16px; font-weight:700; margin:24px 0 8px; }
+  p { margin:0 0 12px; max-width:68ch; }
+  ul, ol { margin:0 0 12px; padding-left:22px; max-width:68ch; }
+  li { margin-bottom:5px; }
+  li::marker { color:var(--muted); }
+  code, .mono { font-family:var(--mono); font-size:13px; }
+  code { background:var(--panel); padding:1px 5px; border-radius:4px; }
+  table { border-collapse:collapse; width:100%; font-size:14px; margin:8px 0 16px; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
+  .tablewrap { overflow-x:auto; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px 18px; margin:10px 0 16px; }
+  .callout { border-left:3px solid var(--accent); background:var(--accent-soft); padding:12px 16px; border-radius:0 8px 8px 0; margin:12px 0 18px; }
+  .callout.warn { border-color:var(--warn); background:var(--warn-soft); }
+  .pill { display:inline-block; font-size:12px; font-weight:600; border-radius:10px; padding:2px 9px; }
+  .pill.ok { background:var(--accent-soft); color:var(--accent); } .pill.warn { background:var(--warn-soft); color:var(--warn-ink); } .pill.info { background:var(--info-soft); color:var(--info); } .pill.bad { background:var(--bad-soft); color:var(--bad); }
+  .ms { display:flex; gap:14px; align-items:baseline; }
+  .ms .n { font-family:var(--mono); font-size:13px; color:var(--muted); min-width:34px; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; margin:10px 0 16px; }
+  .toc { display:flex; flex-wrap:wrap; gap:8px 16px; font-size:13px; margin-top:16px; }
+  .toc a { color:var(--muted); text-decoration:none; }
+  .toc a:hover { color:var(--accent); }
+  a { color:var(--accent); }
+  .muted { color:var(--muted); }
+  .small { font-size:13px; }
+</style>
+
+<div class="page">
+<header>
+  <div class="eyebrow">Build plan · September 2026 · a dock for a roster of AI teammates</div>
+  <h1>RosterDock</h1>
+  <p class="lede">RosterDock is an AI company platform. This is what we are building, why the current repo is not the base, how the new system is shaped, and the milestones that take it from an empty repository to a Helm chart a customer can install.</p>
+  <div class="toc">
+    <a href="#what">What we are building</a><a href="#story">A day in the product</a><a href="#nouns">Core concepts</a><a href="#peter">Peter</a><a href="#borrowed">Borrowed ideas</a><a href="#rules">Rules that never soften</a><a href="#arch">Architecture</a><a href="#data">Data model</a><a href="#salvage">Salvage and drop</a><a href="#milestones">Milestones</a><a href="#decisions">Decisions needed</a><a href="#risks">Risks</a><a href="#start">First week</a>
+  </div>
+</header>
+
+<h2 id="what">What we are building</h2>
+<p>A self-hosted platform that lets an organisation run an AI company. The operator describes the company as departments staffed with AI teammates. Each teammate is three things: a <strong>brain</strong> (a model on an engine such as Claude Code or Codex), a <strong>persona</strong> (a written job description and playbooks), and a <strong>toolbox</strong> (a governed set of MCP servers). The operator hands the company goals. A project-manager teammate splits goals into tasks on a shared kanban. Teammates work in parallel, message and delegate to each other, and review each other's output at the level of individual diff hunks. Humans are pulled in at exactly two points: merging finished code, and any write to a live outside system.</p>
+<p>It runs on Kubernetes. The board is a stateless service, workers are pods that scale with the queue, and the whole thing ships as a Helm chart that a customer installs into their own cluster with their own model accounts and secrets. No data leaves their network.</p>
+<div class="callout"><strong>What it is not.</strong> It is not a coding agent, a git host, or a chat assistant. It is the layer that turns coding agents and research agents into a team you can watch, steer and trust, and it plugs into the git host and the MCP servers a company already has.</div>
+
+<h3>Why not the current repo</h3>
+<p>The current repo is a governed, human-in-the-loop control plane. Its defaults are the inverse of this product: kill switch on, report-only level, a human owns every Done. It has no messaging between agents, no agent-created tasks with real identity, no diff capture, no review object, no roles, and no project-manager loop. In three months of live use it produced zero completed tasks. The parts that are genuinely good are carried over; the shape is not.</p>
+
+<h2 id="story">A day in the product</h2>
+<ol>
+  <li>You open the company. Departments show who is working, who is blocked, and what is waiting on you.</li>
+  <li>You type a goal: <em>"Send a weekly digest of Gong calls with next steps to #sales every Friday."</em></li>
+  <li>Peter, the project manager, splits it into four tasks across Research and Engineering, assigns them, and opens a project. The cards appear.</li>
+  <li>Ricky starts researching while Cody scaffolds the workflow. Cody hits a gap and asks <code>@ricky</code> on the task. Ricky answers and files a follow-up task for Cody.</li>
+  <li>Cody pushes. The Verifier reviews the diff hunk by hunk and requests one change. Cody fixes it and resubmits. The Verifier approves.</li>
+  <li>The approval opens a pull request. Merging it is yours. Activating the workflow in n8n is a separate approval card showing the exact action and the credential name.</li>
+  <li>Peter watches all of it. A failed run gets re-planned. A stuck task gets chased. You only hear about the two gates.</li>
+  <li>The Office view shows the whole thing happening: teammates at desks, handoffs moving between rooms, an amber question mark walking to your desk.</li>
+</ol>
+
+<h2 id="nouns">Core concepts</h2>
+<div class="tablewrap"><table>
+  <tr><th>Noun</th><th>What it is</th><th>Owned by</th></tr>
+  <tr><td>Company</td><td>A tenant: its own departments, projects, board, budget and templates.</td><td>Owner</td></tr>
+  <tr><td>Department</td><td>A roster with a lead teammate and a write policy that can only tighten member toolboxes.</td><td>Company</td></tr>
+  <tr><td>Teammate</td><td>Brain, persona, playbooks, toolbox. Templates are shared across companies; instances belong to one.</td><td>Company</td></tr>
+  <tr><td>MCP connection</td><td>A plugged-in MCP server. The platform reads its tool list and classifies read vs write. Credentials by name only.</td><td>Company</td></tr>
+  <tr><td>Tool mode</td><td>Per teammate, per tool: <code>read</code>, <code>auto</code>, <code>ask</code>, <code>off</code>. Department policy and project client policy can only narrow.</td><td>Teammate</td></tr>
+  <tr><td>Project</td><td>A goal's container. Binds a client policy register. Holds tasks.</td><td>Company</td></tr>
+  <tr><td>Task</td><td>A card. Status: todo, doing, blocked, review, done. Has an assignee, a creator (human or teammate), dependencies, a conversation, runs, outputs.</td><td>Project</td></tr>
+  <tr><td>Run</td><td>One execution of a task by a teammate on an engine, in a sandboxed worktree. Emits events, logs, usage, artifacts, and a diff.</td><td>Task</td></tr>
+  <tr><td>Message</td><td>A conversation entry on a task. Mentions route to the named teammate's next turn.</td><td>Task</td></tr>
+  <tr><td>Review</td><td>A diff plus hunk-anchored comment threads, reviewer decisions, checks. Approval marks the task done and opens a PR.</td><td>Task</td></tr>
+  <tr><td>Approval</td><td>A proposed external write bound to a sha256 of the exact payload. Approved bytes are executed bytes. Queues are per company: a person with roles in several companies sees each company's queue, notifications and Needs-you count separately.</td><td>Task</td></tr>
+  <tr><td>Cost</td><td>Every run records tokens by model. A per-company price table turns tokens into money for API-billed models; seat-billed engines (a Claude Code or Codex subscription) are counted as seats. Rolled up by company, department, project, teammate and model against budgets.</td><td>Company</td></tr>
+  <tr><td>Event</td><td>Everything above emits events. Activity, the office and the map are projections of the event stream.</td><td>Company</td></tr>
+</table></div>
+
+
+<h2 id="peter">Peter, in three roles</h2>
+<p>Peter is not a form. He is a teammate whose tools are the board and the company itself, and he is present from the first minute of a new install.</p>
+<div class="grid2">
+  <div class="card"><strong>1 · Company architect</strong><p class="small">"I need a finance function that reconciles Xero weekly" or "staff a research agency for client X". Peter proposes departments, teammate templates with personas, the MCP toolbox each needs and the write policy, as a draft you edit and accept. Accepting creates the org. He can also audit an existing company: idle teammates, missing reviewers, toolboxes wider than their department policy.</p></div>
+  <div class="card"><strong>2 · Intake planner</strong><p class="small">The v1 Peter, kept: a goal becomes a validated pack with background, required outcome, acceptance criteria, required artifacts, done definition and open questions. He asks at most a few clarifying questions, then hands off explicitly. Handoff opens a project and its tasks.</p></div>
+  <div class="card"><strong>3 · Project manager</strong><p class="small">After handoff he stays on. He watches runs, reviews and budgets, re-plans on failure, chases blocked tasks, rebalances load between teammates, and escalates only at the two human gates. Department leads are Peter instances scoped to their department; the company Peter routes to them.</p></div>
+</div>
+<p>All three run on the same loop: the Claude Agent SDK against the board MCP server, with a company-design toolset added for the architect role (propose department, propose teammate, propose toolbox, propose policy). Proposals are always drafts a human accepts. Peter never grants a tool to anyone by himself.</p>
+
+<h2 id="borrowed">Ideas we keep from the reference projects</h2>
+<p>Each of these was worth taking. Each is pinned to a milestone so it ships rather than lingers.</p>
+<div class="tablewrap"><table>
+  <tr><th>From</th><th>What we take</th><th>Where</th></tr>
+  <tr><td>Agent Teams AI</td><td>Parallel agents on one board that message, delegate and review each other; hunk-level review with approve and reject; organisations with a global live overview.</td><td>M2, M3</td></tr>
+  <tr><td>Agent Teams AI</td><td>Token analytics and budgets per company, department, project and teammate, with alerts at 80% and 100%, and a per-run cost line. Live process view per running teammate: what it is doing now, elapsed time, tokens so far, CPU and memory of its pod.</td><td>Budgets M1, analytics and alerts M2, pod metrics M6</td></tr>
+  <tr><td>Agent Teams AI</td><td>Flexible autonomy: fully autonomous, or approve tool actions one by one, per teammate. Becomes our read, auto, ask, off tool modes.</td><td>M5</td></tr>
+  <tr><td>Veritas Kanban</td><td>Decision audit trail: a teammate records the assumptions and confidence behind a decision, in the run, visible in the task drawer.</td><td>M2</td></tr>
+  <tr><td>Veritas Kanban</td><td>Output evaluation: scoring against weighted criteria from the task pack, used as review checks. Behavioural drift detection: alert when a teammate's cost, duration or rejection rate departs from its baseline.</td><td>Evaluation M3, drift M6</td></tr>
+  <tr><td>Veritas Kanban</td><td>Sandbox policy presets: reusable filesystem, network and environment rules for worker pods, chosen per department.</td><td>M1 basic, M6 network policies</td></tr>
+  <tr><td>Veritas Kanban</td><td>Crash-recovery checkpoints with secrets sanitised, so a requeued run resumes with context instead of from zero.</td><td>M1</td></tr>
+  <tr><td>OneDev</td><td>AI users as first-class accounts: teammates appear as authors, reviewers and assignees everywhere, with the same permission checks as humans. Notification filtering so agents do not wake each other in loops.</td><td>M0, M2</td></tr>
+  <tr><td>OneDev</td><td>Workspaces per agent engine as container images (Claude Code, Codex, OpenCode), one template each.</td><td>M1</td></tr>
+  <tr><td>pixel-agents</td><td>The office: characters that walk to desks, type when editing, read when searching, flag when waiting on you; a layout editor and importable asset packs later.</td><td>M2 from events; editor and packs after M6</td></tr>
+  <tr><td>agent-board v1</td><td>Evidence gate, sha256 artifacts, propose-approve-execute broker, policy register bound per project, secrets by name, planner intake prompts.</td><td>Throughout</td></tr>
+</table></div>
+
+<h2 id="rules">Rules that never soften</h2>
+<ul>
+  <li><strong>Autonomy by default.</strong> Teammates act without asking. Human gates exist only for merges to protected branches and writes to live external systems.</li>
+  <li><strong>Secrets are names.</strong> The platform stores env-var names and secret refs, never values. Values resolve inside worker pods from the cluster secret store. A raw-secret guard rejects writes that look like values. One door lets a person set a value from Settings: it goes write-only into the secret store under the company and the name, never into a row, an event or a response, and that company's connections resolve it before the board's environment.</li>
+  <li><strong>External writes are proposed, approved, executed.</strong> With hash binding. Drifted bytes are rejected and audited.</li>
+  <li><strong>Teammates never mark Done.</strong> A review approval does, and that can come from a reviewer teammate. Humans can veto any review.</li>
+  <li><strong>Policy only narrows.</strong> Teammate toolbox sets the ceiling: a connection with a mode, optionally only some of its tools; department policy and project client policy can only tighten it.</li>
+  <li><strong>One event stream.</strong> No visualisation-only events. If the office shows it, the audit log has it.</li>
+  <li><strong>Roles from day one.</strong> Owner, admin, reviewer, viewer, teammate. Every mutating endpoint checks one.</li>
+  <li><strong>Offline tests.</strong> The suite never needs a model, a git host or an MCP server. Protocol adapters are tested against recorded fixtures, not hand-written echoes.</li>
+</ul>
+
+<h2 id="arch">Architecture</h2>
+<div class="grid2">
+  <div class="card"><strong>Board API</strong><p class="small">Node 22, TypeScript, Fastify. Owns all state, the event stream (SSE and WebSocket), the queue producer, the review and approval engines, and the broker. Stateless; scales horizontally.</p></div>
+  <div class="card"><strong>Web UI</strong><p class="small">React, Vite, Tailwind, shadcn. The prototype's design system. Views: Company, Board, Reviews, Approvals, Activity, Office, Departments, Teammates, Settings.</p></div>
+  <div class="card"><strong>Worker</strong><p class="small">Separate image. Claims a run from the queue, checks out a worktree on an ephemeral volume, runs the engine headless with the persona pack and a run-scoped board token, streams events, captures artifacts and the diff, exits. Killed workers are reaped and the task requeued.</p></div>
+  <div class="card"><strong>Engines</strong><p class="small">One runner adapter interface. Claude Code first, Codex second, OpenCode third. Each is a table row, not a copy of the code.</p></div>
+  <div class="card"><strong>Board MCP server</strong><p class="small">The tools teammates use to act on the board: read task, post message, create task, request review, propose action. Scoped by run token. This is how agents talk to each other.</p></div>
+  <div class="card"><strong>Tool broker</strong><p class="small">Proxies external MCP servers. Applies tool modes and policies. Reads pass through; auto writes execute; ask writes become approval records; off is refused before any network call.</p></div>
+  <div class="card"><strong>PM loop</strong><p class="small">Peter runs on the Claude Agent SDK against the board MCP server on a schedule and on events. Plans, assigns, watches, re-plans, escalates at gates.</p></div>
+  <div class="card"><strong>Storage</strong><p class="small">Postgres for everything relational and the event log. pg-boss for the queue so day one needs no Redis. S3-compatible object storage for artifacts and diffs, MinIO locally.</p></div>
+  <div class="card"><strong>Git</strong><p class="small">Provider interface. GitHub first via app installation: clone, push branch, open PR, read checks. GitLab and OneDev later.</p></div>
+  <div class="card"><strong>Deploy</strong><p class="small">Docker Compose for local. Helm chart for production: board Deployment, worker Deployment with HPA on queue depth, Postgres and MinIO as optional subcharts or external, OIDC for login, External Secrets compatible.</p></div>
+</div>
+
+<h2 id="data">Data model</h2>
+<p>Postgres, one schema, migrations from the first commit. Every row carries <code>company_id</code>.</p>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Key columns</th></tr>
+  <tr><td><code>companies</code></td><td>id, name, template, budget_tokens_week, settings</td></tr>
+  <tr><td><code>users</code>, <code>memberships</code></td><td>oidc subject, email; company_id, user_id, role</td></tr>
+  <tr><td><code>departments</code>, <code>department_members</code></td><td>name, lead_teammate_id, write_policy; teammate_id, is_lead</td></tr>
+  <tr><td><code>teammate_templates</code>, <code>teammates</code></td><td>name, role, persona_md, playbooks[], engine, model, avatar; instance overrides</td></tr>
+  <tr><td><code>mcp_connections</code>, <code>mcp_tools</code></td><td>transport, url, credential_ref (name), catalog_entry; tool name, kind read/write, schema</td></tr>
+  <tr><td><code>tool_modes</code></td><td>teammate_id, tool_id, mode</td></tr>
+  <tr><td><code>policy_registers</code>, <code>project_policies</code></td><td>named client rules; project binding</td></tr>
+  <tr><td><code>projects</code>, <code>tasks</code>, <code>task_dependencies</code></td><td>goal, client; title, status, assignee_teammate_id, created_by (user or teammate), blocker jsonb</td></tr>
+  <tr><td><code>messages</code></td><td>task_id, author (user or teammate), body, mentions[]</td></tr>
+  <tr><td><code>runs</code>, <code>run_events</code></td><td>task_id, teammate_id, engine, status, worktree_ref, usage, run_spec_hash; seq, type, payload</td></tr>
+  <tr><td><code>artifacts</code></td><td>run_id, path, sha256, object_key, kind</td></tr>
+  <tr><td><code>reviews</code>, <code>review_files</code>, <code>review_comments</code>, <code>review_decisions</code></td><td>diff object_key, base and head shas; file path, additions, deletions; file, hunk index, line, author, body, resolved; reviewer, decision</td></tr>
+  <tr><td><code>approvals</code></td><td>task_id, teammate_id, tool_id, payload jsonb, payload_sha256, status, decided_by, executed_at, result_ref</td></tr>
+  <tr><td><code>events</code></td><td>company_id, seq, type, actor, subject, payload; the canonical stream</td></tr>
+  <tr><td><code>budgets</code></td><td>scope (company, department, project, teammate), tokens_limit, money_limit, used, window</td></tr>
+  <tr><td><code>model_prices</code>, <code>run_usage</code></td><td>company_id, model, input_price, output_price, cache_price, or seat_price_month; run_id, model, input_tokens, output_tokens, cached_tokens, cost_minor_units</td></tr>
+</table></div>
+
+<h2 id="salvage">Salvage and drop</h2>
+<div class="grid2">
+  <div class="card"><strong><span class="pill ok">Carry over</span></strong>
+    <ul class="small" style="margin-top:8px">
+      <li>Postgres document backend and row-locking pattern</li>
+      <li>Worker-pool queue claim and the 60 s reaper</li>
+      <li>Segmented audit log and SSE tail</li>
+      <li>Evidence evaluation and sha256 hashing</li>
+      <li>Tool broker: propose, approve, execute with action bindings</li>
+      <li>Integration policy register and per-project binding</li>
+      <li>Raw-secret guard at write boundaries</li>
+      <li>Persona and skill packs, Peter's intake prompts</li>
+      <li>Claude Code and Codex worker scripts (Windows shim handling included)</li>
+      <li>MCP client and OpenAPI runtime with their redaction rules</li>
+    </ul></div>
+  <div class="card"><strong><span class="pill bad">Leave behind</span></strong>
+    <ul class="small" style="margin-top:8px">
+      <li>The 7,700-line route file and the 1,783-line run handler</li>
+      <li>The 4,400-line vanilla dashboard</li>
+      <li>Legacy kanban column model and its ungated move routes</li>
+      <li>Three overlapping org models (company, employees, organizations)</li>
+      <li>Five copy-pasted runtime configs</li>
+      <li>DeerFlow boundary (can return later as an engine row)</li>
+      <li>OpenClaw webhooks and fork leftovers</li>
+      <li>Governance ladder L1 to L4 as a global mode; replaced by per-tool modes and policies</li>
+    </ul></div>
+</div>
+
+<h2 id="milestones">Milestones</h2>
+<p>Each milestone ends with a demo you can click and a green offline test suite. Work is committed in small slices on <code>main</code>. Durations assume one focused engineer plus agents; treat them as order of magnitude.</p>
+
+<div class="card"><div class="ms"><span class="n">M0</span><h3 style="margin:0">Foundation <span class="muted small">· weeks 1 to 2</span></h3></div>
+  <ul class="small">
+    <li>New repo, license, CI (build, lint, test), Docker Compose with Postgres and MinIO.</li>
+    <li>Schema and migrations for companies, users, memberships, departments, teammates, projects, tasks, messages, events.</li>
+    <li>Auth: OIDC login plus local dev login; roles enforced by a single guard.</li>
+    <li>Event stream: append, replay from seq, SSE endpoint.</li>
+    <li>React shell with the prototype's tokens: Company, Board with Blocked, Departments matrix, Teammates editor. Static data replaced by the API.</li>
+    <li>Teammates as first-class accounts: every author, assignee and reviewer field accepts a user or a teammate; the same role guard applies to both.</li>
+    <li>Helm chart skeleton that deploys the board against an external Postgres.</li>
+  </ul>
+  <p class="small"><strong>Demo:</strong> create a company, a department, a project and a task in the UI; a second browser sees them appear live. <strong>Done when:</strong> every mutating route has a role check and an event.</p></div>
+
+<div class="card"><div class="ms"><span class="n">M1</span><h3 style="margin:0">One agent works <span class="muted small">· weeks 3 to 4</span></h3></div>
+  <ul class="small">
+    <li>Queue (pg-boss), run records, run-scoped board tokens.</li>
+    <li>Worker image: claim, clone and worktree on an ephemeral volume, run Claude Code headless with persona pack, stream events, capture declared artifacts and the diff to object storage, report usage.</li>
+    <li>Reaper requeues dead runs; task goes back to todo with a blocker note.</li>
+    <li>Task drawer shows live run log, outputs and tokens.</li>
+    <li>Budgets: token limits per company, department, project and teammate enforced at claim time; 80% and 100% alerts as events. Per-run cost line.</li>
+    <li>Sandbox presets, basic: filesystem and environment rules per department applied to the worker. Crash checkpoints with secrets sanitised, so a requeued run resumes.</li>
+  </ul>
+  <p class="small"><strong>Demo:</strong> assign a task to Cody; watch the run; open the produced files. <strong>Done when:</strong> killing the worker pod mid-run requeues the task without manual cleanup.</p></div>
+
+<div class="card"><div class="ms"><span class="n">M2</span><h3 style="margin:0">Team collaboration <span class="muted small">· weeks 5 to 6</span></h3></div>
+  <ul class="small">
+    <li>Board MCP server: read task, list my tasks, post message, create task for teammate, set blocker, request review, propose action.</li>
+    <li>Mentions route to the named teammate's next turn; agent-created tasks carry the creator's identity.</li>
+    <li>Parallel workers with per-task worktrees; HPA on queue depth in the chart.</li>
+    <li>Blocked semantics: dependency, waiting on teammate, waiting on approval; Peter's stub chases blocked tasks on a timer.</li>
+    <li>Decision audit trail: teammates log assumptions and confidence via the board MCP; shown in the task drawer.</li>
+    <li>Costs page per company: tokens and money by department, project, teammate and model; daily and weekly trend; spend against budget with a forecast to end of period; 80% and 100% alerts. Price table per model in Settings, with API per-token prices or a seat price for subscription CLIs, so a company can see exactly what running on API models would cost versus seats.</li>
+    <li>Live process panel per running teammate: current step, elapsed, tokens so far.</li>
+    <li>Notification filtering so teammates never wake each other in a loop; caps on tasks created per goal.</li>
+    <li>Office view v1 (pixel and map) rendered from real events.</li>
+  </ul>
+  <p class="small"><strong>Demo:</strong> Ricky asks Cody a question and files a task for him; both run at once; the office shows the handoff. <strong>Done when:</strong> two agents complete a two-task chain with no human input.</p></div>
+
+<div class="card"><div class="ms"><span class="n">M3</span><h3 style="margin:0">Review <span class="muted small">· weeks 7 to 8</span></h3></div>
+  <ul class="small">
+    <li>Review object from a run's diff: files, hunks, comments anchored to file, hunk and line.</li>
+    <li>Reviewer teammate (Verifier) reviews through the board MCP: comment, request changes, approve. Humans can do the same and veto.</li>
+    <li>Request changes requeues the author with the comments in the pack. Approve marks done and opens a PR through the GitHub provider.</li>
+    <li>Checks: policy scan for secret-shaped strings, declared outputs present, tests if the repo has them, and output evaluation against the pack's weighted criteria.</li>
+  </ul>
+  <p class="small"><strong>Demo:</strong> agent-to-agent review with one round of changes and a PR at the end. <strong>Done when:</strong> a task cannot reach done by any route except an approved review.</p></div>
+
+<div class="card"><div class="ms"><span class="n">M4</span><h3 style="margin:0">Peter: PM loop, architect, and research <span class="muted small">· weeks 9 to 10</span></h3></div>
+  <ul class="small">
+    <li>Peter as a Claude Agent SDK loop: intake, decompose with done definitions, assign by role and load, watch runs and reviews, re-plan on failure, escalate only at gates. Runs on events and on a schedule.</li>
+    <li>Research persona path: document artifacts with sources, a research review checklist instead of a diff.</li>
+    <li>Department leads as scoped PM instances; company PM routes goals to leads.</li>
+    <li>Recursion and cost caps per goal; Peter reports what it spent.</li>
+    <li>Peter as company architect: from a goal or a gap, proposes departments, teammate templates, toolboxes and policies as a draft you accept; audits an existing company for idle teammates and over-wide toolboxes.</li>
+  </ul>
+  <p class="small"><strong>Demo:</strong> one typed goal to a merged PR and a research document with no human touch except the merge. <strong>Done when:</strong> a run failure is re-planned without a human noticing.</p></div>
+
+<div class="card"><div class="ms"><span class="n">M5</span><h3 style="margin:0">Governed tools <span class="muted small">· weeks 11 to 12</span></h3></div>
+  <ul class="small">
+    <li>MCP connections: add by URL or catalog, tool discovery, read and write classification, credential by name.</li>
+    <li>Tool modes per teammate; department policy and project client policy narrowing; broker enforces before any network call.</li>
+    <li>Approvals: proposed payload, sha256 binding, approve executes the bound bytes, reject re-plans. Approvals UI and Needs-you notifications to Slack or email.</li>
+    <li>First real integrations: n8n, HubSpot, Slack, Xero.</li>
+  </ul>
+  <p class="small"><strong>Demo:</strong> Finn proposes invoice approvals in Xero; Cody proposes activating an n8n workflow; you approve one and reject one. <strong>Done when:</strong> a write reaches a live system only with a matching hash on an approved record.</p></div>
+
+<div class="card"><div class="ms"><span class="n">M6</span><h3 style="margin:0">Deployable <span class="muted small">· weeks 13 to 14</span></h3></div>
+  <ul class="small">
+    <li>Production Helm chart: values for external Postgres and S3, OIDC, secrets, resource limits, HPA, network policies for worker pods.</li>
+    <li>Company, department and teammate templates as importable files.</li>
+    <li>Costs export (CSV) and a monthly cost report per company; optional chargeback tags per project.</li>
+    <li>Observability: OpenTelemetry traces per run, Prometheus metrics, structured logs, pod CPU and memory per running teammate in the live process panel.</li>
+    <li>Behavioural drift detection: alerts when a teammate's cost, duration or rejection rate departs from baseline. Sandbox network policies per department.</li>
+    <li>Install guide, operator guide, security notes. A fresh cluster install in an afternoon.</li>
+  </ul>
+  <p class="small"><strong>Demo:</strong> install into a clean cluster from the chart and run the M4 demo there. <strong>Done when:</strong> someone who is not you does it from the docs.</p></div>
+
+<h2 id="decisions">Decisions needed before M0</h2>
+<div class="tablewrap"><table>
+  <tr><th>Decision</th><th>Recommendation</th><th>Why</th></tr>
+  <tr><td>Product name</td><td><strong>RosterDock</strong> · decided 2026-10-15</td><td>Repo <code>rosterdock</code>, chart <code>rosterdock</code>, images <code>rosterdock-board</code>, <code>rosterdock-web</code>, <code>rosterdock-worker</code>, settings <code>ROSTERDOCK_*</code>. Renamed from Pharo (2026-09-12) before the first public release: Pharo is the Smalltalk project, and Pharos a binary-analysis toolkit. "GTM Studio" in the prototype is a sample company, not the product.</td></tr>
+  <tr><td>Repository</td><td>New repo; keep agent-board read-only as reference</td><td>Clean history, no legacy defaults leaking in.</td></tr>
+  <tr><td>License</td><td>Apache 2.0</td><td>Customers deploy it; AGPL would block adoption, MIT lacks the patent grant.</td></tr>
+  <tr><td>UI stack</td><td>React, Vite, Tailwind, shadcn</td><td>Hunk review and live boards need a component model; shadcn keeps the prototype's look.</td></tr>
+  <tr><td>Database</td><td>Postgres only</td><td>Multi-replica from day one; drop JSON files entirely.</td></tr>
+  <tr><td>Queue</td><td>pg-boss on Postgres</td><td>One fewer service; swap to Redis later only if throughput demands.</td></tr>
+  <tr><td>Artifacts</td><td>S3-compatible, MinIO locally</td><td>Diffs and files do not belong in Postgres rows.</td></tr>
+  <tr><td>Engines</td><td>Claude Code first, Codex second, OpenCode third</td><td>Claude Code is live-proven in v1; Codex is your Cody build engine today.</td></tr>
+  <tr><td>DeerFlow</td><td>Drop for now</td><td>Its research value returns as a research persona on Claude Code; the boundary was the most fragile v1 code.</td></tr>
+  <tr><td>Git host</td><td>GitHub first</td><td>App installation model fits PR flow; GitLab and OneDev via the same provider interface later.</td></tr>
+</table></div>
+
+<h2 id="risks">Risks and how we hold them</h2>
+<ul>
+  <li><strong>Token cost.</strong> A v1 Claude Code run measured around 100k tokens. Budgets at company, department and project level from M1, and Peter reports spend per goal.</li>
+  <li><strong>Runaway loops.</strong> Two agents delegating to each other forever. Caps per goal on tasks created, runs, and depth; Peter cannot create tasks past the cap without a human.</li>
+  <li><strong>Worker security.</strong> Worker pods run untrusted model output. Ephemeral volumes, no cluster credentials, network policy allowing only the board, the git host and approved MCP endpoints.</li>
+  <li><strong>Protocol drift.</strong> v1 shipped three live-only bugs because tests echoed the adapter's assumptions. Adapters are tested against recorded real responses.</li>
+  <li><strong>Scope creep.</strong> v1 grew 117 commits in one week and lost coherence. One milestone at a time; anything not in the current milestone goes on the list, not in the tree.</li>
+  <li><strong>Docs rot.</strong> A route or concept lands with its doc line in the same commit, or it does not land.</li>
+</ul>
+
+<h2 id="start">The first week, concretely</h2>
+<ol>
+  <li>Create the <code>rosterdock</code> repo with the chosen license. Node 22, pnpm workspace: <code>apps/board</code>, <code>apps/web</code>, <code>apps/worker</code>, <code>packages/shared</code>, <code>deploy/helm</code>.</li>
+  <li>Docker Compose: Postgres 16, MinIO, board, web. One command to a running empty board.</li>
+  <li>Migration 0001: companies, users, memberships, departments, department_members, teammate_templates, teammates, projects, tasks, messages, events.</li>
+  <li>Board API: health, auth, companies, departments, teammates, projects, tasks, messages, events SSE. Role guard on every mutation. Every mutation appends an event.</li>
+  <li>Web shell: layout, company switcher, Company, Board, Departments, Teammates views bound to the API; the prototype's CSS tokens as the Tailwind theme.</li>
+  <li>CI: typecheck, lint, vitest against a Postgres service container, build images.</li>
+  <li>Port the raw-secret guard, hashing and the event-append pattern from v1 into <code>packages/shared</code> with their tests.</li>
+</ol>
+<div class="callout warn"><strong>Working agreement.</strong> Small reviewable slices, each green and committed. One writer on the tree at a time. Demo at the end of every milestone before the next one starts. The plan changes only in this document, never in a chat message.</div>
+<p class="muted small">Prototype for reference: <a href="prototype.html">clickable screens</a> (<code>docs/prototype.html</code>).</p>
+</div>

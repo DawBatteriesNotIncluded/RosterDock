@@ -1,0 +1,115 @@
+name: rosterdock
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rosterdock
+      POSTGRES_PASSWORD: rosterdock
+      POSTGRES_DB: rosterdock
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rosterdock -d rosterdock"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: rosterdock
+      MINIO_ROOT_PASSWORD: rosterdock-dev-only
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  board:
+    build:
+      context: .
+      dockerfile: apps/board/Dockerfile
+    image: rosterdock-board:dev
+    environment:
+      DATABASE_URL: postgres://rosterdock:rosterdock@postgres:5432/rosterdock
+      PORT: "3000"
+      HOST: 0.0.0.0
+      ROSTERDOCK_DEV_LOGIN: "1"
+      ROSTERDOCK_COOKIE_SECURE: "0"
+      CORS_ORIGIN: http://localhost:8080
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: rosterdock
+      S3_ACCESS_KEY: rosterdock
+      S3_SECRET_KEY: rosterdock-dev-only
+      ROSTERDOCK_WORKER_TOKEN: dev-worker-token
+      # Peter plans with a model when the host has this key (by name); empty means heuristic plans.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Governed tools: connection credentials by NAME, resolved here; add the names your connections use.
+      HUBSPOT_MCP_TOKEN: ${HUBSPOT_MCP_TOKEN:-}
+      N8N_MCP_TOKEN: ${N8N_MCP_TOKEN:-}
+      # Needs-you notifications: a webhook URL (a Slack incoming webhook works as is); empty means none.
+      ROSTERDOCK_NOTIFY_WEBHOOK_URL: ${ROSTERDOCK_NOTIFY_WEBHOOK_URL:-}
+      # Traces: one per run to an OTLP/HTTP collector when set (the /v1/traces path is added).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      # A secret store the board may write to (the tokens a connection's OAuth flow obtains): files on a
+      # volume here; the cluster's Secrets under the chart.
+      ROSTERDOCK_SECRET_STORE: file:/var/lib/rosterdock/secrets
+    volumes:
+      - boardsecrets:/var/lib/rosterdock/secrets
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  # Runs teammates. Off by default: `docker compose --profile worker up -d worker`.
+  # Needs a model credential by name (ANTHROPIC_API_KEY) in the environment. Built here with Claude Code,
+  # which the published worker image leaves out.
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+      args:
+        WITH_CLAUDE_CODE: "1"
+    image: rosterdock-worker:dev
+    profiles: [worker]
+    environment:
+      DATABASE_URL: postgres://rosterdock:rosterdock@postgres:5432/rosterdock
+      BOARD_URL: http://board:3000
+      ROSTERDOCK_WORKER_TOKEN: dev-worker-token
+      ROSTERDOCK_ENGINE_PASS_ENV: ANTHROPIC_API_KEY
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      board:
+        condition: service_started
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: rosterdock-web:dev
+    depends_on:
+      - board
+    ports:
+      - "127.0.0.1:8080:80"
+
+volumes:
+  pgdata:
+  miniodata:
+  boardsecrets:

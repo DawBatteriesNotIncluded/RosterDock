@@ -1,0 +1,20 @@
+# The local compose stack behind a public https origin, for OAuth callbacks and reaching the board from
+# another device. The origin itself comes from outside compose: Tailscale Serve (deploy/scripts/serve.sh,
+# only your own devices can reach it) or any https proxy in front of localhost:8080.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.public.yml up -d --build
+#
+# Reads ROSTERDOCK_PUBLIC_URL from the environment or .env (serve.sh writes it). The web container's nginx
+# reports plain http to the board, so the board must be told its https origin: it goes into the OAuth
+# redirect URIs, CORS and the session cookie.
+#
+# Sign-in is still the dev login, which makes anyone who reaches the page an owner. That is fine behind
+# Tailscale Serve (the tailnet is the gate) and not fine on an origin the internet can reach: switch to
+# OIDC (docs/install.md) first.
+
+services:
+  board:
+    environment:
+      ROSTERDOCK_PUBLIC_URL: ${ROSTERDOCK_PUBLIC_URL:?set ROSTERDOCK_PUBLIC_URL to the https origin, or run deploy/scripts/serve.sh}
+      CORS_ORIGIN: ${ROSTERDOCK_PUBLIC_URL}
+      ROSTERDOCK_COOKIE_SECURE: "1"

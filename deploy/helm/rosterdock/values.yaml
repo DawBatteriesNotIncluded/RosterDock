@@ -1,0 +1,326 @@
+# RosterDock chart values. Board, web and worker against an external Postgres and
+# an S3-compatible bucket. Every credential is a reference to a Secret you
+# manage (External Secrets compatible); the chart never carries a value.
+# The examples/ directory has a production values file to start from.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  registry: ghcr.io/dawbatteriesnotincluded
+  pullPolicy: IfNotPresent
+  # Defaults to the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+
+board:
+  replicas: 1
+  logLevel: info
+  # Comma-separated origins allowed to call the API with credentials. Empty = same origin only.
+  corsOrigin: ""
+  # Never enable in production. Local dev login creates users from an email alone.
+  devLogin: false
+  # Who may create a company (ROSTERDOCK_COMPANY_CREATORS): emails, "@domain"s, or "*" for anyone who signs in.
+  # Empty: the first person to create one on the empty board owns it and nobody creates another (with
+  # devLogin on, anyone may). Everyone else joins a company when one of its owners invites their email.
+  companyCreators: []
+  # Peter's loop passes over every company this often (ms) besides on events; 0 disables it.
+  peterIntervalMs: 30000
+  # The key Peter plans with, by NAME from a Secret. Empty name: Peter plans by heuristic, no model.
+  modelSecret:
+    name: ""
+    key: ANTHROPIC_API_KEY
+  # Governed tools. Connection credentials are env var NAMES on connections. A company's names resolve
+  # from its own secrets (set in Settings with oauth.enabled below) and from the names listed in
+  # sharedEnvNames, never from anything else on the board (its database URL, its worker token).
+  # connectionsSecret puts credentials on the board pod, one key per name (HUBSPOT_MCP_TOKEN...); a key
+  # reaches companies only when sharedEnvNames lists it. Empty: none.
+  connectionsSecret:
+    name: ""
+  # Env var NAMES every company may name besides its own secrets (ROSTERDOCK_SHARED_ENV_NAMES): keys of
+  # connectionsSecret, usually. Whoever manages a connection in ANY company can send a shared value to a
+  # server they choose, so share only what you would hand to every company's owners and admins; the
+  # board refuses to start with one of its own names here. Empty: none.
+  sharedEnvNames: []
+  # The command lines a stdio connection may run (ROSTERDOCK_STDIO_COMMANDS). A stdio server runs inside the
+  # board pod as the board, so it can read what the board can; list a server only when you would let every
+  # company's owners and admins run it. Each line is the command and its arguments, matched exactly; a
+  # final * lets a company add arguments (for a filesystem server, the folders it serves, which then may be
+  # any folder in the pod). Empty: no stdio connection runs.
+  #  - "npx -y @modelcontextprotocol/server-memory@2026.8.31"
+  #  - "npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /home/node/data/drive"
+  stdioCommands: []
+  # Needs-you notifications go to this webhook URL (may carry a token), by NAME from a Secret. Empty: none,
+  # unless a company names its own (one of its secrets, or a name in sharedEnvNames) in Settings.
+  notifySecret:
+    name: ""
+    key: ROSTERDOCK_NOTIFY_WEBHOOK_URL
+  # ...and, or instead, by email: an SMTP URL with the credentials inside (smtp:// upgrades with STARTTLS
+  # when offered, smtps:// is TLS from the start), by NAME from a Secret, plus the recipients and the sender.
+  notifyEmail:
+    smtpSecret:
+      name: ""
+      key: ROSTERDOCK_NOTIFY_SMTP_URL
+    to: ""
+    from: ""
+  # A bearer token scrapers must present on /metrics, by NAME from a Secret. Empty: /metrics is open on
+  # the board's port (cluster-internal; the web never proxies it).
+  metricsSecret:
+    name: ""
+    key: ROSTERDOCK_METRICS_TOKEN
+  # The token the board opens pull requests with after an approved review, by NAME from a Secret.
+  # Empty: reviews still approve; no pull request is opened.
+  githubSecret:
+    name: ""
+    key: ROSTERDOCK_GITHUB_TOKEN
+  # The same for GitLab projects: a token with the api scope, by NAME from a Secret, and the API root when
+  # self-hosted (its host is the one repository URLs must carry). Empty: GitLab repositories propose nothing.
+  gitlabSecret:
+    name: ""
+    key: ROSTERDOCK_GITLAB_TOKEN
+  gitlabApi: ""
+  # Sign-in through one OpenID Connect provider. Set the issuer and client id; the client secret is
+  # read by NAME from a Secret. Empty issuer: no single sign-on (and with devLogin off, no way in).
+  oidc:
+    issuer: ""
+    clientId: ""
+    # Shown on the sign-in button.
+    name: Single sign-on
+    scopes: openid email profile
+    # Comma-separated email domains allowed to sign in; empty allows every verified email at a provider of
+    # your own (a realm, a tenant). At a public one (Google, Microsoft's common tenants, GitLab.com, Apple)
+    # anyone holds an account, so the board will not start with it empty: list the domains, or "*" to let
+    # every account in on purpose.
+    allowedDomains: ""
+    # How the secret travels to the token endpoint: basic (the default) or post.
+    tokenAuth: basic
+    secret:
+      name: ""
+      key: ROSTERDOCK_OIDC_CLIENT_SECRET
+  # The URL people reach the board at, for sign-in redirects. Empty: from the ingress host, else the request.
+  publicUrl: ""
+  # OAuth on connections: a connection may authorise against its MCP server's authorization server instead
+  # of naming an env var, and the board keeps the tokens it obtains in Secrets of its own
+  # (rosterdock-connection-<id>) in the release namespace. That takes the pod's service account token and a
+  # Role over Secrets in the namespace (rbac.yaml), which the chart withholds otherwise; keep RosterDock in a
+  # namespace of its own when you turn this on. Off: connections authenticate by env var NAME only.
+  oauth:
+    enabled: false
+  # Model CLIs Peter may plan with where the board runs (Settings > Peter; Automatic takes the first signed in).
+  # The image carries them when built with WITH_MODEL_CLIS=1. Their credentials, by NAME from plannerSecret
+  # (CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`, OPENAI_API_KEY for Codex), reach only the CLI the board
+  # starts. Empty: none.
+  plannerEnvNames: []
+  plannerSecret:
+    name: rosterdock-engines
+  # A volume for what stdio connections keep (the folder a filesystem MCP server serves, a memory file), at
+  # mountPath in the board pod. The home is always writable scratch; this outlives the pod. One board replica.
+  persistence:
+    enabled: false
+    size: 1Gi
+    storageClass: ""
+    mountPath: /home/node/data
+  # Scale the board on CPU. Sessions and the event stream live in Postgres, so replicas are interchangeable.
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  # Keep at least this many boards up through node drains; only rendered when replicas or autoscaling allow it.
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 3000
+
+web:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  service:
+    type: ClusterIP
+    port: 80
+
+worker:
+  enabled: true
+  # A full worker image reference for every fleet that does not name its own: the image you build with
+  # Claude Code on top of the published one, which leaves it out (docs/install.md). Empty: the chart's,
+  # <image.registry>/rosterdock-worker:<tag>, which runs Codex and the stub engine.
+  image: ""
+  replicas: 1
+  terminationGracePeriodSeconds: 60
+  # The fleet token the worker presents to claim runs. Must equal ROSTERDOCK_WORKER_TOKEN on the board.
+  tokenSecret:
+    name: rosterdock-worker
+    key: ROSTERDOCK_WORKER_TOKEN
+  # Model credentials, by NAME. Each name is read from engineSecret and handed to the engine process only
+  # (ANTHROPIC_API_KEY for Claude Code teammates, OPENAI_API_KEY for Codex teammates).
+  engineEnvNames: [ANTHROPIC_API_KEY]
+  engineSecret:
+    name: rosterdock-engines
+  # Optional git token the worker clones private repositories with, by NAME from a Secret.
+  gitSecret:
+    name: ""
+    key: ROSTERDOCK_GIT_TOKEN
+  workVolumeSize: 4Gi
+  # The worker serves its own counters (runs by outcome, seconds on runs, in flight) on this port; the pod
+  # is annotated for scraping, and with observability.serviceMonitor.enabled a ServiceMonitor covers the
+  # whole fleet through a headless Service. Disable to close the port.
+  metrics:
+    enabled: true
+    port: 9464
+  # The pod's CPU and memory for the heartbeat come from the cgroup, which counts the engine child. For a
+  # runtime whose engine forks beyond it, the worker can ask the metrics API instead (metrics-server or
+  # an equivalent must be installed): that takes a service account token in a pod that runs model output,
+  # so the chart gives the worker an account of its own with one Role, get pod metrics in this namespace,
+  # mounts the token, and opens the worker's egress to the API server. The cgroup stays behind it.
+  podMetrics:
+    enabled: false
+  # Extra worker fleets, one per department sandbox pool. A department whose sandbox names the pool
+  # sends its runs to that fleet's queue (runs.<name>) and only that fleet takes them. Each pool may set
+  # replicas, resources, autoscaling bounds, engineEnvNames, engineSecret, workVolumeSize, image (a full
+  # worker image reference, for a fleet on its own engine build or a pinned tag; default: worker.image),
+  # and its own network policy egress (egressTo, egressPorts; default: the pool reaches only the board and
+  # Postgres).
+  #  - name: secure
+  #    replicas: 1
+  #    egressTo: []          # nothing but the board and Postgres
+  #    egressPorts: []
+  #  - name: research
+  #    image: ghcr.io/example/rosterdock-worker-research:1.4.0
+  #    egressPorts: [443]
+  #    egressTo:
+  #      - ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16] }
+  pools: []
+  # Scale on queue depth with KEDA (install KEDA first). One worker per waiting run, within the bounds.
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 20
+    runsPerWorker: 1
+    cooldownSeconds: 120
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+postgres:
+  # The board reads DATABASE_URL from a Secret you manage (External Secrets compatible).
+  # The Secret must hold a full connection string under `key`.
+  externalSecret:
+    name: ""
+    key: DATABASE_URL
+  # Where Postgres is reached from the cluster, for the network policies (a CIDR and a port).
+  # Leave the CIDR empty to allow any destination on the port.
+  cidr: ""
+  port: 5432
+
+# S3-compatible object storage for artifacts too large for a row (MinIO in dev). The board reads the
+# endpoint and bucket from these values and the access key and secret by NAME from a Secret.
+storage:
+  endpoint: ""
+  bucket: rosterdock
+  region: ""
+  # Path-style addressing (MinIO, Ceph); virtual-hosted on AWS.
+  forcePathStyle: true
+  externalSecret:
+    name: ""
+    accessKeyKey: S3_ACCESS_KEY
+    secretKeyKey: S3_SECRET_KEY
+  # For the network policies: where the bucket is reached (a CIDR and a port). Empty CIDR: any on the port.
+  cidr: ""
+  port: 443
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: rosterdock.example.com
+  tls: []
+  #  - secretName: rosterdock-tls
+  #    hosts: [rosterdock.example.com]
+
+# Network policies. The web reaches only the board; the board reaches Postgres, storage and the outside
+# (model API, git host, MCP servers, webhooks); the worker reaches the board, Postgres and the public
+# internet on 443 (model API, git host) and nothing private in the cluster. Worker pods run model output.
+networkPolicy:
+  enabled: false
+  # Extra sources allowed to reach the web (the ingress controller's namespace, a load balancer range).
+  # Each entry is a NetworkPolicyPeer (namespaceSelector, podSelector, ipBlock).
+  webIngressFrom:
+    - namespaceSelector: {}
+  # Extra sources allowed to reach the board's port directly (a metrics scraper, an admin pod).
+  boardIngressFrom: []
+  board:
+    # Everything the board calls lives outside the cluster; allow all egress on these ports, or list
+    # destinations as NetworkPolicyPeers below to narrow.
+    egressPorts: [443, 80]
+    egressTo: []
+  worker:
+    # Who may reach the worker's metrics port (NetworkPolicyPeers). Empty: any pod in the cluster; nothing
+    # else ever reaches a worker.
+    metricsFrom: []
+    # Public HTTPS only by default: the model API and the git host; nothing private in the cluster besides
+    # the board, Postgres and storage. Narrow to your provider's ranges when you know them.
+    egressPorts: [443]
+    egressTo:
+      - ipBlock:
+          cidr: 0.0.0.0/0
+          except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16]
+  # DNS for every pod (kube-dns in kube-system by default).
+  dns:
+    namespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+    podSelector:
+      k8s-app: kube-dns
+    port: 53
+
+# Observability. The board serves Prometheus metrics on /metrics (the pod is annotated for scraping; a
+# ServiceMonitor is rendered on request). Traces: one per run, posted by the board and the worker to an
+# OTLP/HTTP collector when an endpoint is set; headers that carry a token come from a Secret by NAME.
+observability:
+  otlp:
+    # e.g. http://otel-collector.observability.svc:4318 (the /v1/traces path is added)
+    endpoint: ""
+    headersSecret:
+      name: ""
+      key: OTEL_EXPORTER_OTLP_HEADERS
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]

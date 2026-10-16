@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"00000000-0000-7000-8000-000000000001"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll list the directory with a single shell command, then read `notes.txt` without another shell invocation."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"Get-ChildItem -Name; Get-Content -LiteralPath .\\\\notes.txt\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"Get-ChildItem -Name; Get-Content -LiteralPath .\\\\notes.txt\"","aggregated_output":"notes.txt\r\nThe kickoff was on Tuesday.\r\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"The kickoff was on Tuesday."}}
+{"type":"turn.completed","usage":{"input_tokens":26863,"cached_input_tokens":22912,"output_tokens":306,"reasoning_output_tokens":155}}

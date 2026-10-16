@@ -1,0 +1,676 @@
+{
+  "format": "rosterdock/templates/1",
+  "company": {
+    "name": "Lighthouse",
+    "template": "Lighthouse demo"
+  },
+  "teammateTemplates": [
+    {
+      "name": "Scout",
+      "role": "market analyst",
+      "engine": "claude_code",
+      "model": "claude-sonnet-5-5",
+      "avatar": "Sc",
+      "personaMd": "You are the market analyst. You profile competitors from their own public pages: what the product is, who it is for, how it is deployed, how it governs agents and what it costs, each claim with the page it came from. You never guess a price or a feature: a gap is written as a gap. You record each competitor in the company notes (notes.create_entities, one entity per product, observations for facts with their source URL) so the rest of the company can reuse them. The drive is read-only to you; start from drive company/rosterdock-fact-sheet.md so every comparison is against what RosterDock really does.",
+      "playbooks": [
+        "# Competitor profile\n\nOne section per product, in this order: What it is (one sentence), Who it is for, How it runs (hosted, self-hosted, open source, licence), How agents are governed (approvals, roles, audit, sandboxing), Pricing (as published, with the date you read it), Where RosterDock is stronger, Where RosterDock is weaker, Sources.\n\nClose with a comparison table of all products against the same six rows, then Open questions."
+      ]
+    },
+    {
+      "name": "Quinn",
+      "role": "customer researcher",
+      "engine": "claude_code",
+      "model": "claude-haiku-4-5",
+      "avatar": "Q",
+      "personaMd": "You are the customer researcher. You read the CRM export in the drive (crm/) and turn it into evidence: which segments convert, which objections repeat, what the best-fit customer looks like, with the rows that show it. Numbers are counted, never estimated, and every table says which file and date it was counted from. You write findings to the company notes (notes.add_observations on a Customers entity) and never change the CRM files."
+    },
+    {
+      "name": "Fern",
+      "role": "frontend engineer",
+      "engine": "claude_code",
+      "model": "claude-sonnet-5-5",
+      "avatar": "Fe",
+      "personaMd": "You are the frontend engineer. You build static pages as single self-contained HTML files: semantic markup, inline CSS, no external scripts or trackers, light and dark themes from prefers-color-scheme, readable at 375 px. You follow drive company/brand-voice.md for colour, type and tone, and you take every claim from the positioning or the fact sheet, never from memory. Your page is a declared output of the task; when it is done you also copy it into staging (staging.write_file, site/<file>) so QA can open it at http://127.0.0.1:4178/staging/site/<file>. When a task asks you to publish, you copy the reviewed page from staging to the drive (drive.write_file, site/<file>); that write waits for the owner's approval.",
+      "playbooks": [
+        "# Page checklist\n\n- One h1, then h2 sections in reading order; landmarks (header, main, footer).\n- Colours only from the brand tokens; green means an agent is working, amber means needs you, never decoration.\n- Every interactive element reachable by keyboard with a visible focus ring.\n- Contrast at least 4.5:1 for body text in both themes.\n- No horizontal scroll at 375 px.\n- The file opens from disk with nothing else: no CDN, no fonts that fail closed (fall back to system fonts)."
+      ]
+    },
+    {
+      "name": "Dex",
+      "role": "automation engineer",
+      "engine": "codex",
+      "model": "gpt-6-astra",
+      "avatar": "Dx",
+      "personaMd": "You are the automation engineer, on Codex. You write small, dependency-free Node.js scripts (node 22, ES modules, node:test for tests) that turn the company's files into reports. A script reads its input path from argv, writes to stdout, and ships with a test file and a README section that says how to run both. You never read or print credentials, and you never call the network."
+    },
+    {
+      "name": "Tess",
+      "role": "QA engineer",
+      "engine": "claude_code",
+      "model": "claude-sonnet-5-5",
+      "avatar": "T",
+      "personaMd": "You review engineering work. You read the diff line by line against the task's criteria. For anything with a page, you also open it in the browser from staging (browser.browser_navigate to http://127.0.0.1:4178/staging/site/<file>, then browser.browser_snapshot), check it again in dark mode (browser.browser_emulate_media with colorScheme dark) and at 375 px wide (browser.browser_resize), and quote what the snapshot shows in your comments. A comment names the file, the line and the fix. You approve only what you would ship.",
+      "playbooks": [
+        "# QA pass\n\n1. The diff: does every file the task declared exist, and does it do what the brief asks?\n2. The page in the browser: headings in order, no empty links, no console errors (browser.browser_console_messages).\n3. Dark mode and 375 px: text readable, nothing cut off, no horizontal scroll.\n4. Claims: every number and feature on the page appears in the positioning or the fact sheet.\n5. Decide: approve, or request changes with one comment per problem."
+      ]
+    },
+    {
+      "name": "Edie",
+      "role": "editor and reviewer",
+      "engine": "claude_code",
+      "model": "claude-opus-5-5",
+      "avatar": "E",
+      "personaMd": "You are the editor. You review research and writing: every claim traced to a source or to the fact sheet, the brand voice kept (drive company/brand-voice.md), no hype words, no invented customers or numbers. You check research against the notes other teammates recorded. A comment quotes the sentence and gives the rewrite. You approve only what the owner could publish unchanged."
+    },
+    {
+      "name": "Mara",
+      "role": "content lead",
+      "engine": "claude_code",
+      "model": "claude-sonnet-5-5",
+      "avatar": "M",
+      "personaMd": "You lead content. You write long-form pieces (launch posts, guides) from the positioning, the fact sheet and the company notes, in the brand voice. You plan your department's goals so writing, review and publishing are separate tasks."
+    },
+    {
+      "name": "Sage",
+      "role": "launch writer and publisher",
+      "engine": "claude_code",
+      "model": "claude-haiku-4-5",
+      "avatar": "Sg",
+      "personaMd": "You write the short things (a LinkedIn post, a launch email, an announcement) and you publish. Publishing means copying a reviewed deliverable into the drive's published/ folder with drive.write_file, one file per piece, named <yyyy-mm-dd>-<slug>.md; every write waits for the owner's approval, and you say in your handover exactly which files you proposed."
+    },
+    {
+      "name": "Penny",
+      "role": "planning analyst",
+      "engine": "claude_code",
+      "model": "claude-sonnet-5-5",
+      "avatar": "Pn",
+      "personaMd": "You are the planning analyst. You build budgets and forecasts as CSV with a short markdown note: every line has its driver (a run rate from the ledger, a quote, or an assumption the owner can change), totals reconcile, and USD is converted at the rate on the chart of accounts. You show the run rate you started from and the three numbers the owner should look at first. You never book anything; a published budget is a proposed drive write the owner approves."
+    },
+    {
+      "name": "Bookkeeper",
+      "role": "bookkeeper",
+      "engine": "claude_code",
+      "model": "claude-haiku-4-5",
+      "avatar": "Bk",
+      "personaMd": "You keep the books tidy. You categorise transactions against drive finance/chart-of-accounts.md, flag anything that does not fit, and prepare month-end schedules as CSV and markdown. Every change to the books is a proposed drive write with the exact rows for the owner to approve; you never change the source files. Account numbers and card details never appear in your notes."
+    }
+  ],
+  "connections": [
+    {
+      "name": "drive",
+      "kind": "mcp",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2026.8.31", "~/Lighthouse/drive"],
+      "tools": [
+        {
+          "name": "move_file",
+          "description": "",
+          "write": true,
+          "source": "person",
+          "off": true
+        }
+      ]
+    },
+    {
+      "name": "staging",
+      "kind": "mcp",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2026.8.31", "~/Lighthouse/staging"],
+      "tools": [
+        {
+          "name": "write_file",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "edit_file",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "create_directory",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "move_file",
+          "description": "",
+          "write": true,
+          "source": "person",
+          "off": true
+        }
+      ]
+    },
+    {
+      "name": "notes",
+      "kind": "mcp",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory@2026.8.31"],
+      "envNames": ["MEMORY_FILE_PATH"],
+      "tools": [
+        {
+          "name": "create_entities",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "create_relations",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "add_observations",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "delete_entities",
+          "description": "",
+          "write": true,
+          "source": "person",
+          "off": true
+        },
+        {
+          "name": "delete_observations",
+          "description": "",
+          "write": true,
+          "source": "person",
+          "off": true
+        },
+        {
+          "name": "delete_relations",
+          "description": "",
+          "write": true,
+          "source": "person",
+          "off": true
+        }
+      ]
+    },
+    {
+      "name": "browser",
+      "kind": "mcp",
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.83",
+        "--headless",
+        "--isolated",
+        "--browser",
+        "chromium",
+        "--allowed-origins",
+        "http://127.0.0.1:4178"
+      ],
+      "tools": [
+        {
+          "name": "browser_navigate",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "browser_navigate_back",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "browser_resize",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "browser_emulate_media",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "browser_close",
+          "description": "",
+          "write": false,
+          "source": "person"
+        },
+        {
+          "name": "browser_evaluate",
+          "description": "",
+          "write": true,
+          "source": "person",
+          "off": true
+        },
+        {
+          "name": "browser_run_code_unsafe",
+          "description": "",
+          "write": true,
+          "source": "person",
+          "off": true
+        },
+        {
+          "name": "browser_file_upload",
+          "description": "",
+          "write": true,
+          "source": "person",
+          "off": true
+        }
+      ]
+    }
+  ],
+  "teammates": [
+    {
+      "name": "Ricky",
+      "template": "Ricky",
+      "model": "claude-sonnet-5-5",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "read"
+        },
+        {
+          "connection": "notes",
+          "mode": "read"
+        }
+      ]
+    },
+    {
+      "name": "Scout",
+      "template": "Scout",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        },
+        {
+          "connection": "notes",
+          "mode": "ask"
+        }
+      ]
+    },
+    {
+      "name": "Quinn",
+      "template": "Quinn",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        },
+        {
+          "connection": "notes",
+          "mode": "ask"
+        }
+      ]
+    },
+    {
+      "name": "Brody",
+      "template": "Brody",
+      "model": "claude-sonnet-5-5",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        },
+        {
+          "connection": "notes",
+          "mode": "read"
+        }
+      ]
+    },
+    {
+      "name": "Edie",
+      "template": "Edie",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "read"
+        },
+        {
+          "connection": "notes",
+          "mode": "read"
+        }
+      ]
+    },
+    {
+      "name": "Archy",
+      "template": "Archy",
+      "model": "claude-opus-5-5",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "read"
+        },
+        {
+          "connection": "notes",
+          "mode": "read"
+        }
+      ]
+    },
+    {
+      "name": "Fern",
+      "template": "Fern",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        },
+        {
+          "connection": "staging",
+          "mode": "ask"
+        },
+        {
+          "connection": "notes",
+          "mode": "read"
+        }
+      ]
+    },
+    {
+      "name": "Dex",
+      "template": "Dex",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        },
+        {
+          "connection": "staging",
+          "mode": "ask"
+        }
+      ]
+    },
+    {
+      "name": "Cody",
+      "template": "Cody",
+      "model": "claude-sonnet-5-5",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        },
+        {
+          "connection": "staging",
+          "mode": "ask"
+        }
+      ]
+    },
+    {
+      "name": "Tess",
+      "template": "Tess",
+      "toolbox": [
+        {
+          "connection": "staging",
+          "mode": "read"
+        },
+        {
+          "connection": "drive",
+          "mode": "read"
+        },
+        {
+          "connection": "browser",
+          "mode": "read",
+          "tools": [
+            "browser_navigate",
+            "browser_navigate_back",
+            "browser_snapshot",
+            "browser_find",
+            "browser_take_screenshot",
+            "browser_console_messages",
+            "browser_resize",
+            "browser_emulate_media",
+            "browser_wait_for",
+            "browser_close"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Mara",
+      "template": "Mara",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        },
+        {
+          "connection": "notes",
+          "mode": "read"
+        }
+      ]
+    },
+    {
+      "name": "Sage",
+      "template": "Sage",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        },
+        {
+          "connection": "notes",
+          "mode": "read"
+        }
+      ]
+    },
+    {
+      "name": "Reporter",
+      "template": "Reporter",
+      "model": "claude-haiku-4-5",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        },
+        {
+          "connection": "notes",
+          "mode": "read"
+        }
+      ]
+    },
+    {
+      "name": "Finn",
+      "template": "Finn",
+      "model": "claude-sonnet-5-5",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "read"
+        }
+      ]
+    },
+    {
+      "name": "Bookkeeper",
+      "template": "Bookkeeper",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Penny",
+      "template": "Penny",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "ask",
+          "tools": [
+            "read_text_file",
+            "read_file",
+            "read_multiple_files",
+            "list_directory",
+            "directory_tree",
+            "search_files",
+            "get_file_info",
+            "write_file"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Verifier",
+      "template": "Verifier",
+      "model": "claude-opus-5-5",
+      "toolbox": [
+        {
+          "connection": "drive",
+          "mode": "read"
+        }
+      ]
+    }
+  ],
+  "departments": [
+    {
+      "name": "Research",
+      "writePolicy": "drafts",
+      "lead": "Ricky",
+      "members": ["Scout", "Quinn", "Brody", "Edie"],
+      "sandbox": {
+        "allowedTools": [
+          "Read(./**)",
+          "Write(./**)",
+          "Edit(./**)",
+          "Glob(./**)",
+          "Grep(./**)",
+          "WebSearch",
+          "WebFetch"
+        ],
+        "timeoutSeconds": 2400
+      }
+    },
+    {
+      "name": "Engineering",
+      "writePolicy": "drafts",
+      "lead": "Archy",
+      "members": ["Fern", "Dex", "Cody", "Tess"],
+      "sandbox": {
+        "timeoutSeconds": 3600
+      }
+    },
+    {
+      "name": "Marketing",
+      "writePolicy": "ask",
+      "lead": "Mara",
+      "members": ["Sage", "Reporter", "Edie"],
+      "sandbox": {
+        "timeoutSeconds": 1800
+      }
+    },
+    {
+      "name": "Finance",
+      "writePolicy": "ask",
+      "lead": "Finn",
+      "members": ["Bookkeeper", "Penny", "Verifier"],
+      "sandbox": {
+        "timeoutSeconds": 1800
+      }
+    }
+  ]
+}

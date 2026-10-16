@@ -1,0 +1,182 @@
+# Security notes
+
+What RosterDock guarantees, how, and what it needs from you. Written for the person who approves running
+model output on their cluster.
+
+## The rules that never soften
+
+- **Humans gate only merges and live external writes.** Everything else is autonomous by design. A merge
+  happens on your git host by your hand; a write to a live system happens only through an approval.
+- **Secrets are names.** Every credential the platform uses is an env var NAME or a Secret reference on a
+  row, in an event, in a file, in the UI. Values live in your secret store and reach exactly one process:
+  the board resolves a connection's credential at call time, for the connection's company (below), and
+  hands it to the HTTP client or the child process; the worker hands the engine's key to the engine
+  process. `assertNoRawSecrets` runs on every request body, every imported file and every artifact: a
+  value where a name belongs is refused. A connection that authorises by OAuth is the one case where the
+  board obtains a value itself: it keeps it in the secret store you turned on (`board.oauth.enabled`),
+  under the connection's name, and the row keeps the name.
+- **A value set from Settings goes to the store, not the database.** Settings > Connections > Secrets takes a
+  name and a value from an owner or admin. The value goes write-only into the secret store you turned on
+  (`board.oauth.enabled`; files under compose), under `rosterdock-company-<id>` with one key per name; the
+  row keeps the name, when and by whom; the event carries the name; no route returns a value, and the
+  panel never shows one again. That company's connections and notifications resolve the name there
+  first, then among the names the operator shares, so a value set in Settings wins over a shared one.
+  Without a store the route refuses.
+
+- **External writes are propose, approve, execute.** A teammate proposes the exact payload; the board
+  stores it with its sha256; a person approves; the executor re-hashes the stored payload and sends those
+  bytes or nothing. There is one door (`callConnectionTool`) with two callers: the broker's read path and
+  the approval executor. The worker starts every engine with the board as its only MCP server.
+- **Teammates never mark Done.** An approved review does; a person can veto any review.
+- **Policy only narrows.** A teammate's toolbox is the ceiling (a connection with a mode, and optionally
+  only some of its tools: the rest are never listed to that teammate and refused if called); the department's write policy and the
+  project's client policy tighten it and never widen it. Files import grants only on connections the
+  company already has.
+- **One event stream, per company.** Every mutation appends an event in the same transaction, with the
+  actor (a person or a teammate). Activity, the Office, notifications, metrics and traces are projections
+  of it. Every row carries `company_id`; every company route goes through one role guard.
+
+## Companies on one board
+
+Every company on a board is a tenant. Its owners and admins manage the company; the operator (whoever sets
+the chart values and the board's environment) manages the board, decides what a company can reach, and
+decides who may found one (Identity, below). A person who signs in belongs to no company until an owner
+invites their email.
+
+What an owner or admin of one company can reach:
+
+- Everything in their company: its rows, events, teammates, connections, approvals, and its secrets by
+  name.
+- The values of their company's secrets, through the connections they configure. A connection sends its
+  credential to the server it names, so whoever manages connections can send a company secret anywhere;
+  that is theirs to do.
+- The values of the names the operator shares (`ROSTERDOCK_SHARED_ENV_NAMES`, chart `board.sharedEnvNames`),
+  the same way. A shared name is a credential handed to every company's owners and admins: share one only
+  when you would. Per-company credentials belong in each company's secrets (Settings > Connections >
+  Secrets, which needs `board.oauth.enabled`).
+- The network as the board pod sees it. An HTTP or OpenAPI connection, its OAuth discovery and a
+  notification webhook are requests from the board pod to an address the company chose, cluster-internal
+  ones included. Narrow `networkPolicy.board.egressTo` to the services companies may use.
+- The command lines the operator lists for stdio connections (`ROSTERDOCK_STDIO_COMMANDS`, chart
+  `board.stdioCommands`; none by default). Such a server runs inside the board pod as the board, so a
+  server that reads files or runs commands reaches what the board can: the board process's environment
+  through `/proc` (its database URL and every other value), every company's secrets when the store is
+  files (`ROSTERDOCK_SECRET_STORE=file:`), and with `board.oauth.enabled` the pod's service account token,
+  which reads every Secret in the namespace. A line that ends in `*` lets the company choose the further
+  arguments, such as the folders a filesystem server serves, which can then be any of those. List only
+  servers you would let every company's owners and admins run, pinned to a version, with their
+  arguments pinned: one line per folder for a filesystem server, never a `*` after it.
+
+What they cannot reach:
+
+- Another company's rows, events, connections or secrets. Every company route checks the caller's role in
+  the company it names, and a company's names resolve from its own secrets. A stdio child the board keeps
+  between calls serves the company that started it, with the values it started with, and no other.
+- The board's own environment: its database URL, its worker token, the object store's keys, its model keys,
+  its sign-in client secret, or any other variable on the board pod the operator has not shared. A name a
+  company writes (a connection's credential, the env var names handed to a stdio command, an OAuth client
+  secret, a notification webhook or SMTP URL) resolves from the company's secrets and the shared names and
+  nothing else. A name that is set where the board runs, not shared, and not one of the company's own
+  secrets is refused when it is written (403), and a templates file that carries one has that connection
+  skipped with a note. A row written before this rule that names one simply does not resolve. The board
+  refuses to start when `ROSTERDOCK_SHARED_ENV_NAMES` lists one of its own names: `DATABASE_URL`, the
+  `S3_` keys, `OTEL_EXPORTER_OTLP_HEADERS`, and anything under `ROSTERDOCK_`, `ANTHROPIC_`, `CLAUDE_`,
+  `CODEX_` or `OPENAI_`. The one way around this is a stdio server the operator lists that reads files
+  or runs commands (above), which is why none is listed by default.
+- Any other command inside the board. A stdio connection starts only a command line the operator lists,
+  matched exactly up to a final `*`. One that is not listed is refused when it is written (on create, on a
+  change of its command or arguments, and on discovery: 403), skipped with a note in an imported file, and
+  never started, whatever an older row says: the check runs again before every start.
+
+## Identity
+
+- Production sign-in is OpenID Connect with PKCE against your provider. The board verifies each id_token
+  (signature against the provider's JWKS, issuer, audience, expiry, nonce) and keeps only the subject,
+  email and name. No provider token is stored. `ROSTERDOCK_OIDC_ALLOWED_DOMAINS` narrows who may sign in. At a
+  public provider anyone holds an account (Google, Microsoft's `common`, `consumers` and `organizations`
+  endpoints, GitLab.com, Apple), so the board will not start there with no domains listed, and the chart
+  will not render: list your domains, or `*` to let every account in on purpose. The board knows those
+  providers by their issuer; at another that anyone can join, list the domains yourself.
+- Who may found a company is the operator's call: `ROSTERDOCK_COMPANY_CREATORS` (chart
+  `board.companyCreators`) lists emails and `@domain`s, or `*` for anyone who signs in. Without a list, the
+  first person to create a company on an empty board owns it and nobody creates another; with the dev login
+  on, anyone may, since the dev login lets anyone sign in as anyone. A company's owner pays for what its
+  teammates run on your workers and keys, so keep the list to the people you would give that to.
+- Sessions are random tokens stored as sha256, in an httpOnly, SameSite=Lax, Secure cookie.
+- Teammates authenticate with run-scoped tokens minted at claim time, valid for one run, stored as sha256,
+  dead when the run ends. The worker fleet presents a shared claim token (`ROSTERDOCK_WORKER_TOKEN`) compared
+  in constant time.
+- Roles: owner, admin, reviewer, viewer, teammate. Owners and admins manage the company, connections,
+  toolboxes, templates and approvals; reviewers decide reviews; viewers read; teammates act only through
+  the board's tools with their run token.
+- The dev login (`ROSTERDOCK_DEV_LOGIN=1`) signs anyone in as anyone. Never in production; the chart warns.
+  `docker-compose.yml`, which runs with it on, publishes its ports (the web, the board, Postgres, MinIO) on
+  127.0.0.1 only, so another machine on your network reaches none of them.
+
+## Workers run model output
+
+- Each run gets a fresh directory on an ephemeral volume that dies with the pod; nothing persists
+  between runs but what the board stores (artifacts, checkpoints, usage).
+- An artifact over 512 KB goes to the object store as bytes the board has already scanned for raw
+  secrets, under a key of the company, the run and its hash; the board signs each request itself with a
+  key pair it reads by name, and the worker never holds that pair.
+- Worker pods run as non-root with a read-only root filesystem, all capabilities dropped, the default
+  seccomp profile, and no service account token. The one exception is `worker.podMetrics.enabled`: the
+  worker then has an account of its own with one Role, get pod metrics in the namespace, and its token
+  mounted, so it can read its pod's CPU and memory from the metrics API; that account is never bound to
+  the board's Secrets Role.
+- With `networkPolicy.enabled`, a worker reaches DNS, the board, Postgres and public HTTPS (the model
+  API, the git host), with every private range excluded; nothing reaches it. A pool (`worker.pools`)
+  narrows further, down to the board and Postgres only, and a department's sandbox chooses the pool.
+- The engine sees only the env var names the worker was told to pass, narrowed again by the department's
+  sandbox; the department's sandbox also sets the engine's tool allowlist and a time limit.
+- The engine reaches no external MCP server. Every tool call goes to the board (`board_tool_call`),
+  where the broker decides: run a read, propose a write, or refuse.
+- A run's diff is scanned for secret-shaped values before review; a hit fails the check.
+
+## The board
+
+- Runs as non-root, read-only root filesystem, all capabilities dropped; reads every credential from a
+  Secret by name; logs redact the headers that carry tokens; nothing logs a value.
+- The board's egress is wide by design (model API, git host, MCP servers, webhooks); narrow
+  `networkPolicy.board.egressTo` to the destinations you use.
+- `/metrics` is served on the board's own port and never proxied by the web; keep the board's Service
+  internal (the default) and reach it with a scraper inside the cluster, or put a bearer on it
+  (`board.metricsSecret`) where the port is reachable.
+- Migrations run on boot from the image; the board needs no cluster credentials and mounts no service
+  account token, unless `board.oauth.enabled` is on. Then the board pod gets its token and one Role: get,
+  create, update and delete Secrets in the release namespace, so it can keep the tokens a connection's
+  OAuth flow obtains (one Secret per connection, `rosterdock-connection-<id>`, written and read by the board
+  alone; the row keeps the name). A Role cannot name Secrets that do not exist yet, so it reaches every
+  Secret in the namespace: keep RosterDock in a namespace of its own, as the install guide does. Outside a
+  cluster the same store is a directory of files (`ROSTERDOCK_SECRET_STORE=file:<dir>`); without either, no
+  connection authorises by OAuth.
+- When a research review opens, the board fetches the public http(s) links the documents cite so the
+  reviewer can read them. Literal addresses, localhost and internal-looking names are refused on every
+  hop, a source gets five seconds and half a megabyte, and only text is kept; what a page says reaches
+  the reviewer as quoted material. `ROSTERDOCK_FETCH_SOURCES=0` keeps the board off the web.
+
+## What you own
+
+- Postgres: its access, its backups, its encryption at rest. Every row is in it.
+- The Secrets: their store, their rotation. Rotate by changing the Secret and restarting the deployment
+  that reads it.
+- TLS at the ingress; the cookie is marked Secure and the OIDC redirect uses the public URL.
+- Who may reach the web (the ingress and `networkPolicy.webIngressFrom`), and which email domains may
+  sign in.
+- The model's behaviour. The platform bounds what a teammate can touch (its toolbox, the write policy, the
+  client policy, the sandbox, the pool) and what it costs (budgets, drift alerts); it does not make the
+  model right. Reviews and approvals are where a person sees the work.
+- The house style you switch on. A style pack (Settings > Style) is someone else's published rule file that
+  every teammate's brief then carries. RosterDock pins each to a commit and the file's sha256, and the board
+  uses a file only if it hashes to the pin, so the upstream cannot change what teammates read; RosterDock's
+  own rules are stated as coming first. The board image built from this repository does not carry the pinned
+  files: a company's first switch-on downloads the file once from `raw.githubusercontent.com` and keeps its
+  text, and Settings says where each pack came from. For a board that cannot reach GitHub, run
+  `node --import tsx scripts/vendor-styles.mts` in `apps/board` before building the image: it writes the
+  files with their licences to `apps/board/styles/vendor`, which the image copies, and switching one on
+  then downloads nothing.
+
+## Reporting
+
+A security concern goes to the repository's owners through a private channel, not an issue.

@@ -1,0 +1,41 @@
+# Weekly pull requests for the pinned actions, the pnpm workspace and the images' base images. A release
+# waits a week before it is proposed, so one that is pulled or found bad never reaches a pull request here;
+# security updates do not wait. Minor and patch updates come grouped, majors one by one.
+#
+# The model CLIs installed in the Dockerfiles (Claude Code, Codex) are not covered: their pins move with
+# the recorded stream fixtures the parsers are tested against, by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      npm:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directories:
+      - /apps/board
+      - /apps/web
+      - /apps/worker
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    ignore:
+      # Node 22 is the runtime package.json's engines and CI name; moving off it is a decision, not a bump.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

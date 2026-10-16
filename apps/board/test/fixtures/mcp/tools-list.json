@@ -1,0 +1,51 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "result": {
+    "tools": [
+      {
+        "name": "search_crm_objects",
+        "description": "Search contacts, companies or deals by a filter.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "objectType": { "type": "string" },
+            "query": { "type": "string" }
+          },
+          "required": ["objectType"]
+        },
+        "annotations": { "title": "Search CRM objects", "readOnlyHint": true, "openWorldHint": false }
+      },
+      {
+        "name": "get_properties",
+        "description": "List the properties defined on an object type.",
+        "inputSchema": { "type": "object", "properties": { "objectType": { "type": "string" } } }
+      },
+      {
+        "name": "manage_crm_objects",
+        "description": "Create or update contacts, companies or deals.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": { "type": "string" },
+            "objectType": { "type": "string" },
+            "properties": { "type": "object" }
+          },
+          "required": ["action", "objectType"]
+        },
+        "annotations": { "title": "Manage CRM objects", "readOnlyHint": false, "destructiveHint": true }
+      },
+      {
+        "name": "run_report",
+        "description": "Run a saved report and return its rows.",
+        "inputSchema": { "type": "object", "properties": { "reportId": { "type": "string" } } }
+      },
+      {
+        "name": "whoami",
+        "description": "The user the credential belongs to.",
+        "inputSchema": { "type": "object", "properties": {} },
+        "annotations": { "readOnlyHint": true }
+      }
+    ]
+  }
+}

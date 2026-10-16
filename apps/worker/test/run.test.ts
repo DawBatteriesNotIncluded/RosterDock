@@ -1,0 +1,374 @@
+// executeRun against an in-memory board. No network, no model, no Postgres.
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { RunArtifactInput, RunCompleteInput, RunEventInput } from "@rosterdock/shared";
+import { BoardError, type BoardClient, type ClaimedRun } from "../src/board-client.js";
+import { stubEngine } from "../src/engines/stub.js";
+import type { EngineAdapter } from "../src/engines/types.js";
+import { engineEnvironment, executeRun, type RunDeps } from "../src/run.js";
+import { runRootSpanId, traceIdForRun } from "@rosterdock/shared";
+import { git } from "../src/workspace.js";
+
+let workRoot: string;
+beforeAll(async () => {
+  workRoot = await mkdtemp(path.join(os.tmpdir(), "rosterdock-work-"));
+});
+afterAll(async () => {
+  await rm(workRoot, { recursive: true, force: true });
+});
+
+interface FakeBoard extends BoardClient {
+  shipped: RunEventInput[];
+  artifacts: RunArtifactInput[];
+  completion: RunCompleteInput | null;
+  checkpoints: Record<string, unknown>[];
+  heartbeats: number;
+  stopAfterHeartbeats: number | null;
+}
+
+function fakeBoard(
+  pack: string,
+  declaredOutputs: string[],
+  opts: {
+    claimStatus?: number;
+    claimDetails?: Record<string, unknown>;
+    stopAfterHeartbeats?: number | null;
+    repoUrl?: string;
+  } = {},
+): FakeBoard {
+  const claimed: ClaimedRun = {
+    run: {
+      id: "run-1",
+      taskId: "task-1",
+      teammateId: "cody",
+      engine: "stub",
+      model: "stub",
+      attempt: 1,
+      status: "running",
+    },
+    token: "run-token",
+    tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    pack,
+    spec: {
+      runId: "run-1",
+      attempt: 1,
+      task: { id: "task-1", number: 7, title: "Fixture", description: "", declaredOutputs },
+      project: { repoUrl: opts.repoUrl ?? null, defaultBranch: "main", name: "P" },
+      teammate: { name: "Cody", handle: "cody", model: "stub", engine: "stub" },
+      sandbox: opts.sandbox ?? { allowedTools: null, envNames: null, timeoutSeconds: 3600 },
+      checkpoint: null,
+    },
+  };
+  const board: FakeBoard = {
+    shipped: [],
+    artifacts: [],
+    completion: null,
+    checkpoints: [],
+    heartbeats: 0,
+    stopAfterHeartbeats: opts.stopAfterHeartbeats ?? null,
+    async claim() {
+      if (opts.claimStatus)
+        throw new BoardError(
+          opts.claimStatus,
+          `run is ${String(opts.claimDetails?.status ?? "completed")}`,
+          opts.claimDetails ?? null,
+        );
+      return claimed;
+    },
+    async heartbeat() {
+      board.heartbeats += 1;
+      return {
+        stopRequested: board.stopAfterHeartbeats !== null && board.heartbeats >= board.stopAfterHeartbeats,
+      };
+    },
+    async events(_t, _r, evs) {
+      board.shipped.push(...evs);
+    },
+    async checkpoint(_t, _r, cp) {
+      board.checkpoints.push(cp);
+    },
+    async artifact(_t, _r, a) {
+      if (a.content.includes("ghp_")) throw new BoardError(422, "secret-shaped");
+      board.artifacts.push(a);
+    },
+    async complete(_t, _r, c) {
+      board.completion = c;
+    },
+  };
+  return board;
+}
+
+function deps(board: FakeBoard, overrides: Partial<RunDeps> = {}): RunDeps {
+  return {
+    board,
+    engines: { stub: stubEngine },
+    workRoot,
+    workerId: "test-worker",
+    heartbeatMs: 50,
+    engineEnv: {},
+    boardUrl: "http://board.test",
+    gitToken: null,
+    repoTests: null,
+    shutdown: new AbortController().signal,
+    log: { info: () => {}, warn: () => {} },
+    ...overrides,
+  };
+}
+
+const PACK = (marker = "") =>
+  `# Fixture task\n\n${marker}\n\n## Expected outputs\n- vms-architecture.md\n- notes.md\n\n## Boundaries\n- x\n`;
+
+describe("executeRun", () => {
+  it("completes: outputs and handover become artifacts, usage and summary reach the board, workspace is removed", async () => {
+    const board = fakeBoard(PACK(), ["vms-architecture.md", "notes.md"]);
+    const outcome = await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board));
+    expect(outcome.status).toBe("completed");
+    expect(board.completion?.status).toBe("completed");
+    expect(board.completion?.summary).toMatch(/Wrote vms-architecture.md, notes.md/);
+    expect(board.completion?.usage).toEqual({ inputTokens: 1200, outputTokens: 300 });
+    expect(board.artifacts.map((a) => [a.path, a.kind])).toEqual([
+      ["vms-architecture.md", "document"],
+      ["notes.md", "document"],
+      ["handover-summary.md", "handover"],
+      ["changes.diff", "diff"],
+    ]);
+    // No repository: the diff adds the harvested files so the review looks the same.
+    expect(board.artifacts.at(-1)!.content).toContain("+++ b/notes.md");
+    expect(board.completion?.baseSha).toBeUndefined();
+    expect(board.checkpoints[0]).toMatchObject({
+      filesWritten: ["vms-architecture.md", "notes.md"],
+      attempt: 1,
+    });
+    expect(board.shipped.map((e) => e.type)).toEqual(
+      expect.arrayContaining(["step", "engine", "tool", "assistant"]),
+    );
+    expect(board.shipped.every((e) => typeof e.at === "string")).toBe(true);
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
+  });
+
+  it("reports missing declared outputs in the summary", async () => {
+    const board = fakeBoard(PACK(), ["vms-architecture.md", "notes.md", "missing.md"]);
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board));
+    expect(board.completion?.status).toBe("completed");
+    expect(board.completion?.summary).toMatch(/Missing declared outputs: missing.md/);
+  });
+
+  it("fails when the engine fails, keeping whatever was written", async () => {
+    const board = fakeBoard(PACK("[stub:fail]"), ["vms-architecture.md", "notes.md"]);
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board));
+    expect(board.completion?.status).toBe("failed");
+    expect(board.completion?.error).toMatch(/exited with code 1/);
+    expect(board.artifacts.map((a) => a.path)).toEqual(["vms-architecture.md", "notes.md", "changes.diff"]);
+    expect(board.shipped.some((e) => e.type === "stderr")).toBe(true);
+  });
+
+  it("turns blocked.md into a blocked completion routed to the mentioned teammate", async () => {
+    const board = fakeBoard(PACK("[stub:block]"), ["vms-architecture.md", "notes.md"]);
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board));
+    expect(board.completion?.status).toBe("blocked");
+    expect(board.completion?.blocker?.code).toBe("waiting_on_teammate");
+    expect(board.completion?.blocker?.waitingOn?.name).toBe("brody");
+    expect(board.completion?.summary).toMatch(/comparison criteria/);
+  });
+
+  it("stops a hanging engine when the board asks, and reports stopped", async () => {
+    const board = fakeBoard(PACK("[stub:hang]"), ["vms-architecture.md"], { stopAfterHeartbeats: 2 });
+    const outcome = await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board));
+    expect(outcome.status).toBe("stopped");
+    expect(board.completion?.status).toBe("stopped");
+    expect(board.heartbeats).toBeGreaterThanOrEqual(2);
+  });
+
+  it("stops on worker shutdown", async () => {
+    const board = fakeBoard(PACK("[stub:hang]"), []);
+    const shutdown = new AbortController();
+    const p = executeRun({ runId: "run-1", jobId: "job-1" }, deps(board, { shutdown: shutdown.signal }));
+    setTimeout(() => shutdown.abort(), 100);
+    expect((await p).status).toBe("stopped");
+  });
+
+  it("skips quietly when the run already finished, but rethrows when it is still running elsewhere", async () => {
+    const finished = fakeBoard(PACK(), [], { claimStatus: 409, claimDetails: { status: "completed" } });
+    const outcome = await executeRun({ runId: "run-1", jobId: "job-1" }, deps(finished));
+    expect(outcome.status).toBe("skipped");
+    expect(finished.completion).toBeNull();
+
+    const busy = fakeBoard(PACK(), [], { claimStatus: 409, claimDetails: { status: "running" } });
+    await expect(executeRun({ runId: "run-1", jobId: "job-1" }, deps(busy))).rejects.toThrow(
+      /run is running/,
+    );
+  });
+
+  it("fails cleanly when no adapter exists for the engine", async () => {
+    const board = fakeBoard(PACK(), []);
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board, { engines: {} }));
+    expect(board.completion?.status).toBe("failed");
+    expect(board.completion?.blocker?.code).toBe("adapter_unavailable");
+  });
+});
+
+describe("sandbox preset", () => {
+  it("narrows the engine environment to the preset's names and fails a run past its time limit", async () => {
+    const seen: { env: Record<string, string>; allowedTools: string[] | null }[] = [];
+    const spy: EngineAdapter = {
+      id: "stub",
+      async run(ctx) {
+        seen.push({ env: ctx.env, allowedTools: ctx.allowedTools });
+        return stubEngine.run(ctx);
+      },
+    };
+    const board = fakeBoard(PACK(), [], {
+      sandbox: { allowedTools: ["Read(./**)"], envNames: ["ALLOWED_ONE"], timeoutSeconds: 60 },
+    });
+    await executeRun(
+      { runId: "run-1", jobId: "job-1" },
+      deps(board, { engines: { stub: spy }, engineEnv: { PATH: "/bin", ALLOWED_ONE: "a", OTHER: "b" } }),
+    );
+    expect(seen[0]?.env).toEqual({ PATH: "/bin", ALLOWED_ONE: "a" });
+    expect(seen[0]?.allowedTools).toEqual(["Read(./**)"]);
+
+    const slow = fakeBoard(PACK("[stub:hang]"), [], {
+      sandbox: { allowedTools: null, envNames: null, timeoutSeconds: 1 },
+    });
+    const outcome = await executeRun({ runId: "run-1", jobId: "job-1" }, deps(slow, { heartbeatMs: 10_000 }));
+    expect(outcome.status).toBe("failed");
+    expect(slow.completion?.blocker?.code).toBe("timeout");
+    expect(slow.completion?.error).toMatch(/time limit/);
+  });
+});
+
+describe("repository tests", () => {
+  it("runs the repository's test script after the harvest and ships the result as a check", async () => {
+    // A bare repository with a package.json test script; the runner is a recorded exec, never npm.
+    const src = path.join(workRoot, "src-repo");
+    const bare = path.join(workRoot, "origin.git");
+    await (await import("node:fs/promises")).mkdir(src, { recursive: true });
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.com",
+    };
+    await git(["init", "-b", "main"], src, env);
+    await writeFile(
+      path.join(src, "package.json"),
+      '{ "name": "demo", "scripts": { "test": "node t.js" } }\n',
+    );
+    await writeFile(path.join(src, "node_modules.keep"), "");
+    await git(["add", "."], src, env);
+    await git(["commit", "-m", "init"], src, env);
+    await git(["clone", "--bare", src, bare], workRoot, env);
+
+    const board = fakeBoard(PACK(), ["notes.md"], { repoUrl: bare });
+    const commands: string[] = [];
+    await executeRun(
+      { runId: "run-1", jobId: "job-1" },
+      deps(board, {
+        repoTests: {
+          timeoutMs: 1000,
+          exec: async (command, args) => {
+            commands.push(`${command} ${args.join(" ")}`);
+            return { code: args[0] === "test" ? 0 : 0, output: "1 passing\n", timedOut: false };
+          },
+        },
+      }),
+    );
+    expect(board.completion?.status).toBe("completed");
+    expect(board.completion?.baseSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(board.completion?.checks).toEqual([
+      { kind: "tests", ok: true, title: "npm test passed", detail: "1 passing\n" },
+    ]);
+    expect(commands).toEqual(["npm ci --ignore-scripts --no-audit --no-fund", "npm test"]);
+    // The diff was captured before the tests ran.
+    expect(board.artifacts.find((a) => a.kind === "diff")?.content).toContain("+++ b/notes.md");
+    expect(board.shipped.some((e) => e.type === "check")).toBe(true);
+  });
+});
+
+describe("engineEnvironment", () => {
+  it("passes only base keys and allowlisted names", () => {
+    const env = engineEnvironment(["ANTHROPIC_API_KEY"], {
+      PATH: "/bin",
+      HOME: "/home/x",
+      ANTHROPIC_API_KEY: "k",
+      DATABASE_URL: "postgres://secret",
+      ROSTERDOCK_WORKER_TOKEN: "t",
+    });
+    expect(env).toEqual({ PATH: "/bin", HOME: "/home/x", ANTHROPIC_API_KEY: "k" });
+  });
+
+  it("keeps the user's name and temp directory, without which Claude Code on macOS cannot find its sign-in", () => {
+    const env = engineEnvironment([], {
+      PATH: "/bin",
+      HOME: "/Users/x",
+      USER: "x",
+      LOGNAME: "x",
+      TMPDIR: "/var/folders/x/T/",
+      SSH_AUTH_SOCK: "/private/tmp/agent",
+    });
+    expect(env).toEqual({
+      PATH: "/bin",
+      HOME: "/Users/x",
+      USER: "x",
+      LOGNAME: "x",
+      TMPDIR: "/var/folders/x/T/",
+    });
+  });
+
+  it("posts its half of the run's trace to the collector: workspace, engine and harvest under the board's root span", async () => {
+    const board = fakeBoard(PACK(), ["vms-architecture.md", "notes.md"]);
+    const posts: { url: string; headers: Record<string, string>; body: any }[] = [];
+    const otlp = {
+      target: {
+        endpoint: "https://otel.test/v1/traces",
+        headers: { "x-key": "k" },
+        serviceName: "rosterdock-worker",
+      },
+      fetch: (async (url: any, init: any) => {
+        posts.push({
+          url: String(url),
+          headers: Object.fromEntries(new Headers(init?.headers)),
+          body: JSON.parse(String(init?.body)),
+        });
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+    };
+    const outcome = await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board, { otlp }));
+    expect(outcome.status).toBe("completed");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.url).toBe("https://otel.test/v1/traces");
+    expect(posts[0]!.headers["x-key"]).toBe("k");
+    const rs = posts[0]!.body.resourceSpans[0];
+    expect(rs.resource.attributes).toEqual([
+      { key: "service.name", value: { stringValue: "rosterdock-worker" } },
+      { key: "rosterdock.worker_id", value: { stringValue: "test-worker" } },
+    ]);
+    const spans = rs.scopeSpans[0].spans as any[];
+    expect(spans.map((s) => s.name)).toEqual(["workspace", "engine stub", "harvest"]);
+    expect(spans.every((s) => s.traceId === traceIdForRun("run-1"))).toBe(true);
+    expect(spans.every((s) => s.parentSpanId === runRootSpanId("run-1"))).toBe(true);
+    expect(spans.every((s) => s.status.code === 1)).toBe(true);
+    expect(spans[1].attributes).toEqual([
+      { key: "rosterdock.engine", value: { stringValue: "stub" } },
+      { key: "rosterdock.model", value: { stringValue: "stub" } },
+    ]);
+    // A collector that is down costs nothing but a warning.
+    const warnings: string[] = [];
+    const down = {
+      ...otlp,
+      fetch: (async () => {
+        throw new Error("ECONNREFUSED");
+      }) as typeof fetch,
+    };
+    const again = await executeRun(
+      { runId: "run-1", jobId: "job-1" },
+      deps(fakeBoard(PACK(), []), { otlp: down, log: { info: () => {}, warn: (m) => warnings.push(m) } }),
+    );
+    expect(again.status).toBe("completed");
+    expect(warnings.some((w) => w.includes("trace not exported"))).toBe(true);
+  });
+});

@@ -1,0 +1,16 @@
+apiVersion: v2
+name: rosterdock
+description: RosterDock, a self-hosted platform for running an AI company. The board, the web UI and the workers against your Postgres.
+type: application
+# The release workflow publishes the chart at its tag's version, with the same appVersion, which is the
+# images' tag; keep both here on the version being prepared (docs/releasing.md).
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0"
+keywords:
+  - ai
+  - agents
+  - kanban
+home: https://github.com/DawBatteriesNotIncluded/RosterDock
+sources:
+  - https://github.com/DawBatteriesNotIncluded/RosterDock

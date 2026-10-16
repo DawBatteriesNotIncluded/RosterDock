@@ -1,0 +1,21 @@
+{
+  "kind": "PodMetrics",
+  "apiVersion": "metrics.k8s.io/v1beta1",
+  "metadata": {
+    "name": "rosterdock-worker-788c7c9c7-xm6sz",
+    "namespace": "rosterdock",
+    "creationTimestamp": "2026-09-13T12:04:31Z",
+    "labels": {
+      "app.kubernetes.io/component": "worker",
+      "app.kubernetes.io/instance": "rosterdock",
+      "app.kubernetes.io/name": "rosterdock",
+      "rosterdock.dev/pool": "default"
+    }
+  },
+  "timestamp": "2026-09-13T12:04:20Z",
+  "window": "15.033s",
+  "containers": [
+    { "name": "worker", "usage": { "cpu": "12m", "memory": "148Mi" } },
+    { "name": "engine", "usage": { "cpu": "838m", "memory": "1536Mi" } }
+  ]
+}

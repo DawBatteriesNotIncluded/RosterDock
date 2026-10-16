@@ -1,0 +1,9 @@
+incident_id,started_at,restored_at,region,area,services,customers_affected,severity,cause,change_ref,status_page_updated_at,notes
+INC-2609-01,2026-09-03 10:12,2026-09-03 11:05,Scotland,Dundee,Fibre,1900,P3,Fibre cut by third-party roadworks,,2026-09-03 10:20,Splice crew on site in 30 min
+INC-2609-02,2026-09-08 02:10,2026-09-08 02:55,London,Croydon,Fibre,6400,P3,Planned maintenance overran,CHG-4402,2026-09-08 02:15,Inside the maintenance window until 02:30
+INC-2609-03,2026-09-11 17:30,2026-09-11 18:02,National,,Stream app sign-in,0,P4,Expired certificate on the sign-in service,,2026-09-11 17:41,Existing sessions unaffected; about 3% of sign-ins failed
+INC-2609-04,2026-09-15 14:05,2026-09-15 16:40,Wales,Swansea,Fibre; Stream,3100,P2,"Power failure at the exchange, generator did not start",,2026-09-15 14:16,Generator test added to the monthly checks
+INC-2609-05,2026-09-22 02:00,2026-09-24 15:30,National,,Hub Wi-Fi,0,P3,Hub firmware 4.2.1 drops the 5 GHz band on Hub 3 after about 20 minutes,CHG-4458,,"Rollout reached 212,000 Hub 3 units before it was paused on 24 Sep 15:30; rollback to 4.1.9 in progress; no status page entry was raised"
+INC-2609-06,2026-09-24 06:00,,National,,Billing,1840,P3,Billing run charged Fibre 900 upgraders at both the old and the new plan price,CHG-4466,,"1,840 accounts double charged on 24 Sep; refunds batch not yet scheduled; open"
+INC-2609-07,2026-09-26 18:42,2026-09-26 22:55,North West,Manchester; Salford; Bolton; Stockport; Wigan; Bury,Fibre; Stream,41200,P1,Line card failed during a core router software upgrade that started at 18:30; traffic did not fail over,CHG-4471,2026-09-26 19:31,Change was scheduled for 02:00 and brought forward; rolled back at 22:40; service restored 22:55
+INC-2609-08,2026-09-27 09:15,2026-09-27 09:40,Midlands,Leicester,Mobile data,2200,P4,Mast backhaul fault,,2026-09-27 09:22,

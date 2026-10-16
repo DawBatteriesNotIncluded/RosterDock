@@ -1,0 +1,165 @@
+// What follows a decision. Request changes restarts the author with the
+// comments in their pack (a fresh task run; the pack renderer adds the review
+// section). Kept apart from the service so the routes and the board tools
+// share one path.
+
+import { payloadSha256, type ActorRef, type DiffFile } from "@rosterdock/shared";
+import type { Db } from "../db/pool.js";
+import { openChange, type GitHosts } from "../git/hosts.js";
+import { artifactBytes } from "../storage/artifacts.js";
+import type { ObjectStore } from "../storage/s3.js";
+import { HttpError } from "../http-error.js";
+import { mutate } from "../mutate.js";
+import type { RunQueue } from "../queue.js";
+import { dispatchRun } from "../runs/service.js";
+import type { PullRequestRow, ReviewFileRow, ReviewRow } from "./service.js";
+import { MAX_REVIEW_ROUNDS } from "../peter/replan.js";
+
+export interface Restarted {
+  runId: string | null;
+  /** Why the author was not restarted; the review still waits with changes requested. */
+  reason: string | null;
+}
+
+/**
+ * Execute a proposed pull request: the stored payload must still hash to the
+ * sha256 it was approved with, then the provider opens it. The outcome, opened
+ * or failed with the reason, is recorded and announced; nothing is retried
+ * without a person.
+ */
+export async function executePullRequest(
+  db: Db,
+  hosts: GitHosts,
+  companyId: string,
+  pullRequestId: string,
+  /** Where a binary artifact over the inline limit is read from. */
+  store: ObjectStore | null = null,
+): Promise<PullRequestRow> {
+  const row = (
+    await db.query<PullRequestRow>("SELECT * FROM pull_requests WHERE id = $1 AND company_id = $2", [
+      pullRequestId,
+      companyId,
+    ])
+  ).rows[0];
+  if (!row) throw new HttpError(404, "pull request not found");
+  if (row.status !== "proposed") return row;
+  const payload = row.payload as {
+    /** github or gitlab; rows from before the second host carry owner and repo instead of path. */
+    provider?: string;
+    path?: string;
+    owner?: string;
+    repo?: string;
+    baseSha: string;
+    baseBranch: string;
+    headBranch: string;
+    title: string;
+    body: string;
+    commitMessage: string;
+    reviewId: string;
+    round: number;
+  };
+  const actor: ActorRef = { kind: "user", id: "00000000-0000-4000-8000-000000000000" };
+  const review = (await db.query<ReviewRow>("SELECT * FROM reviews WHERE id = $1", [row.review_id])).rows[0];
+  const decider: ActorRef =
+    review?.decided_by_kind && review.decided_by_id
+      ? { kind: review.decided_by_kind, id: review.decided_by_id }
+      : actor;
+  let outcome: { number: number; url: string } | null = null;
+  let error: string | null = null;
+  if (payloadSha256(row.payload) !== row.payload_sha256) {
+    error = "the pull request payload no longer matches the sha256 it was approved with";
+  } else {
+    const files = (
+      await db.query<ReviewFileRow>(
+        "SELECT * FROM review_files WHERE review_id = $1 AND round = $2 ORDER BY position",
+        [row.review_id, payload.round],
+      )
+    ).rows.map<DiffFile>((f) => ({
+      path: f.path,
+      status: f.status,
+      binary: f.is_binary,
+      additions: f.additions,
+      deletions: f.deletions,
+      hunks: f.hunks,
+    }));
+    // A binary file in the diff travels as the bytes the run reported under that path.
+    const binaries: Record<string, string> = {};
+    for (const f of files) {
+      if (!f.binary || f.status === "deleted" || !review?.run_id) continue;
+      const art = (
+        await db.query<{ content: string | null; object_key: string | null; encoding: string | null }>(
+          "SELECT content, object_key, encoding FROM artifacts WHERE run_id = $1 AND path = $2",
+          [review.run_id, f.path],
+        )
+      ).rows[0];
+      const bytes = art ? await artifactBytes(store, art) : null;
+      if (bytes) binaries[f.path] = bytes.toString("base64");
+    }
+    try {
+      outcome = await openChange(
+        hosts,
+        payload.provider ?? row.provider,
+        payload.path ?? `${payload.owner}/${payload.repo}`,
+        { ...payload, files, binaries },
+      );
+    } catch (err) {
+      error = (err as Error).message.slice(0, 2000);
+    }
+  }
+  const { result } = await mutate(db, companyId, decider, async (ctx) => {
+    const updated = (
+      await ctx.client.query<PullRequestRow>(
+        `UPDATE pull_requests SET status = $2, number = $3, url = $4, error = $5, executed_at = now() WHERE id = $1 RETURNING *`,
+        [row.id, outcome ? "opened" : "failed", outcome?.number ?? null, outcome?.url ?? null, error],
+      )
+    ).rows[0]!;
+    const task = (
+      await ctx.client.query<{ number: number; title: string }>(
+        "SELECT number, title FROM tasks WHERE id = $1",
+        [row.task_id],
+      )
+    ).rows[0];
+    await ctx.emit(
+      outcome ? "pr.opened" : "pr.failed",
+      { kind: "pull_request", id: row.id },
+      {
+        reviewId: row.review_id,
+        taskId: row.task_id,
+        number: task?.number,
+        title: task?.title,
+        repo: row.repo,
+        provider: row.provider,
+        headBranch: row.head_branch,
+        prNumber: outcome?.number ?? null,
+        url: outcome?.url ?? null,
+        error,
+      },
+    );
+    return updated;
+  });
+  return result;
+}
+
+export async function restartAuthor(
+  db: Db,
+  queue: RunQueue,
+  companyId: string,
+  actor: ActorRef,
+  review: Pick<ReviewRow, "task_id" | "round" | "reviewer_name" | "open_comments">,
+): Promise<Restarted> {
+  // A teammate reviewer and its author could send the work back and forth for ever: at the cap the author
+  // waits and Peter's loop puts the goal in front of a person. A person asking for another round gets it.
+  if (actor.kind === "teammate" && review.round >= MAX_REVIEW_ROUNDS)
+    return {
+      runId: null,
+      reason: `the review has gone ${review.round} rounds without approval; a person decides it now`,
+    };
+  try {
+    const run = await dispatchRun(db, queue, companyId, actor, review.task_id, {
+      note: `${review.reviewer_name ?? "The reviewer"} requested changes in review round ${review.round}; address the comments in your pack.`,
+    });
+    return { runId: run.id, reason: null };
+  } catch (err) {
+    return { runId: null, reason: err instanceof HttpError ? err.message : String(err) };
+  }
+}

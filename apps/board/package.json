@@ -1,0 +1,33 @@
+{
+  "name": "@rosterdock/board",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --import tsx --watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate": "node --env-file-if-exists=.env --import tsx src/db/migrate-cli.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "@fastify/cookie": "catalog:",
+    "@fastify/cors": "catalog:",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@rosterdock/shared": "workspace:*",
+    "fastify": "catalog:",
+    "pg": "catalog:",
+    "pg-boss": "^12.31.0",
+    "yaml": "^2.9.1",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "method": "PUT",
+  "path": "/rosterdock-fixtures-c9a02b/companies/8f1e0f6e-0000-4000-8000-000000000001/runs/1b2c3d4e-0000-4000-8000-000000000002/abc123",
+  "status": 200,
+  "headers": {
+    "accept-ranges": "bytes",
+    "content-length": "0",
+    "date": "Sat, 12 Sep 2026 23:18:16 GMT",
+    "etag": "\"3dfe3472ae930a4f05026d47c19001e7\"",
+    "server": "MinIO",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin, Accept-Encoding",
+    "x-amz-id-2": "dd9025bab4ad464b049177c95eb6ebf374d3b3fd1af9251148b658df7ac2e3e8",
+    "x-amz-request-id": "18D4B607E44A87EC",
+    "x-content-type-options": "nosniff",
+    "x-ratelimit-limit": "4120",
+    "x-ratelimit-remaining": "4120",
+    "x-xss-protection": "1; mode=block"
+  },
+  "body": ""
+}

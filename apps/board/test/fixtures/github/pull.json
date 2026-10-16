@@ -1,0 +1,30 @@
+{
+  "url": "https://api.github.com/repos/acme/gtm-automations/pulls/42",
+  "id": 1234567890,
+  "node_id": "PR_kwDOExample",
+  "html_url": "https://github.com/acme/gtm-automations/pull/42",
+  "number": 42,
+  "state": "open",
+  "locked": false,
+  "title": "#1 Map VMS sub-workflow calls",
+  "user": {
+    "login": "rosterdock-bot",
+    "id": 1
+  },
+  "body": "…",
+  "created_at": "2026-09-12T16:00:01Z",
+  "updated_at": "2026-09-12T16:00:01Z",
+  "head": {
+    "label": "acme:rosterdock/task-1",
+    "ref": "rosterdock/task-1",
+    "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+  },
+  "base": {
+    "label": "acme:main",
+    "ref": "main",
+    "sha": "0253df7ed00df5f84097e01499f26e4be2f011cf"
+  },
+  "draft": false,
+  "merged": false,
+  "mergeable": null
+}

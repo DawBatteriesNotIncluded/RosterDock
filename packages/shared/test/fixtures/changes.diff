@@ -1,0 +1,67 @@
+diff --git a/docs/old.md b/docs/old.md
+deleted file mode 100644
+index d24b83c..0000000
+--- a/docs/old.md
++++ /dev/null
+@@ -1,3 +0,0 @@
+-# Old notes
+-
+-to be removed
+diff --git a/docs/vms-architecture.md b/docs/vms-architecture.md
+new file mode 100644
+index 0000000..654417e
+--- /dev/null
++++ b/docs/vms-architecture.md
+@@ -0,0 +1,7 @@
++# VMS workflow architecture
++
++Entry: `VMS intake` fans out to five sub-workflows.
++
++| Node | Sub-workflow |
++|---|---|
++| Outbound mail | VMS_MAIL |
+diff --git a/logo.bin b/logo.bin
+index a1239a7..fb07e05 100644
+Binary files a/logo.bin and b/logo.bin differ
+diff --git a/notail.txt b/notail.txt
+new file mode 100644
+index 0000000..eeed123
+--- /dev/null
++++ b/notail.txt
+@@ -0,0 +1 @@
++tail
+\ No newline at end of file
+diff --git a/notes dir/plain.txt b/notes dir/plain.txt
+index 3f96d0b..c319dde 100644
+--- a/notes dir/plain.txt	
++++ b/notes dir/plain.txt	
+@@ -1,3 +1,3 @@
+ line one
+-line two
+-no newline at end
+\ No newline at end of file
++line two changed
++no newline at end
+diff --git a/workflows/vms-digest.json b/workflows/vms-digest.json
+index d2dbf18..ce8ba00 100644
+--- a/workflows/vms-digest.json
++++ b/workflows/vms-digest.json
+@@ -1,7 +1,9 @@
+ {
+   "name": "VMS digest",
+   "settings": {
+-    "executionOrder": "v0",
++    "executionOrder": "v1",
++    "timezone": "Europe/London",
++    "active": false,
+     "saveExecutionProgress": true
+   },
+   "nodes": [
+@@ -34,6 +36,7 @@
+     { "name": "Node 27", "type": "noop" },
+     { "name": "Node 28", "type": "noop" },
+     { "name": "Node 29", "type": "noop" },
++    { "name": "Outbound mail (sub-workflow)", "type": "n8n-nodes-base.executeWorkflow", "credentials": { "smtp": { "name": "VMS_SMTP" } } },
+     { "name": "Node 30", "type": "noop" }
+   ]
+ }

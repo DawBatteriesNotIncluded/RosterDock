@@ -1,0 +1,1 @@
+{"code":1,"stdout":"{\n  \"loggedIn\": false,\n  \"authMethod\": \"none\",\n  \"apiProvider\": \"firstParty\",\n  \"analyticsDisabled\": false,\n  \"projectsDirectory\": \"/home/user/.claude/projects\",\n  \"configDirectory\": \"/home/user/.claude\"\n}\n","stderr":""}

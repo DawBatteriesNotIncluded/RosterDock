@@ -1,0 +1,1271 @@
+<title>RosterDock</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #f6f5f2; --panel: #f1efea; --surface: #ffffff; --surface-2: #fbfaf8; --border: #e6e3dc; --border-soft: #efece6;
+    --ink: #1c1b19; --ink-2: #4a4741; --muted: #6b675f; --faint: #b8b3aa;
+    --accent: #1f7a5c; --accent-soft: #e2f1ea; --accent-ink: #1f6b52;
+    --warn: #c98a1c; --warn-soft: #fbf1dd; --warn-ink: #8a5a0e; --warn-line: #f0dcb0;
+    --info: #4f6bd8; --info-soft: #e3e8fa; --info-ink: #2f4bb5;
+    --bad: #b3261e; --bad-soft: #fdecec; --bad-ink: #7a1c15;
+    --add-bg: #e8f5ee; --add-ink: #14563f; --del-bg: #fdecec; --del-ink: #7a1c15;
+    --btn: #1c1b19; --btn-ink: #f6f5f2;
+    --av-p-bg: #e3e8fa; --av-p-ink: #2f4bb5; --av-r-bg: #e2f1ea; --av-r-ink: #1f6b52; --av-b-bg: #f6e7dd; --av-b-ink: #9a4f1c;
+    --av-a-bg: #ece4f6; --av-a-ink: #63409a; --av-c-bg: #fdf0d8; --av-c-ink: #8a5a0e; --av-v-bg: #e9e9ec; --av-v-ink: #3b3b44; --av-rp-bg: #e0f0f4; --av-rp-ink: #1c6478;
+    --shadow: 0 8px 30px rgba(28, 27, 25, 0.10);
+    --sans: 'Schibsted Grotesk', 'Helvetica Neue', Arial, sans-serif; --mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #141513; --panel: #191a17; --surface: #1e1f1c; --surface-2: #1a1b18; --border: #2c2e29; --border-soft: #262823;
+      --ink: #ecebe6; --ink-2: #c9c7c0; --muted: #9a9d95; --faint: #5c5f58;
+      --accent: #4fb58a; --accent-soft: #1b3a2e; --accent-ink: #8fdcb8;
+      --warn: #e2b75a; --warn-soft: #3a2f16; --warn-ink: #f0d08a; --warn-line: #5a4720;
+      --info: #8fa3ea; --info-soft: #1f2640; --info-ink: #b6c3f2;
+      --bad: #e07a72; --bad-soft: #3d1f1c; --bad-ink: #f0a9a3;
+      --add-bg: #1b3a2e; --add-ink: #a5e3c3; --del-bg: #3d1f1c; --del-ink: #f0a9a3;
+      --btn: #ecebe6; --btn-ink: #141513;
+      --av-p-bg: #26305a; --av-p-ink: #b6c3f2; --av-r-bg: #1b3a2e; --av-r-ink: #a5e3c3; --av-b-bg: #3f2a1c; --av-b-ink: #f0c3a2;
+      --av-a-bg: #33264a; --av-a-ink: #cdb8f0; --av-c-bg: #3a2f16; --av-c-ink: #f0d08a; --av-v-bg: #2c2e33; --av-v-ink: #d0d2da; --av-rp-bg: #17333b; --av-rp-ink: #a3dbe8;
+      --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #141513; --panel: #191a17; --surface: #1e1f1c; --surface-2: #1a1b18; --border: #2c2e29; --border-soft: #262823;
+    --ink: #ecebe6; --ink-2: #c9c7c0; --muted: #9a9d95; --faint: #5c5f58;
+    --accent: #4fb58a; --accent-soft: #1b3a2e; --accent-ink: #8fdcb8;
+    --warn: #e2b75a; --warn-soft: #3a2f16; --warn-ink: #f0d08a; --warn-line: #5a4720;
+    --info: #8fa3ea; --info-soft: #1f2640; --info-ink: #b6c3f2;
+    --bad: #e07a72; --bad-soft: #3d1f1c; --bad-ink: #f0a9a3;
+    --add-bg: #1b3a2e; --add-ink: #a5e3c3; --del-bg: #3d1f1c; --del-ink: #f0a9a3;
+    --btn: #ecebe6; --btn-ink: #141513;
+    --av-p-bg: #26305a; --av-p-ink: #b6c3f2; --av-r-bg: #1b3a2e; --av-r-ink: #a5e3c3; --av-b-bg: #3f2a1c; --av-b-ink: #f0c3a2;
+    --av-a-bg: #33264a; --av-a-ink: #cdb8f0; --av-c-bg: #3a2f16; --av-c-ink: #f0d08a; --av-v-bg: #2c2e33; --av-v-ink: #d0d2da; --av-rp-bg: #17333b; --av-rp-ink: #a3dbe8;
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font-family: var(--sans); font-size: 14px; color: var(--ink); background: var(--ground); -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent); text-decoration: none; cursor: pointer; }
+  a:hover { text-decoration: underline; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  button:focus-visible, [tabindex]:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+  .app { display: flex; height: 100vh; min-height: 640px; overflow: hidden; }
+  .sidebar { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; padding: 20px 14px; background: var(--panel); border-right: 1px solid var(--border); }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
+  .brand-mark { width: 26px; height: 26px; border-radius: 7px; background: var(--btn); display: flex; align-items: center; justify-content: center; }
+  .brand-name { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+  .nav { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 9px 10px; border-radius: 8px; color: var(--ink-2); font-size: 14px; text-align: left; border: 1px solid transparent; transition: background .12s; }
+  .nav:hover { background: var(--surface-2); }
+  .nav.active { background: var(--surface); border-color: var(--border); color: var(--ink); font-weight: 600; }
+  .nav .l { display: flex; align-items: center; gap: 10px; }
+  .nav svg { color: var(--muted); }
+  .nav.active svg { color: var(--ink); }
+  .badge { font-size: 12px; font-weight: 600; color: var(--ink); background: var(--border); border-radius: 10px; padding: 1px 7px; min-width: 20px; text-align: center; }
+  .badge.warn { color: #fff; background: var(--warn); }
+  :root[data-theme="dark"] .badge.warn { color: #141513; }
+  .sidebar-foot { margin-top: auto; border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .me { display: flex; align-items: center; gap: 10px; padding: 6px 10px; }
+  .theme-toggle { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; color: var(--muted); font-size: 13px; width: 100%; }
+  .theme-toggle:hover { background: var(--surface-2); color: var(--ink); }
+
+  .main { flex-grow: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar { height: 60px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 28px; border-bottom: 1px solid var(--border); }
+  .topbar-l { display: flex; align-items: center; gap: 18px; min-width: 0; }
+  .title { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+  .subtitle { font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbar-r { display: flex; align-items: center; gap: 10px; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+  .chip.warn { background: var(--warn-soft); color: var(--warn-ink); }
+  .chip.warn:hover { filter: brightness(0.97); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .dot.ok { background: var(--accent); } .dot.warn { background: var(--warn); } .dot.info { background: var(--info); } .dot.idle { background: var(--faint); } .dot.bad { background: var(--bad); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; border: 1px solid transparent; transition: filter .12s, background .12s; white-space: nowrap; }
+  .btn.primary { background: var(--btn); color: var(--btn-ink); }
+  .btn.primary:hover { filter: brightness(1.15); }
+  .btn.accent { background: var(--accent); color: #fff; }
+  :root[data-theme="dark"] .btn.accent { color: #0f1f18; }
+  .btn.accent:hover { filter: brightness(1.08); }
+  .btn.ghost { background: var(--surface); border-color: var(--border); color: var(--ink); }
+  .btn.ghost:hover { background: var(--surface-2); }
+  .btn.danger { background: var(--surface); border-color: var(--border); color: var(--bad); }
+  .btn.block { width: 100%; padding: 11px; font-size: 14px; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .segs { display: flex; align-items: center; gap: 4px; padding: 3px; border-radius: 8px; background: var(--border); }
+  :root[data-theme="dark"] .segs { background: var(--border-soft); }
+  .seg { padding: 5px 12px; border-radius: 6px; font-size: 13px; color: var(--ink-2); border: 1px solid transparent; }
+  .seg.active { background: var(--surface); border-color: var(--border); color: var(--ink); font-weight: 600; }
+
+  .content { flex-grow: 1; display: flex; min-height: 0; }
+  .scroll { overflow: auto; }
+  .eyebrow { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+
+  .av { border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0; }
+  .av.s { width: 22px; height: 22px; font-size: 10px; } .av.m { width: 26px; height: 26px; font-size: 11px; } .av.l { width: 30px; height: 30px; font-size: 12px; } .av.xl { width: 40px; height: 40px; font-size: 15px; }
+  .av.peter { background: var(--av-p-bg); color: var(--av-p-ink); } .av.ricky { background: var(--av-r-bg); color: var(--av-r-ink); }
+  .av.brody { background: var(--av-b-bg); color: var(--av-b-ink); } .av.archy { background: var(--av-a-bg); color: var(--av-a-ink); }
+  .av.cody, .av.cody2, .av.cody3 { background: var(--av-c-bg); color: var(--av-c-ink); } .av.verifier { background: var(--av-v-bg); color: var(--av-v-ink); }
+  .av.reporter { background: var(--av-rp-bg); color: var(--av-rp-ink); } .av.you { background: var(--btn); color: var(--btn-ink); }
+  .av.finn { background: var(--av-rp-bg); color: var(--av-rp-ink); }
+  .role { font-size: 11px; color: var(--ink-2); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+  .tool { font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+  .tool.gate { color: var(--warn-ink); border-color: var(--warn-line); background: var(--warn-soft); }
+  .pill { font-size: 12px; font-weight: 600; border-radius: 10px; padding: 3px 9px; white-space: nowrap; }
+  .pill.ok { color: var(--accent-ink); background: var(--accent-soft); } .pill.warn { color: var(--warn-ink); background: var(--warn-soft); }
+  .pill.info { color: var(--info-ink); background: var(--info-soft); } .pill.bad { color: var(--bad-ink); background: var(--bad-soft); } .pill.muted { color: var(--muted); background: var(--panel); }
+
+  /* Company */
+  .company { flex-grow: 1; padding: 28px; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .meter { width: 160px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+  .meter > div { height: 100%; background: var(--accent); }
+  .depts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+  .dept { display: flex; flex-direction: column; padding: 18px; gap: 14px; }
+  .lead { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 8px; background: var(--ground); }
+  .member { display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left; border-radius: 8px; padding: 4px; margin: -4px; }
+  .member:hover { background: var(--surface-2); }
+  .member .name { font-size: 13px; font-weight: 600; }
+  .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+  .status.warn { color: var(--warn-ink); } .status.bad { color: var(--bad-ink); }
+  .dept-foot { display: flex; align-items: center; justify-content: space-between; padding-top: 10px; border-top: 1px solid var(--border-soft); font-size: 13px; margin-top: auto; }
+  .add-dept { display: inline-flex; align-items: center; gap: 10px; padding: 14px 18px; border: 1px dashed var(--faint); border-radius: 10px; color: var(--muted); font-size: 13px; width: fit-content; }
+  .add-dept:hover { color: var(--ink); border-color: var(--muted); }
+
+  .rail { width: 340px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface-2); padding: 24px 22px; display: flex; flex-direction: column; gap: 16px; overflow: auto; }
+  .feed { display: flex; flex-direction: column; gap: 12px; }
+  .feed-item { display: flex; gap: 10px; width: 100%; text-align: left; padding: 8px; margin: -8px; border-radius: 8px; }
+  .feed-item:hover { background: var(--surface); }
+  .feed-item.attention { background: var(--warn-soft); border: 1px solid var(--warn-line); padding: 12px; margin: 0; }
+  .feed-item .txt { font-size: 13px; line-height: 1.45; }
+  .feed-item .meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .feed-item.attention .meta { color: var(--warn-ink); font-weight: 600; }
+
+  /* Board */
+  .board { flex-grow: 1; display: grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap: 12px; padding: 22px 22px 22px 28px; min-width: 0; overflow: auto; align-content: start; }
+  .col { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 200px; border-radius: 10px; padding: 2px; transition: background .12s; }
+  .col.over { background: var(--panel); }
+  .col-h { display: flex; align-items: center; justify-content: space-between; padding: 0 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .col-h.blocked { color: var(--bad); }
+  .tcard { display: flex; flex-direction: column; gap: 8px; padding: 12px; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; cursor: grab; transition: box-shadow .12s, transform .12s; }
+  .tcard:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
+  .tcard.selected { border: 2px solid var(--ink); padding: 11px; }
+  .tcard.done { background: var(--surface-2); border-color: var(--border-soft); opacity: .85; cursor: default; }
+  .tcard.done:hover { box-shadow: none; transform: none; }
+  .tcard.blocked { border-color: var(--bad); border-left-width: 3px; }
+  .tcard .t { font-size: 14px; font-weight: 600; line-height: 1.35; }
+  .tcard.done .t { color: var(--ink-2); }
+  .tcard .who { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); }
+  .tcard .foot { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted); }
+  .tcard.dragging { opacity: .5; }
+
+  .drawer { width: 420px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+  .drawer-h { padding: 20px 22px 14px; border-bottom: 1px solid var(--border-soft); display: flex; flex-direction: column; gap: 10px; }
+  .drawer-title { font-size: 17px; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; text-wrap: balance; }
+  .tabs { display: flex; gap: 18px; padding: 0 22px; border-bottom: 1px solid var(--border-soft); font-size: 13px; }
+  .tab { padding: 12px 0 10px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .tab.active { color: var(--ink); font-weight: 600; border-bottom-color: var(--ink); }
+  .thread { flex-grow: 1; overflow: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 16px; }
+  .msg { display: flex; gap: 10px; }
+  .msg .body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .msg .hd { display: flex; align-items: baseline; gap: 8px; }
+  .msg .hd b { font-size: 13px; }
+  .msg .hd span { font-size: 12px; color: var(--muted); }
+  .msg p { margin: 0; font-size: 13px; line-height: 1.5; }
+  .code { font-family: var(--mono); font-size: 12px; background: var(--panel); padding: 0 4px; border-radius: 4px; }
+  .event { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--ground); border: 1px solid var(--border); font-size: 12px; }
+  .sysline { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); padding-left: 36px; }
+  .composer { padding: 14px 22px 18px; border-top: 1px solid var(--border-soft); display: flex; flex-direction: column; gap: 8px; }
+  .composer-box { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+  .composer-box input { flex-grow: 1; font: inherit; font-size: 13px; color: var(--ink); background: transparent; border: 0; outline: none; min-width: 0; }
+  .composer-box input::placeholder { color: var(--faint); }
+  .send { width: 30px; height: 30px; border-radius: 7px; background: var(--btn); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .hint { font-size: 12px; color: var(--muted); }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; font-size: 13px; }
+  .kv dt { color: var(--muted); margin: 0; } .kv dd { margin: 0; }
+  .outfile { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+  .blockbox { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 8px; background: var(--bad-soft); border: 1px solid var(--bad); color: var(--bad-ink); font-size: 13px; }
+  :root[data-theme="dark"] .blockbox { border-color: #6a3a35; }
+
+  /* Review */
+  .review { flex-grow: 1; display: flex; min-height: 0; }
+  .files { width: 270px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--panel); padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; overflow: auto; }
+  .file { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 9px 10px; border-radius: 8px; font-size: 12px; color: var(--ink-2); border: 1px solid transparent; text-align: left; }
+  .file:hover { background: var(--surface-2); }
+  .file.active { background: var(--surface); border-color: var(--border); color: var(--ink); font-weight: 600; }
+  .file .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .plus { color: var(--accent); } .minus { color: var(--bad); }
+  .diffwrap { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface); overflow: auto; }
+  .diff-h { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-bottom: 1px solid var(--border-soft); position: sticky; top: 0; background: var(--surface); z-index: 1; }
+  .diff { font-family: var(--mono); font-size: 12.5px; line-height: 22px; display: flex; flex-direction: column; padding-bottom: 40px; }
+  .hunk { display: flex; align-items: center; gap: 12px; padding: 4px 20px; background: var(--ground); color: var(--muted); border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); }
+  .hunk span:last-child { font-family: var(--sans); font-size: 12px; }
+  .ln { display: flex; min-width: 0; position: relative; }
+  .ln:hover .addc { opacity: 1; }
+  .ln .n { width: 44px; text-align: right; color: var(--faint); padding-right: 10px; flex-shrink: 0; user-select: none; }
+  .ln .c { padding-left: 12px; color: var(--ink-2); white-space: pre; overflow-x: auto; }
+  .ln.add { background: var(--add-bg); } .ln.add .n { color: var(--accent); } .ln.add .c { color: var(--add-ink); }
+  .ln.del { background: var(--del-bg); } .ln.del .n { color: var(--bad); } .ln.del .c { color: var(--del-ink); }
+  .ln.flag { box-shadow: inset 3px 0 0 var(--warn); }
+  .addc { position: absolute; left: 96px; top: 2px; width: 18px; height: 18px; border-radius: 4px; background: var(--info); color: #fff; font-size: 14px; line-height: 18px; text-align: center; opacity: 0; transition: opacity .12s; }
+  .cthread { margin: 8px 20px 12px 108px; border: 1px solid var(--warn-line); border-radius: 10px; background: var(--warn-soft); display: flex; flex-direction: column; font-family: var(--sans); line-height: 1.5; }
+  .cthread.resolved { border-color: var(--border); background: var(--surface-2); }
+  .cthread .msg { padding: 12px 14px; }
+  .cthread .msg + .msg { padding-top: 0; }
+  .cthread .foot { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border-top: 1px solid var(--warn-line); }
+  .cthread.resolved .foot { border-top-color: var(--border); }
+  .cthread .foot input { flex-grow: 1; font: inherit; font-size: 13px; color: var(--ink); background: transparent; border: 0; outline: none; }
+  .cthread .foot input::placeholder { color: var(--faint); }
+  .okline { display: flex; align-items: center; gap: 8px; padding: 10px 20px 10px 108px; font-family: var(--sans); font-size: 12px; color: var(--muted); }
+  .rpanel { width: 340px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface-2); padding: 22px; display: flex; flex-direction: column; gap: 20px; overflow: auto; }
+  .checks { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+  .check { display: flex; align-items: center; gap: 10px; }
+  .check.warn { color: var(--warn-ink); }
+  .reviewer { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+  .note { display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); font-size: 13px; line-height: 1.5; }
+
+  /* Approvals */
+  .approvals { flex-grow: 1; padding: 28px; display: flex; flex-direction: column; gap: 16px; max-width: 900px; }
+  .approval { display: flex; flex-direction: column; gap: 14px; padding: 20px; }
+  .approval.decided { opacity: .75; }
+  .action-json { font-family: var(--mono); font-size: 12px; line-height: 1.6; background: var(--ground); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; white-space: pre; overflow-x: auto; margin: 0; color: var(--ink-2); }
+  .approval .why { font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+  .approval .acts { display: flex; gap: 8px; }
+
+  /* Team */
+  .team { flex-grow: 1; display: flex; min-height: 0; }
+  .roster { width: 320px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--panel); padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; overflow: auto; }
+  .roster .eyebrow { padding: 10px 10px 6px; }
+  .rmate { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 8px; text-align: left; border: 1px solid transparent; }
+  .rmate:hover { background: var(--surface-2); }
+  .rmate.active { background: var(--surface); border-color: var(--border); }
+  .editor { flex-grow: 1; padding: 28px; display: flex; flex-direction: column; gap: 22px; overflow: auto; max-width: 860px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 12px; font-weight: 600; color: var(--muted); }
+  .field input, .field textarea, .field select { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; width: 100%; }
+  .field textarea { min-height: 120px; line-height: 1.5; resize: vertical; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .mcp { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
+  .mcp-h { display: flex; align-items: center; justify-content: space-between; }
+  .mcp-h .n { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+  .toolrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+  .toolrow .tn { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mode { display: flex; gap: 2px; padding: 2px; border-radius: 6px; background: var(--panel); flex-shrink: 0; }
+  .mode button { padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--muted); }
+  .mode button.on.read { background: var(--surface); color: var(--ink); }
+  .mode button.on.auto { background: var(--accent-soft); color: var(--accent-ink); }
+  .mode button.on.ask { background: var(--warn-soft); color: var(--warn-ink); }
+  .mode button.on.off { background: var(--bad-soft); color: var(--bad-ink); }
+  .switch { width: 34px; height: 20px; border-radius: 10px; background: var(--faint); position: relative; transition: background .12s; flex-shrink: 0; }
+  .switch.on { background: var(--accent); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .12s; }
+  .switch.on::after { left: 16px; }
+
+  /* Office visualiser */
+  .office { flex-grow: 1; padding: 22px 28px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .office-stage { position: relative; flex-shrink: 0; width: 100%; aspect-ratio: 16 / 9; min-height: 360px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .office-stage canvas, .office-stage svg.map { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .office-stage canvas { image-rendering: pixelated; image-rendering: crisp-edges; cursor: pointer; }
+  .office-err { position: absolute; left: 12px; bottom: 12px; padding: 8px 10px; border-radius: 8px; background: var(--bad-soft); color: var(--bad-ink); font-size: 12px; font-family: var(--mono); max-width: 90%; }
+  .legend { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .ticker { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .tick { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border-soft); }
+  .tick.now { border-color: var(--accent); }
+  .map { width: 100%; height: auto; display: block; font-family: var(--sans); }
+  .map text { fill: var(--ink); }
+  .map .room { fill: var(--surface-2); stroke: var(--border); }
+  .map .roomlabel { fill: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+  .map .edge { fill: none; stroke-width: 1.6; }
+  .map .edge.task { stroke: var(--accent); }
+  .map .edge.mention { stroke: var(--info); stroke-dasharray: 4 4; animation: dash 1.2s linear infinite; }
+  .map .edge.review { stroke: var(--info); }
+  .map .edge.approval { stroke: var(--warn); stroke-dasharray: 2 4; animation: dash 1.2s linear infinite; }
+  .map .edge.blocked { stroke: var(--bad); stroke-dasharray: 6 3; }
+  @keyframes dash { to { stroke-dashoffset: -16; } }
+  .map .node { cursor: pointer; }
+  .map .node circle { stroke-width: 2; }
+  .map .node text { font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+  .map .nlabel { font-size: 11px; fill: var(--ink-2); text-anchor: middle; }
+  .map .status-ring { fill: none; stroke-width: 3; }
+
+  /* Activity view */
+  .activity { flex-grow: 1; padding: 28px; display: flex; flex-direction: column; gap: 14px; max-width: 760px; }
+
+  /* Modal + toast */
+  .overlay { position: fixed; inset: 0; background: rgba(20, 19, 17, .45); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal { width: 560px; max-width: calc(100vw - 40px); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 16px; padding: 22px; }
+  .modal h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  .plan { display: flex; flex-direction: column; gap: 8px; }
+  .plan-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+  .plan-item .t { flex-grow: 1; }
+  .thinking { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 60; }
+  .toast { background: var(--btn); color: var(--btn-ink); padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; box-shadow: var(--shadow); animation: rise .18s ease-out; }
+  @keyframes rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .empty { padding: 40px; text-align: center; color: var(--muted); font-size: 13px; }
+</style>
+
+<div class="app" id="app"></div>
+<div class="toasts" id="toasts"></div>
+<div id="modal-root"></div>
+
+<script>
+(function () {
+  'use strict';
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // ---------- Icons ----------
+  const I = {
+    company: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 10h18"></path><path d="M9 20V10"></path></svg>',
+    board: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="5" height="16" rx="1"></rect><rect x="10" y="4" width="5" height="10" rx="1"></rect><rect x="17" y="4" width="4" height="13" rx="1"></rect></svg>',
+    review: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"></path><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"></path></svg>',
+    shield: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V7z"></path></svg>',
+    clock: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>',
+    team: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20a6.5 6.5 0 0 1 13 0"></path><circle cx="17" cy="9" r="2.5"></circle><path d="M16 15.5a5 5 0 0 1 5.5 4.5"></path></svg>',
+    gear: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4.9a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-.9-2 3.4 2 1.5A7 7 0 0 0 5 12a7 7 0 0 0 .1 1.2l-2 1.5 2 3.4 2.4-.9a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4.9 2-3.4-2-1.5A7 7 0 0 0 19 12z"></path></svg>',
+    plus: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>',
+    arrow: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg>',
+    back: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>',
+    check: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg>',
+    alert: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>',
+    msg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.2L4 21l1.8-5.4A8 8 0 1 1 21 12z"></path></svg>',
+    task: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M12 9v6"></path><path d="M9 12h6"></path></svg>',
+    sun: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>',
+    plug: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5"></path><path d="M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg>',
+    office: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"></path><path d="M5 21V7l7-4 7 4v14"></path><path d="M9 21v-5h6v5"></path><path d="M9 10h.01M15 10h.01M9 13h.01M15 13h.01"></path></svg>',
+    costs: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"></path><path d="M4 19h16"></path><path d="M8 16v-5"></path><path d="M12 16V8"></path><path d="M16 16v-3"></path></svg>',
+  };
+
+  // ---------- Data ----------
+  const AGENTS = {
+    peter: { id: 'peter', name: 'Peter', role: 'project manager', dept: 'engineering', lead: true, brain: 'Claude Opus 5 · Claude Code', tools: [] },
+    cody: { id: 'cody', name: 'Cody', role: 'n8n engineer', dept: 'engineering', brain: 'Claude Sonnet 5 · Claude Code', tools: ['n8n', 'hubspot'] },
+    cody2: { id: 'cody2', name: 'Cody 2', role: 'n8n engineer', dept: 'engineering', brain: 'Claude Sonnet 5 · Codex', tools: ['n8n', 'slack'] },
+    verifier: { id: 'verifier', name: 'Verifier', role: 'reviewer', dept: 'engineering', brain: 'Claude Opus 5 · Claude Code', tools: ['n8n'] },
+    ricky: { id: 'ricky', name: 'Ricky', role: 'researcher', dept: 'research', lead: true, brain: 'Claude Sonnet 5 · Claude Code', tools: ['browser', 'n8n'] },
+    brody: { id: 'brody', name: 'Brody', role: 'requirements', dept: 'research', brain: 'Claude Sonnet 5 · Claude Code', tools: ['browser', 'n8n'] },
+    archy: { id: 'archy', name: 'Archy', role: 'architect', dept: 'research', brain: 'Claude Opus 5 · Claude Code', tools: ['browser'] },
+    reporter: { id: 'reporter', name: 'Reporter', role: 'reporting', dept: 'marketing', lead: true, brain: 'Claude Sonnet 5 · Claude Code', tools: ['hubspot', 'slack'] },
+    cody3: { id: 'cody3', name: 'Cody 3', role: 'HubSpot analyst', dept: 'marketing', brain: 'Claude Sonnet 5 · OpenCode', tools: ['hubspot', 'slack'] },
+    finn: { id: 'finn', name: 'Finn', role: 'finance analyst', dept: 'finance', lead: true, brain: 'Claude Opus 5 · Claude Code', tools: ['xero', 'hubspot'] },
+    you: { id: 'you', name: 'You', role: 'owner', dept: '', brain: '', tools: [] },
+  };
+  const COMPANIES = {
+    gtm: { id: 'gtm', name: 'GTM Studio', template: 'GTM company', depts: {
+      engineering: { id: 'engineering', name: 'Engineering', lead: 'peter', members: ['cody', 'cody2', 'verifier'], policy: 'drafts' },
+      research: { id: 'research', name: 'Research', lead: 'ricky', members: ['brody', 'archy'], policy: 'readonly' },
+      marketing: { id: 'marketing', name: 'Marketing Ops', lead: 'reporter', members: ['cody3'], policy: 'ask' },
+      finance: { id: 'finance', name: 'Finance', lead: 'finn', members: ['verifier'], policy: 'ask' },
+    }, projects: {
+      close: { id: 'close', name: 'Q3 month-end close', client: 'Internal' },
+      vms: { id: 'vms', name: 'VMS architecture map', client: 'Globex' },
+      digest: { id: 'digest', name: 'Daily HubSpot digest', client: 'Internal' },
+      globex: { id: 'globex', name: 'Globex research', client: 'Globex' },
+      warm: { id: 'warm', name: 'Q3 warm accounts', client: 'Internal' },
+    } },
+    labs: { id: 'labs', name: 'Initech Labs', template: 'Product studio', depts: {
+      build: { id: 'build', name: 'Build cell', lead: 'peter', members: ['cody', 'verifier'], policy: 'drafts' },
+      docs: { id: 'docs', name: 'Docs shop', lead: 'reporter', members: ['brody'], policy: 'readonly' },
+    }, projects: { portal: { id: 'portal', name: 'Participant portal v2', client: 'Internal' } } },
+  };
+  const D = () => COMPANIES[S.company].depts;
+  const P = () => COMPANIES[S.company].projects;
+  const deptOf = (id) => Object.values(D()).find((d) => d.lead === id || d.members.includes(id)) || null;
+  const DEPT_TEMPLATES = {
+    engineering: { name: 'Engineering cell', roles: ['project manager', 'n8n engineer', 'n8n engineer', 'reviewer'], policy: 'drafts' },
+    research: { name: 'Research agency', roles: ['researcher', 'requirements', 'architect'], policy: 'readonly' },
+    marketing: { name: 'Marketing ops', roles: ['reporting', 'HubSpot analyst'], policy: 'ask' },
+    docs: { name: 'Docs shop', roles: ['requirements', 'reporting'], policy: 'readonly' },
+    audit: { name: 'Audit office', roles: ['reviewer', 'reviewer'], policy: 'readonly' },
+    finance: { name: 'Finance', roles: ['finance analyst', 'reviewer'], policy: 'ask' },
+    blank: { name: 'Blank', roles: [], policy: 'ask' },
+  };
+  const POLICY_LABEL = { readonly: 'Read only', drafts: 'Drafts auto, live writes ask', ask: 'Every write asks' };
+  const MCPS = {
+    n8n: { id: 'n8n', name: 'n8n', desc: 'Workflows, executions, credentials by name', tools: [
+      { t: 'list_workflows', kind: 'read' }, { t: 'get_workflow', kind: 'read' }, { t: 'list_executions', kind: 'read' },
+      { t: 'create_workflow (draft)', kind: 'write' }, { t: 'update_workflow', kind: 'write' }, { t: 'activate_workflow', kind: 'write' }, { t: 'delete_workflow', kind: 'write' } ] },
+    hubspot: { id: 'hubspot', name: 'HubSpot', desc: 'CRM objects, lists, marketing email', tools: [
+      { t: 'search_crm_objects', kind: 'read' }, { t: 'get_properties', kind: 'read' }, { t: 'create_list', kind: 'write' }, { t: 'update_contact', kind: 'write' }, { t: 'send_marketing_email', kind: 'write' } ] },
+    slack: { id: 'slack', name: 'Slack', desc: 'Channels and messages', tools: [
+      { t: 'read_channel', kind: 'read' }, { t: 'send_message_draft', kind: 'write' }, { t: 'send_message', kind: 'write' } ] },
+    browser: { id: 'browser', name: 'Browser', desc: 'Read the public web', tools: [ { t: 'fetch_page', kind: 'read' }, { t: 'search', kind: 'read' } ] },
+    xero: { id: 'xero', name: 'Xero', desc: 'Invoices, bills, bank feeds, reports', tools: [
+      { t: 'list_invoices', kind: 'read' }, { t: 'get_bank_transactions', kind: 'read' }, { t: 'run_report', kind: 'read' },
+      { t: 'create_invoice (draft)', kind: 'write' }, { t: 'approve_invoice', kind: 'write' }, { t: 'create_payment', kind: 'write' }, { t: 'reconcile_transaction', kind: 'write' } ] },
+  };
+  // per-agent tool modes: read | auto | ask | off
+  const defaultMode = (kind, t) => kind === 'read' ? 'read' : (/activate|delete|send_message$|send_marketing|update_contact/.test(t) ? 'ask' : 'auto');
+  const TOOLMODES = {};
+  for (const a of Object.values(AGENTS)) { TOOLMODES[a.id] = {}; for (const m of a.tools) { TOOLMODES[a.id][m] = {}; for (const tl of MCPS[m].tools) TOOLMODES[a.id][m][tl.t] = defaultMode(tl.kind, tl.t); } }
+  TOOLMODES.cody.n8n['activate_workflow'] = 'ask';
+  for (const tl of MCPS.xero.tools) if (tl.kind === 'write') TOOLMODES.finn.xero[tl.t] = 'ask';
+  TOOLMODES.verifier.n8n['create_workflow (draft)'] = 'off'; TOOLMODES.verifier.n8n['update_workflow'] = 'off'; TOOLMODES.verifier.n8n['activate_workflow'] = 'off'; TOOLMODES.verifier.n8n['delete_workflow'] = 'off';
+
+  const PERSONAS = {
+    cody: 'You are a senior n8n automation engineer. You build importable, inactive workflows from a written spec. You reference credentials by name only and never by value. You never activate a workflow yourself; activation is proposed for approval. You explain every node in a short note.',
+    verifier: 'You review other teammates’ output line by line. You check the spec is met, that no credential values appear anywhere, that drafts stay inactive, and that every claim in a handover is backed by a file. You request changes with a specific fix, not a vague concern.',
+    ricky: 'You research and map. You read n8n workflows and public sites, produce fact-based findings with sources, and open follow-up tasks for engineers when you find work that needs doing.',
+    finn: 'You are the finance analyst. You reconcile, match and prepare. You never post, approve or pay anything yourself: every change in the accounting system is proposed with the exact records and amounts for the owner to approve. Account numbers and bank details never appear in your notes.',
+    peter: 'You run the department. You split goals into tasks with a clear done definition, assign by speciality, watch runs and reviews, re-plan on failure, and only interrupt the owner at approval gates.',
+  };
+
+  let seq = 200;
+  const T = {};
+  const addTask = (t) => { T[t.id] = Object.assign({ thread: [], outputs: [], blocker: null, review: null, approval: null, msgs: 0, company: 'gtm', project: 'vms' }, t); return T[t.id]; };
+  addTask({ id: 144, title: 'Cross-check credential names against outbound-mail map', dept: 'engineering', status: 'todo', assignee: 'cody', by: 'ricky', thread: [
+    { who: 'ricky', when: '6 min ago', text: 'Cody, from #142: three credential names show up in the outbound-mail sub-workflow. Confirm they match the map in #139 and note any that do not.' } ] });
+  addTask({ id: 146, title: 'Requirements: Slack digest format and schedule', dept: 'engineering', status: 'todo', assignee: 'brody', by: 'peter', thread: [
+    { who: 'peter', when: '14 min ago', text: 'Owner wants a 9am post to #sales with name, company and source for every contact created in the prior 24 hours. Timezone is an open question, please resolve it with the owner.' } ] });
+  addTask({ id: 147, title: 'Verify digest workflow against sample data', dept: 'engineering', status: 'blocked', assignee: 'verifier', by: 'peter', blocker: { kind: 'dependency', text: 'Waiting on #145 to reach review.' } });
+  addTask({ id: 142, title: 'Map VMS sub-workflow calls', dept: 'engineering', status: 'doing', assignee: 'cody', by: 'peter', running: '4 min', msgs: 4, review: 'r142', thread: [
+    { who: 'peter', when: '22 min ago', html: 'Scope: every Execute Workflow node reachable from <span class="code">18cJ0eVGankbpGAr</span>. Deliver a diagram plus a note per node on what it does and what it returns.' },
+    { who: 'cody', when: '9 min ago', html: '<a data-go="agent:ricky">@ricky</a> the outbound-mail sub-workflow references a credential I can’t resolve by name. Do you have the list from your credential mapping?' },
+    { who: 'ricky', when: '7 min ago', html: 'Yes. Three credential names, no values. They’re in <a data-go="task:139">#139</a>. I’ve opened a follow-up so the cross-check is tracked.', event: { text: 'Created <b>#144</b> for Cody · Cross-check credential names', go: 'task:144' } },
+    { who: 'cody', when: '5 min ago', text: 'Thanks. Diagram is most of the way there. Pushing for review in about ten minutes.' },
+    { sys: true, text: 'Verifier requested changes on review <b>#142</b> · 2 min ago', go: 'review:r142' } ],
+    outputs: [ { n: 'docs/vms-architecture.md', k: 'document' }, { n: 'workflows/vms-digest.json', k: 'draft workflow' }, { n: 'vms-architecture.svg', k: 'diagram' }, { n: 'handover.md', k: 'what Cody did and why' } ] });
+  addTask({ id: 145, title: 'Build Slack digest workflow (draft, inactive)', dept: 'engineering', status: 'doing', assignee: 'cody2', by: 'peter', running: '11 min', thread: [
+    { who: 'peter', when: '14 min ago', text: 'Build the digest as an inactive draft. Brody is finalising the format in #146; pull from that task when it lands.' },
+    { who: 'cody2', when: '3 min ago', text: 'Scaffold is in. Schedule trigger, HubSpot search, formatter, Slack draft node. Waiting on the format before I wire the message body.' } ] });
+  addTask({ id: 140, title: 'Research: how Globex presents services online', dept: 'research', status: 'blocked', assignee: 'ricky', by: 'peter', blocker: { kind: 'teammate', text: 'Waiting on @brody for the comparison criteria before the write-up can be finished.' }, thread: [
+    { who: 'ricky', when: '18 min ago', html: '<a data-go="agent:brody">@brody</a> I have the source map. I need the comparison criteria from your requirements before I write the findings.' } ] });
+  addTask({ id: 143, title: 'Activate VMS digest workflow', dept: 'engineering', status: 'blocked', assignee: 'cody', by: 'peter', blocker: { kind: 'approval', text: 'Activation is an approval-gated action. Waiting on you.' }, approval: 'a143' });
+  addTask({ id: 141, title: 'Outbound-mail workflows and credential map', dept: 'research', status: 'review', assignee: 'brody', by: 'ricky', review: 'r141', msgs: 2 });
+  addTask({ id: 138, title: 'HubSpot warm-accounts list write', dept: 'marketing', status: 'review', assignee: 'cody3', by: 'reporter', approval: 'a138' });
+  addTask({ id: 139, title: 'Outbound-mail credential map', dept: 'research', status: 'done', assignee: 'ricky', by: 'peter', doneBy: 'Approved by Verifier' });
+  addTask({ id: 137, title: 'Inventory of Execute Workflow nodes', dept: 'engineering', status: 'done', assignee: 'cody', by: 'peter', doneBy: 'Approved by you' });
+  addTask({ id: 136, title: 'Goal intake: VMS architecture map', dept: 'engineering', status: 'done', assignee: 'peter', by: 'you', doneBy: 'Peter' });
+  Object.assign(T[146], { project: 'digest' }); Object.assign(T[147], { project: 'digest' }); Object.assign(T[145], { project: 'digest' });
+  Object.assign(T[140], { project: 'globex' }); Object.assign(T[138], { project: 'warm' }); Object.assign(T[141], { project: 'globex' }); Object.assign(T[139], { project: 'globex' });
+  addTask({ id: 150, title: 'Reconcile September bank feed against invoices', dept: 'finance', status: 'doing', assignee: 'finn', by: 'finn', running: '7 min', project: 'close', thread: [
+    { who: 'finn', when: '7 min ago', text: 'Pulling the September bank transactions and open invoices from Xero. Read only. Anything that needs a posting comes to you as an approval.' } ],
+    outputs: [ { n: 'reconciliation-sept.md', k: 'matches, gaps and questions' } ] });
+  addTask({ id: 151, title: 'Approve three matched supplier invoices', dept: 'finance', status: 'review', assignee: 'finn', by: 'finn', project: 'close', approval: 'a151' });
+  addTask({ id: 152, title: 'Check reconciliation for credential or account-number leaks', dept: 'finance', status: 'todo', assignee: 'verifier', by: 'finn', project: 'close' });
+  addTask({ id: 131, title: 'Participant portal: consent flow copy', dept: 'docs', status: 'review', assignee: 'brody', by: 'peter', company: 'labs', project: 'portal', approval: 'a131' });
+  addTask({ id: 132, title: 'Portal login: passkey support', dept: 'build', status: 'todo', assignee: 'cody', by: 'peter', company: 'labs', project: 'portal' });
+
+  const REVIEWS = {
+    r142: { id: 'r142', task: 142, author: 'cody', reviewer: 'verifier', status: 'changes', files: [
+      { n: 'docs/vms-architecture.md', add: 210, del: 0, hunks: [ { h: '@@ -0,0 +1,14 @@', label: 'overview', lines: [
+        ['add', '', 1, '# VMS workflow architecture'], ['add', '', 2, ''], ['add', '', 3, 'Entry: `VMS intake` (18cJ0eVGankbpGAr) fans out to five sub-workflows.'], ['add', '', 4, ''],
+        ['add', '', 5, '| Node | Sub-workflow | Returns |'], ['add', '', 6, '|---|---|---|'], ['add', '', 7, '| Outbound mail | VMS_MAIL | delivery receipt |'], ['add', '', 8, '| Candidate sync | VMS_SYNC | upserted ids |'],
+        ['add', '', 9, '| Compliance check | VMS_CHECK | pass/fail + reasons |'], ['add', '', 10, '| Digest | VMS_DIGEST | Slack message id |'], ['add', '', 11, '| Archive | VMS_ARCHIVE | storage path |'], ['add', '', 12, ''],
+        ['add', '', 13, 'Every node below has a note on inputs, outputs and failure behaviour.'], ['add', '', 14, ''] ] } ] },
+      { n: 'workflows/vms-digest.json', add: 142, del: 8, hunks: [
+        { h: '@@ -12,7 +12,9 @@', label: 'workflow settings', lines: [
+          ['ctx', 12, 12, '  "name": "VMS digest",'], ['ctx', 13, 13, '  "settings": {'], ['del', 14, '', '-   "executionOrder": "v0",'], ['add', '', 14, '+   "executionOrder": "v1",'],
+          ['add', '', 15, '+   "timezone": "Europe/London",'], ['add', '', 16, '+   "active": true,', 'c1'], ['ctx', 15, 17, '    "saveExecutionProgress": true'], ['ctx', 16, 18, '  },'] ] },
+        { h: '@@ -41,6 +43,18 @@', label: 'nodes · Execute Workflow: outbound mail', lines: [
+          ['ctx', 41, 43, '    {'], ['add', '', 44, '+     "name": "Outbound mail (sub-workflow)",'], ['add', '', 45, '+     "type": "n8n-nodes-base.executeWorkflow",'],
+          ['add', '', 46, '+     "parameters": { "workflowId": { "mode": "id", "value": "VMS_MAIL_WORKFLOW_ID" } },'], ['add', '', 47, '+     "credentials": { "smtp": { "name": "VMS_SMTP" } }', 'ok1'], ['ctx', 42, 48, '    },'] ] } ] },
+      { n: 'notes/credentials.md', add: 31, del: 0, hunks: [ { h: '@@ -0,0 +1,6 @@', label: 'credential names used', lines: [
+        ['add', '', 1, '# Credentials referenced (names only)'], ['add', '', 2, ''], ['add', '', 3, '- VMS_SMTP · outbound mail'], ['add', '', 4, '- HUBSPOT_APP · candidate sync'], ['add', '', 5, '- SLACK_BOT · digest'], ['add', '', 6, ''] ] } ] } ],
+      comments: { c1: { resolved: false, msgs: [
+        { who: 'verifier', when: '2 min ago', tag: 'Request changes', html: 'This activates the workflow on import. Keep <span class="code">"active": false</span>. Activation is an approval-gated action and must go through the broker, not the file.' },
+        { who: 'cody', when: '1 min ago', text: 'Agreed. Fixing in the next push and adding a note to the handover.' } ] } },
+      oks: { ok1: 'Verifier: credential by name only, no value. Good.' },
+      checks: [ { ok: true, t: 'Workflow imports as draft' }, { ok: true, t: 'No credential values in files' }, { ok: true, t: 'Every node in the diagram has a note' } ],
+      run: '4 min 12 s · 68,775 tokens', engine: 'Cody on Claude Code · sandboxed worktree', repo: 'gtm-automations' },
+    r141: { id: 'r141', task: 141, author: 'brody', reviewer: 'verifier', status: 'reviewing', files: [
+      { n: 'docs/outbound-mail-map.md', add: 31, del: 0, hunks: [ { h: '@@ -0,0 +1,9 @@', label: 'map', lines: [
+        ['add', '', 1, '# Outbound-mail workflows'], ['add', '', 2, ''], ['add', '', 3, 'Four workflows send mail. All use SMTP credentials referenced by name.'], ['add', '', 4, ''],
+        ['add', '', 5, '| Workflow | Trigger | Credential |'], ['add', '', 6, '|---|---|---|'], ['add', '', 7, '| VMS_MAIL | called by VMS intake | VMS_SMTP |'], ['add', '', 8, '| Weekly report | schedule, Mon 08:00 | REPORT_SMTP |'], ['add', '', 9, '| Candidate welcome | webhook | VMS_SMTP |'] ] } ] } ],
+      comments: {}, oks: {}, checks: [ { ok: true, t: 'Sources cited for every row' }, { ok: true, t: 'No credential values in files' } ], run: '2 min 40 s · 31,208 tokens', engine: 'Brody on Claude Code · sandboxed worktree', repo: 'gtm-automations' },
+  };
+
+  const APPROVALS = {
+    a138: { id: 'a138', task: 138, who: 'cody3', title: 'Create a HubSpot list “Q3 warm accounts”', tool: 'hubspot · create_list', status: 'pending',
+      why: 'Reporter needs a static list of the 212 companies Fibbler shows engaging with paid ads this quarter, so the weekly pipeline summary can reference it.',
+      payload: '{\n  "tool": "hubspot.create_list",\n  "input": {\n    "name": "Q3 warm accounts",\n    "objectType": "company",\n    "processingType": "MANUAL",\n    "memberIds": "<212 ids from task #138 output>"\n  },\n  "credential": "HUBSPOT_APP",\n  "binding": "sha256:9f2c…e41a"\n}' },
+    a151: { id: 'a151', task: 151, who: 'finn', title: 'Approve three supplier invoices in Xero', tool: 'xero · approve_invoice', status: 'pending',
+      why: 'All three match a bank transaction by amount, date and supplier. Approving moves them from draft to awaiting payment. No payment is created; that is a separate approval.',
+      payload: '{\n  "tool": "xero.approve_invoice",\n  "input": { "invoiceIds": ["INV-0912", "INV-0917", "INV-0921"], "total": "4,860.00 GBP" },\n  "credential": "XERO_TENANT",\n  "binding": "sha256:c07d…5b12"\n}' },
+    a131: { id: 'a131', task: 131, who: 'brody', title: 'Publish consent copy to the participant portal CMS', tool: 'cms · publish_page', status: 'pending',
+      why: 'The consent flow copy passed review. Publishing makes it live for participants, so it waits for you.',
+      payload: '{\n  "tool": "cms.publish_page",\n  "input": { "pageId": "consent-v2", "environment": "production" },\n  "credential": "PORTAL_CMS",\n  "binding": "sha256:77a1…d0e4"\n}' },
+    a143: { id: 'a143', task: 143, who: 'cody', title: 'Activate n8n workflow “VMS digest”', tool: 'n8n · activate_workflow', status: 'pending',
+      why: 'Review #142 is not approved yet. Peter queued this so it is ready the moment the review lands; approving now would activate an unreviewed draft.',
+      payload: '{\n  "tool": "n8n.activate_workflow",\n  "input": { "workflowId": "VMS_DIGEST_WORKFLOW_ID" },\n  "credential": "N8N_API",\n  "binding": "sha256:41b7…0c93"\n}' },
+  };
+
+  let FEED = [
+    { who: 'finn', html: '<b>Finn</b> asks approval to approve three matched supplier invoices in Xero', meta: 'Review the exact action', attention: true, go: 'approvals' },
+    { who: 'cody3', html: '<b>Cody 3</b> asks approval to write a HubSpot list <em>“Q3 warm accounts”</em>', meta: 'Review the exact action', attention: true, go: 'approvals' },
+    { who: 'verifier', html: '<b>Verifier</b> requested changes on <b>#142 Map VMS sub-workflow calls</b>', meta: '2 min ago · 1 comment on a hunk', go: 'review:r142' },
+    { who: 'ricky', html: '<b>Ricky</b> created a task for <b>Cody</b>: Cross-check credential names against the outbound-mail map', meta: '6 min ago · Research → Engineering', go: 'task:144' },
+    { who: 'cody', html: '<b>Cody</b> asked <b>@ricky</b> a question on <b>#142</b>', meta: '9 min ago · answered', go: 'task:142' },
+    { who: 'peter', html: '<b>Peter</b> split your goal <em>“Daily HubSpot new-contact summary to Slack”</em> into 4 tasks', meta: '14 min ago · assigned to Ricky, Brody, Cody 2', go: 'board' },
+    { who: 'ricky', html: '<b>Ricky</b> is blocked on <b>#140</b>, waiting on Brody', meta: '18 min ago', go: 'task:140' },
+    { who: 'verifier', html: '<b>Verifier</b> approved <b>#139 Outbound-mail credential map</b>', meta: '31 min ago · moved to Done', go: 'task:139' },
+  ];
+
+  // ---------- State ----------
+  const S = { view: 'company', company: 'gtm', project: 'all', deptFilter: 'all', selTask: null, drawerTab: 'conv', selReview: 'r142', selFile: 1, selMate: 'cody', modal: null, companyMenu: false, officeMode: 'pixel', officeScope: 'all' };
+
+  // ---------- Helpers ----------
+  const initial = (id) => id === 'you' ? 'D' : AGENTS[id].name[0];
+  const av = (id, size) => { const a = AGENTS[id]; const st = a && a.bg ? ` style="background:${a.bg};color:${a.fg}"` : ''; return `<span class="av ${size} ${id}"${st}>${initial(id)}</span>`; };
+  const agentLabel = (id) => id === 'you' ? 'You' : `${esc(AGENTS[id].name)} · ${esc(AGENTS[id].role)}`;
+  const tasks = () => Object.values(T).filter((t) => t.company === S.company);
+  const counts = () => ({
+    reviews: Object.values(REVIEWS).filter((r) => r.status === 'changes' || r.status === 'reviewing').length + tasks().filter((t) => t.status === 'review' && !t.review).length,
+    approvals: Object.values(APPROVALS).filter((a) => a.status === 'pending' && T[a.task].company === S.company).length,
+  });
+  const needsYou = () => counts().approvals + tasks().filter((t) => t.blocker && t.blocker.kind === 'approval' && !(t.approval && APPROVALS[t.approval].status !== 'pending')).length - tasks().filter((t) => t.approval && APPROVALS[t.approval].status === 'pending' && t.blocker && t.blocker.kind === 'approval').length;
+  const statusLine = (t) => {
+    if (t.status === 'doing') return `<span class="status"><span class="dot ok"></span>Running · ${esc(t.running || 'just started')}</span>`;
+    if (t.status === 'blocked') return `<span class="status bad"><span class="dot bad"></span>${esc(t.blocker ? (t.blocker.kind === 'approval' ? 'Needs your approval' : t.blocker.kind === 'dependency' ? t.blocker.text : 'Waiting on ' + (t.blocker.text.match(/@\w+/) || [''])[0]) : 'Blocked')}</span>`;
+    if (t.status === 'review') { if (t.approval) return `<span class="status warn"><span class="dot warn"></span>Needs your approval</span>`; const r = t.review && REVIEWS[t.review]; if (r && r.status === 'changes') return `<span class="status warn"><span class="dot warn"></span>Changes requested</span>`; return `<span class="status" style="color: var(--info-ink)"><span class="dot info"></span>Verifier reviewing</span>`; }
+    return '';
+  };
+  function toast(msg) { const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg; document.getElementById('toasts').appendChild(el); setTimeout(() => el.remove(), 2600); }
+  function feedPush(item) { FEED.unshift(Object.assign({ co: S.company }, item)); }
+  const feed = () => FEED.filter((f) => (f.co || 'gtm') === S.company);
+
+  // ---------- Layout ----------
+  function render() {
+    const c = counts();
+    const app = document.getElementById('app');
+    app.innerHTML = `
+      <aside class="sidebar">
+        <div style="position:relative;margin-bottom:12px">
+          <button class="brand" data-act="companyMenu" style="width:100%;padding:6px 8px;border-radius:8px;border:1px solid ${S.companyMenu ? 'var(--border)' : 'transparent'};background:${S.companyMenu ? 'var(--surface)' : 'transparent'}" aria-haspopup="menu" aria-expanded="${S.companyMenu}">
+            <span class="brand-mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color: var(--btn-ink)" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16"></path><path d="M4 12h10"></path><path d="M4 18h7"></path></svg></span>
+            <span style="display:flex;flex-direction:column;align-items:flex-start;min-width:0;flex-grow:1"><span class="brand-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px">${esc(COMPANIES[S.company].name)}</span><span style="font-size:11px;color:var(--muted);white-space:nowrap">Company · RosterDock</span></span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:var(--muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+          ${S.companyMenu ? `<div class="card" style="position:absolute;top:100%;left:0;right:0;z-index:20;box-shadow:var(--shadow);padding:6px;display:flex;flex-direction:column;gap:2px">
+            ${Object.values(COMPANIES).map((co) => `<button class="nav ${co.id === S.company ? 'active' : ''}" data-company="${co.id}" style="padding:8px 10px"><span class="l"><span style="display:flex;flex-direction:column;align-items:flex-start"><span>${esc(co.name)}</span><span style="font-size:11px;color:var(--muted);font-weight:400">${Object.keys(co.depts).length} departments · ${esc(co.template)}</span></span></span></button>`).join('')}
+            <button class="nav" data-act="newcompany" style="padding:8px 10px;color:var(--accent)"><span class="l">${I.plus}<span>Create a company</span></span></button>
+          </div>` : ''}
+        </div>
+        ${navBtn('company', 'Company', I.company)}
+        ${navBtn('board', 'Board', I.board)}
+        ${navBtn('reviews', 'Reviews', I.review, c.reviews)}
+        ${navBtn('approvals', 'Approvals', I.shield, c.approvals, true)}
+        ${navBtn('activity', 'Activity', I.clock)}
+        ${navBtn('office', 'Office', I.office)}
+        ${navBtn('costs', 'Costs', I.costs)}
+        <div class="eyebrow" style="padding:14px 10px 4px;font-size:11px">Structure</div>
+        ${navBtn('org', 'Departments', I.team)}
+        ${navBtn('team', 'Teammates', I.plug)}
+        ${navBtn('settings', 'Settings', I.gear)}
+        <div class="sidebar-foot">
+          <button class="theme-toggle" data-act="theme">${I.sun}<span>Switch theme</span></button>
+          <div class="me">${av('you', 'm')}<div style="display:flex;flex-direction:column"><span style="font-size:13px;font-weight:600">Daniel</span><span style="font-size:12px;color:var(--muted)">Owner</span></div></div>
+        </div>
+      </aside>
+      <div class="main">${VIEWS[S.view]()}</div>`;
+    if (S.modal) document.getElementById('modal-root').innerHTML = S.modal(); else document.getElementById('modal-root').innerHTML = '';
+    bind();
+    syncOffice();
+  }
+  const navBtn = (v, label, icon, n, warn) => `<button class="nav ${S.view === v ? 'active' : ''}" data-view="${v}"><span class="l">${icon}<span>${label}</span></span>${n ? `<span class="badge ${warn ? 'warn' : ''}">${n}</span>` : ''}</button>`;
+  const topbar = (title, subtitle, right) => `<div class="topbar"><div class="topbar-l"><span class="title">${title}</span>${subtitle ? `<span class="subtitle">${subtitle}</span>` : ''}</div><div class="topbar-r">${needsYouChip()}${right || ''}</div></div>`;
+  const needsYouChip = () => { const n = counts().approvals + tasks().filter((t) => t.status === 'blocked' && t.blocker && t.blocker.kind === 'approval' && !t.approval).length; return `<button class="chip warn" data-view="approvals"><span class="dot warn"></span>Needs you · ${n}</button>`; };
+
+  // ---------- Views ----------
+  const VIEWS = {};
+
+  VIEWS.company = () => {
+    const working = tasks().filter((t) => t.status === 'doing').length;
+    const co = COMPANIES[S.company];
+    const nDepts = Object.keys(co.depts).length;
+    const mates = new Set(Object.values(co.depts).flatMap((d) => [d.lead, ...d.members])).size;
+    const projects = Object.values(P());
+    return topbar(esc(co.name), `${nDepts} departments · ${mates} teammates · ${working} working now`, `<button class="btn primary" data-act="newgoal">${I.plus}<span>New goal</span></button>`) + `
+      <div class="content">
+        <div class="company scroll">
+          <div class="row"><span class="eyebrow">Projects</span><button class="btn ghost" data-act="newproject" style="padding:6px 10px;font-size:12px">${I.plus}<span>New project</span></button></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">${projects.map((p) => { const pt = tasks().filter((t) => t.project === p.id); const open = pt.filter((t) => t.status !== 'done').length; const run = pt.filter((t) => t.status === 'doing').length; const blocked = pt.filter((t) => t.status === 'blocked').length; return `<button class="card" data-go="project:${p.id}" style="display:flex;flex-direction:column;gap:6px;padding:12px 14px;min-width:200px;text-align:left"><span style="font-weight:600">${esc(p.name)}</span><span style="font-size:12px;color:var(--muted)">${esc(p.client)} · ${open} open${run ? ` · <span style="color:var(--accent)">${run} running</span>` : ''}${blocked ? ` · <span style="color:var(--bad)">${blocked} blocked</span>` : ''}</span></button>`; }).join('') || '<div class="empty" style="padding:16px">No projects yet. Hand Peter a goal and he will open one.</div>'}</div>
+          <div class="row" style="margin-top:6px"><span class="eyebrow">Departments</span>
+            <div style="display:flex;align-items:center;gap:12px;font-size:13px;color:var(--muted)"><span>This week</span><div class="meter"><div style="width:40%"></div></div><span class="mono" style="font-size:12px;color:var(--ink)">1.2M / 3M tokens</span></div></div>
+          <div class="depts">${Object.values(D()).map(deptCard).join('')}</div>
+          <button class="add-dept" data-act="adddept">${I.plus}<span>Add a department from a template</span></button>
+        </div>
+        <aside class="rail">
+          <div class="row"><span class="eyebrow">Happening now</span><span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--accent)"><span class="dot ok"></span>Live</span></div>
+          <div class="feed">${feed().slice(0, 8).map(feedItem).join('') || '<div class="empty" style="padding:16px">Quiet so far. Hand Peter a goal.</div>'}</div>
+        </aside>
+      </div>`;
+  };
+  function deptCard(d) {
+    const dt = tasks().filter((t) => t.dept === d.id);
+    const open = dt.filter((t) => t.status !== 'done').length;
+    const working = dt.filter((t) => t.status === 'doing').length;
+    const needs = dt.some((t) => (t.approval && APPROVALS[t.approval].status === 'pending'));
+    const lead = AGENTS[d.lead];
+    const leadTask = dt.find((t) => t.assignee === d.lead && t.status !== 'done');
+    return `<div class="card dept">
+      <div class="row"><div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:16px;font-weight:600">${esc(d.name)}</span><span style="font-size:12px;color:var(--muted)">${d.members.length + 1} teammates · ${working} working${needs ? ' · 1 waiting on you' : ''}</span></div>${needs ? '<span class="pill warn">Needs you</span>' : '<span class="pill ok">Live</span>'}</div>
+      <button class="lead" data-go="mate:${d.lead}">${av(d.lead, 'l')}<div style="display:flex;flex-direction:column;min-width:0;text-align:left"><span style="font-size:13px;font-weight:600">${esc(lead.name)} · Lead</span><span style="font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${leadTask ? esc(leadTask.title) : (d.id === 'engineering' ? 'Planning · splitting “HubSpot daily summary”' : d.id === 'marketing' ? 'Writing · weekly pipeline summary' : 'Coordinating')}</span></div></button>
+      <div style="display:flex;flex-direction:column;gap:10px">${d.members.map((m) => memberRow(m, dt)).join('')}</div>
+      <div class="dept-foot"><span style="color:var(--muted)">${open} open tasks</span><a data-go="board:${d.id}">Open board</a></div>
+    </div>`;
+  }
+  function memberRow(id, dt) {
+    const a = AGENTS[id];
+    const t = dt.find((x) => x.assignee === id && x.status === 'doing') || dt.find((x) => x.assignee === id && x.status !== 'done');
+    let st = '<span class="status"><span class="dot idle"></span>Idle · available</span>';
+    if (t) {
+      if (t.status === 'doing') st = `<span class="status"><span class="dot ok"></span>${a.role === 'reviewer' ? 'Reviewing' : 'Building'} · ${esc(t.title)}</span>`;
+      else if (t.status === 'review' && t.approval) st = `<span class="status warn"><span class="dot warn"></span>Waiting on you · ${esc(t.title)}</span>`;
+      else if (t.status === 'review') st = `<span class="status" style="color:var(--info-ink)"><span class="dot info"></span>In review · ${esc(t.title)}</span>`;
+      else if (t.status === 'blocked') st = `<span class="status bad"><span class="dot bad"></span>Blocked · ${esc(t.title)}</span>`;
+      else st = `<span class="status"><span class="dot idle"></span>Queued · ${esc(t.title)}</span>`;
+    }
+    if (id === 'verifier') { const r = Object.values(REVIEWS).find((x) => x.status === 'reviewing' || x.status === 'changes'); if (r) st = `<span class="status" style="color:var(--info-ink)"><span class="dot info"></span>Reviewing · #${r.task}</span>`; }
+    return `<button class="member" data-go="task:${t ? t.id : ''}" ${t ? '' : 'data-go="mate:' + id + '"'}>${av(id, 'l')}<div style="display:flex;flex-direction:column;gap:4px;min-width:0"><div style="display:flex;align-items:center;gap:8px"><span class="name">${esc(a.name)}</span><span class="role">${esc(a.role)}</span></div>${st}<div style="display:flex;gap:6px;flex-wrap:wrap">${a.tools.map((m) => `<span class="tool">${esc(m)}</span>`).join('')}</div></div></button>`;
+  }
+  const feedItem = (f) => `<button class="feed-item ${f.attention ? 'attention' : ''}" data-go="${f.go || ''}">${av(f.who, 'm')}<div><div class="txt">${f.html}</div><div class="meta">${esc(f.meta)}${f.attention ? ' →' : ''}</div></div></button>`;
+
+  VIEWS.board = () => {
+    const cols = [['todo', 'To do'], ['doing', 'In progress'], ['blocked', 'Blocked'], ['review', 'In review'], ['done', 'Done']];
+    const vis = tasks().filter((t) => (S.deptFilter === 'all' || t.dept === S.deptFilter) && (S.project === 'all' || t.project === S.project));
+    const segs = `<div class="segs">${[['all', 'All'], ...Object.values(D()).map((d) => [d.id, d.name])].map(([k, l]) => `<button class="seg ${S.deptFilter === k ? 'active' : ''}" data-filter="${k}">${esc(l)}</button>`).join('')}</div>`;
+    const projSel = `<select class="btn ghost" data-projsel style="padding:7px 10px;font-weight:500;appearance:auto"><option value="all" ${S.project === 'all' ? 'selected' : ''}>All projects</option>${Object.values(P()).map((p) => `<option value="${p.id}" ${S.project === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>`;
+    return topbar('Board', '', `<button class="btn primary" data-act="newgoal">${I.plus}<span>New goal</span></button>`).replace('</span></div><div class="topbar-r">', `</span>${projSel}${segs}</div><div class="topbar-r">`) + `
+      <div class="content">
+        <div class="board" id="board">${cols.map(([k, l]) => {
+          const list = vis.filter((t) => t.status === k).sort((a, b) => b.id - a.id);
+          return `<div class="col" data-col="${k}"><div class="col-h ${k === 'blocked' ? 'blocked' : ''}"><span>${l}</span><span class="mono" style="font-weight:400">${list.length}${k === 'done' ? ' this week' : ''}</span></div>${list.map(taskCard).join('')}${list.length === 0 ? `<div style="border:1px dashed var(--border);border-radius:10px;padding:16px;text-align:center;font-size:12px;color:var(--faint)">${k === 'blocked' ? 'Nothing blocked' : 'Empty'}</div>` : ''}</div>`;
+        }).join('')}</div>
+        ${S.selTask ? drawer(T[S.selTask]) : ''}
+      </div>`;
+  };
+  function taskCard(t) {
+    const done = t.status === 'done';
+    return `<button class="tcard ${done ? 'done' : ''} ${t.status === 'blocked' ? 'blocked' : ''} ${S.selTask === t.id ? 'selected' : ''}" draggable="${done ? 'false' : 'true'}" data-task="${t.id}">
+      <span class="t">${esc(t.title)}</span>
+      ${done ? '' : `<span class="who">${av(t.assignee, 's')}<span>${agentLabel(t.assignee)}</span></span>`}
+      ${statusLine(t)}
+      <span class="foot"><span>${done ? esc(t.doneBy || '') : (t.msgs ? `<span style="display:inline-flex;align-items:center;gap:4px">${I.msg}${t.msgs}</span>` : (t.by === 'you' ? 'Created by you' : 'Created by ' + esc(AGENTS[t.by].name)))}</span><span class="mono">#${t.id}</span></span>
+    </button>`;
+  }
+  function drawer(t) {
+    const a = AGENTS[t.assignee];
+    const tools = a.tools.flatMap((m) => Object.entries(TOOLMODES[a.id][m]).filter(([, mode]) => mode !== 'off').map(([tl, mode]) => ({ m, tl, mode })));
+    const toolChips = Object.entries(tools.reduce((acc, x) => { (acc[x.m] = acc[x.m] || new Set()).add(x.mode); return acc; }, {})).map(([m, modes]) => {
+      const out = [];
+      if (modes.has('read')) out.push(`<span class="tool">${m} · read</span>`);
+      if (modes.has('auto')) out.push(`<span class="tool">${m} · draft</span>`);
+      if (modes.has('ask')) out.push(`<span class="tool gate">${m} · write ⋅ approval</span>`);
+      return out.join('');
+    }).join('');
+    const status = t.status === 'doing' ? `<span class="status" style="font-weight:600;color:var(--accent)"><span class="dot ok"></span>Running · ${esc(t.running || 'just started')}</span>` : t.status === 'blocked' ? `<span class="pill bad">Blocked</span>` : t.status === 'review' ? `<span class="pill info">In review</span>` : t.status === 'done' ? `<span class="pill ok">Done</span>` : `<span class="pill muted">Queued</span>`;
+    const tabs = [['conv', 'Conversation'], ['out', 'Output'], ['act', 'Activity']];
+    let body = '';
+    if (S.drawerTab === 'conv') body = `<div class="thread">${t.blocker ? `<div class="blockbox"><b style="font-weight:600">Blocked · ${t.blocker.kind === 'approval' ? 'needs your approval' : t.blocker.kind === 'dependency' ? 'dependency' : 'waiting on a teammate'}</b><span>${esc(t.blocker.text)}</span>${t.blocker.kind === 'approval' ? `<a data-go="approvals" style="font-weight:600">Review the action →</a>` : t.blocker.kind === 'dependency' ? `<a data-go="task:145" style="font-weight:600">Open #145 →</a>` : `<a data-go="agent:brody" style="font-weight:600">Nudge Brody →</a>`}</div>` : ''}${t.thread.length ? t.thread.map(msgRow).join('') : '<div class="empty">No messages yet. Anything you write here rides into the next run as standing instructions.</div>'}</div>
+      <div class="composer"><form class="composer-box" data-form="msg"><input id="msgInput" placeholder="Message the team… @mention to route" autocomplete="off"><button class="send" type="submit" aria-label="Send">${I.arrow}</button></form><span class="hint">Your notes ride into ${esc(a.name)}’s next run as standing instructions.</span></div>`;
+    else if (S.drawerTab === 'out') body = `<div class="thread">${t.outputs.length ? t.outputs.map((o) => `<div class="outfile"><span class="mono" style="font-size:12px">${esc(o.n)}</span><span style="color:var(--muted);font-size:12px">${esc(o.k)}</span></div>`).join('') : '<div class="empty">Nothing produced yet.</div>'}${t.review ? `<button class="btn ghost" data-go="review:${t.review}">Open review #${t.id}</button>` : ''}</div>`;
+    else body = `<div class="thread"><dl class="kv"><dt>Created</dt><dd>by ${t.by === 'you' ? 'you' : esc(AGENTS[t.by].name)}</dd><dt>Assigned</dt><dd>${esc(a.name)} · ${esc(a.role)}</dd><dt>Engine</dt><dd>${esc(a.brain)}</dd><dt>Runs</dt><dd>${t.status === 'todo' ? 'none yet' : '1 · sandboxed worktree'}</dd><dt>Tokens</dt><dd class="mono">${t.status === 'todo' ? '0' : t.id === 142 ? '68,775' : '31,208'}</dd></dl></div>`;
+    return `<aside class="drawer">
+      <div class="drawer-h">
+        <div class="row"><span class="mono" style="font-size:12px;color:var(--muted)">#${t.id} · ${esc((D()[t.dept] || { name: '' }).name)}${t.project && P()[t.project] ? ' · ' + esc(P()[t.project].name) : ''}</span><div style="display:flex;align-items:center;gap:10px">${status}<button data-act="closeDrawer" aria-label="Close" style="color:var(--muted);font-size:18px;line-height:1">×</button></div></div>
+        <span class="drawer-title">${esc(t.title)}</span>
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)">${av(t.assignee, 's')}<span><b>${esc(a.name)}</b> · ${esc(a.role)}</span><span style="color:var(--faint)">·</span><span>created by ${t.by === 'you' ? 'you' : esc(AGENTS[t.by].name)}</span></div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="font-size:12px;color:var(--muted)">Toolbox</span>${toolChips || '<span class="tool">none</span>'}</div>
+        ${t.review ? `<button class="btn ghost" data-go="review:${t.review}" style="align-self:flex-start">Open review</button>` : ''}
+      </div>
+      <div class="tabs">${tabs.map(([k, l]) => `<button class="tab ${S.drawerTab === k ? 'active' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
+      ${body}
+    </aside>`;
+  }
+  const msgRow = (m) => m.sys ? `<div class="sysline"><span class="dot info"></span><span>${m.text}${m.go ? ` · <a data-go="${m.go}">open</a>` : ''}</span></div>` :
+    `<div class="msg">${av(m.who, 'm')}<div class="body"><div class="hd"><b>${m.who === 'you' ? 'You' : esc(AGENTS[m.who].name)}</b><span>${esc(m.when)}</span></div><p>${m.html || esc(m.text)}</p>${m.event ? `<button class="event" data-go="${m.event.go}">${I.task}<span>${m.event.text}</span></button>` : ''}${m.routed ? `<span class="event" style="width:fit-content"><span class="dot ok"></span><span>Routed to <b>${esc(m.routed)}</b> · will pick this up on their next turn</span></span>` : ''}</div></div>`;
+
+  VIEWS.reviews = () => {
+    const r = REVIEWS[S.selReview];
+    const t = T[r.task];
+    const f = r.files[Math.min(S.selFile, r.files.length - 1)];
+    const totals = r.files.reduce((a, x) => ({ add: a.add + x.add, del: a.del + x.del }), { add: 0, del: 0 });
+    const openComments = Object.values(r.comments).filter((c) => !c.resolved).length;
+    const statusPill = r.status === 'changes' ? '<span class="pill warn">Changes requested</span>' : r.status === 'approved' ? '<span class="pill ok">Approved · PR opened</span>' : '<span class="pill info">In review</span>';
+    const others = Object.values(REVIEWS).filter((x) => x.id !== r.id);
+    return `<div class="topbar"><div class="topbar-l"><button class="btn ghost" data-view="board" style="padding:6px 10px">${I.back}<span>Board</span></button><span class="mono" style="font-size:13px;color:var(--muted)">#${t.id}</span><span class="title" style="font-size:17px">${esc(t.title)}</span>${statusPill}</div>
+      <div class="topbar-r"><div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)">${av(r.author, 's')}<span>${agentLabel(r.author)}</span><span style="color:var(--faint)">${I.arrow}</span>${av(r.reviewer, 's')}<span>${esc(AGENTS[r.reviewer].name)}</span><span style="color:var(--faint)">+</span>${av('you', 's')}<span>You</span></div>
+      ${others.length ? `<div class="segs">${Object.values(REVIEWS).map((x) => `<button class="seg ${x.id === r.id ? 'active' : ''}" data-review="${x.id}">#${x.task}</button>`).join('')}</div>` : ''}</div></div>
+      <div class="review">
+        <div class="files"><div class="row" style="padding:0 8px 10px"><span class="eyebrow">${r.files.length} files</span><span class="mono" style="font-size:12px"><span class="plus">+${totals.add}</span> <span class="minus">−${totals.del}</span></span></div>
+          ${r.files.map((x, i) => `<button class="file ${i === S.selFile ? 'active' : ''}" data-file="${i}"><span class="name mono">${esc(x.n)}</span><span class="mono" style="font-size:11px;flex-shrink:0"><span class="plus">+${x.add}</span>${x.del ? ` <span class="minus">−${x.del}</span>` : ''}</span></button>`).join('')}
+          <div style="margin-top:auto;display:flex;flex-direction:column;gap:6px;padding:12px 10px;border-top:1px solid var(--border)"><span style="font-size:12px;font-weight:600;color:var(--muted)">Also produced</span>${t.outputs.filter((o) => !r.files.some((x) => x.n === o.n)).map((o) => `<span style="font-size:13px"><a>${esc(o.n)}</a> · ${esc(o.k)}</span>`).join('') || '<span style="font-size:12px;color:var(--muted)">Nothing else</span>'}</div>
+        </div>
+        <div class="diffwrap">
+          <div class="diff-h"><span class="mono" style="font-size:13px;font-weight:500">${esc(f.n)}</span><div class="segs" style="font-size:12px"><span class="seg active">Unified</span><span class="seg" style="opacity:.6">Split</span></div></div>
+          <div class="diff">${f.hunks.map((h) => `<div class="hunk"><span>${esc(h.h)}</span><span>${esc(h.label)}</span></div>${h.lines.map((l) => diffLine(l, r)).join('')}`).join('')}</div>
+        </div>
+        <aside class="rpanel">
+          <div style="display:flex;flex-direction:column;gap:10px"><span class="eyebrow">Checks</span><div class="checks">${r.checks.map((c) => `<div class="check"><span style="color:var(--accent)">${I.check}</span><span>${esc(c.t)}</span></div>`).join('')}${openComments ? `<div class="check warn"><span style="color:var(--warn)">${I.alert}</span><span>${openComments} open comment${openComments > 1 ? 's' : ''}</span></div>` : ''}</div></div>
+          <div style="display:flex;flex-direction:column;gap:10px"><span class="eyebrow">Reviewers</span>
+            <div class="reviewer"><span style="display:flex;align-items:center;gap:8px">${av(r.reviewer, 's')}<span>${esc(AGENTS[r.reviewer].name)}</span></span><span style="font-size:12px;font-weight:600;color:${r.status === 'changes' ? 'var(--warn-ink)' : r.status === 'approved' ? 'var(--accent-ink)' : 'var(--info-ink)'}">${r.status === 'changes' ? 'Changes requested' : r.status === 'approved' ? 'Approved' : 'Reviewing'}</span></div>
+            <div class="reviewer"><span style="display:flex;align-items:center;gap:8px">${av('you', 's')}<span>You</span></span><span style="font-size:12px;color:var(--muted)">${r.youDecided || 'Optional'}</span></div></div>
+          <div style="display:flex;flex-direction:column;gap:8px"><button class="btn accent block" data-act="approve" ${r.status === 'approved' ? 'disabled' : ''}>${r.status === 'approved' ? 'Approved' : 'Approve'}</button><button class="btn ghost block" data-act="reqchanges" ${r.status === 'approved' ? 'disabled' : ''}>Request changes</button></div>
+          <div class="note"><span class="eyebrow">${r.status === 'approved' ? 'Approved' : 'When approved'}</span><span>${r.status === 'approved' ? `Pull request opened to <span class="mono" style="font-size:12px">${esc(r.repo)}</span>. The draft is imported inactive.` : `Opens a pull request to <span class="mono" style="font-size:12px">${esc(r.repo)}</span>. The draft workflow is imported inactive.`}</span><span class="chip warn" style="width:fit-content;padding:6px 10px;font-size:12px"><span class="dot warn"></span>Merge and activation both need you</span></div>
+          <div style="margin-top:auto;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)"><span>Run · ${esc(r.run)}</span><span>${esc(r.engine)}</span></div>
+        </aside>
+      </div>`;
+  };
+  function diffLine(l, r) {
+    const [kind, a, b, text, cid] = l;
+    const cls = kind === 'add' ? 'add' : kind === 'del' ? 'del' : '';
+    const c = cid && r.comments[cid];
+    const ok = cid && r.oks[cid];
+    let html = `<div class="ln ${cls} ${c && !c.resolved ? 'flag' : ''}"><span class="n">${a}</span><span class="n">${b}</span><span class="c">${esc(text)}</span><button class="addc" data-addc="${cid || ''}" title="Comment on this line">+</button></div>`;
+    if (c) html += `<div class="cthread ${c.resolved ? 'resolved' : ''}">${c.msgs.map((m) => `<div class="msg">${av(m.who, 'm')}<div class="body"><div class="hd"><b>${m.who === 'you' ? 'You' : esc(AGENTS[m.who].name)}</b>${m.tag ? `<span class="pill warn" style="font-size:11px;padding:1px 7px">${esc(m.tag)}</span>` : ''}<span>${esc(m.when)}</span></div><p>${m.html || esc(m.text)}</p></div></div>`).join('')}
+      <form class="foot" data-form="reply" data-cid="${cid}"><input placeholder="Reply…" autocomplete="off"><button type="submit" class="btn ghost" style="padding:5px 10px;font-size:12px">Reply</button>${c.resolved ? '<span style="font-size:12px;color:var(--muted);padding:0 6px">Resolved</span>' : `<button type="button" class="btn ghost" data-resolve="${cid}" style="padding:5px 10px;font-size:12px">Resolve</button>`}</form></div>`;
+    if (ok) html += `<div class="okline"><span style="color:var(--accent)">${I.check}</span><span>${esc(ok)}</span></div>`;
+    return html;
+  }
+
+  VIEWS.approvals = () => {
+    const list = Object.values(APPROVALS).filter((a) => T[a.task].company === S.company).sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1));
+    return topbar('Approvals', `${esc(COMPANIES[S.company].name)} · actions that touch a live system wait here for you`) + `
+      <div class="content"><div class="approvals scroll">
+        <p style="margin:0;font-size:13px;color:var(--muted);line-height:1.5;max-width:64ch">Each card is the exact action a teammate wants to take, bound to a hash so the approved bytes are the executed bytes. Credentials are named, never shown.</p>
+        ${list.map(approvalCard).join('')}
+      </div></div>`;
+  };
+  function approvalCard(a) {
+    const t = T[a.task];
+    return `<div class="card approval ${a.status !== 'pending' ? 'decided' : ''}">
+      <div class="row"><div style="display:flex;align-items:center;gap:10px">${av(a.who, 'l')}<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:15px;font-weight:600">${esc(a.title)}</span><span style="font-size:12px;color:var(--muted)">${agentLabel(a.who)} · ${esc((D()[t.dept] || { name: '' }).name)} · ${esc((P()[t.project] || { name: '' }).name)} · from <a data-go="task:${t.id}">#${t.id} ${esc(t.title)}</a></span></div></div>${a.status === 'pending' ? '<span class="pill warn">Waiting on you</span>' : a.status === 'approved' ? '<span class="pill ok">Approved · executed</span>' : '<span class="pill bad">Rejected</span>'}</div>
+      <div class="why"><b style="font-weight:600">Why:</b> ${esc(a.why)}</div>
+      <div style="display:flex;flex-direction:column;gap:6px"><span class="eyebrow">Exact action · <span class="mono" style="text-transform:none;letter-spacing:0">${esc(a.tool)}</span></span><pre class="action-json">${esc(a.payload)}</pre></div>
+      ${a.status === 'pending' ? `<div class="acts"><button class="btn accent" data-approve="${a.id}">Approve and run</button><button class="btn danger" data-reject="${a.id}">Reject</button><button class="btn ghost" data-go="task:${t.id}">Ask a question first</button></div>` : `<span style="font-size:12px;color:var(--muted)">${esc(a.decidedNote || '')}</span>`}
+    </div>`;
+  }
+
+  VIEWS.activity = () => topbar('Activity', `${esc(COMPANIES[S.company].name)} · everything the team did, newest first`) + `<div class="content"><div class="activity scroll"><div class="feed">${feed().map(feedItem).join('') || '<div class="empty">No activity in this company yet.</div>'}</div></div></div>`;
+
+  VIEWS.team = () => {
+    const a = AGENTS[S.selMate];
+    const modes = TOOLMODES[a.id];
+    return topbar('Team', 'Every teammate is a brain, a persona and a toolbox', `<button class="btn primary" data-act="hire">${I.plus}<span>Hire from template</span></button>`) + `
+      <div class="team">
+        <div class="roster">${Object.values(D()).map((d) => `<span class="eyebrow">${esc(d.name)}</span>${[d.lead, ...d.members].map((id) => `<button class="rmate ${S.selMate === id ? 'active' : ''}" data-mate="${id}">${av(id, 'l')}<div style="display:flex;flex-direction:column;min-width:0"><span style="font-size:13px;font-weight:600">${esc(AGENTS[id].name)}${AGENTS[id].lead ? ' · Lead' : ''}</span><span style="font-size:12px;color:var(--muted)">${esc(AGENTS[id].role)}</span></div></button>`).join('')}`).join('')}</div>
+        <div class="editor">
+          <div style="display:flex;align-items:center;gap:14px">${av(a.id, 'xl')}<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:20px;font-weight:600;letter-spacing:-0.01em">${esc(a.name)}</span><span style="font-size:13px;color:var(--muted)">${esc(a.role)} · ${esc((deptOf(a.id) || { name: 'Unassigned' }).name)}</span></div><div style="margin-left:auto;display:flex;gap:8px"><button class="btn ghost" data-act="clone">Duplicate</button><button class="btn ghost" data-act="save">Save</button></div></div>
+          <div class="grid2">
+            <div class="field"><label>Brain</label><select><option>${esc(a.brain)}</option><option>Claude Opus 5 · Claude Code</option><option>Claude Sonnet 5 · Codex</option><option>Claude Sonnet 5 · OpenCode</option></select></div>
+            <div class="field"><label>Department</label><select>${Object.values(D()).map((d) => `<option ${(deptOf(a.id) || {}).id === d.id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}<option ${deptOf(a.id) ? '' : 'selected'}>Unassigned</option></select></div>
+          </div>
+          <div class="field"><label>Persona</label><textarea>${esc(PERSONAS[a.id] || `You are ${a.name}, the ${a.role} in ${(deptOf(a.id) || { name: 'Unassigned' }).name}.`)}</textarea></div>
+          <div class="field"><label>Playbooks</label><div style="display:flex;gap:8px;flex-wrap:wrap"><span class="tool" style="padding:5px 9px;font-size:12px">n8n-workflow-conventions.md</span><span class="tool" style="padding:5px 9px;font-size:12px">credential-naming.md</span><button class="btn ghost" style="padding:4px 10px;font-size:12px">${I.plus}<span>Add</span></button></div></div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div class="row"><span class="eyebrow">Toolbox · MCP servers</span><button class="btn ghost" data-act="plugmcp" style="padding:6px 10px;font-size:12px">${I.plug}<span>Plug in an MCP</span></button></div>
+            ${Object.values(MCPS).map((m) => {
+              const on = a.tools.includes(m.id);
+              return `<div class="card mcp"><div class="mcp-h"><span class="n"><span class="tool" style="font-size:12px;padding:3px 8px">${esc(m.name)}</span><span style="font-size:12px;color:var(--muted);font-weight:400">${esc(m.desc)}</span></span><button class="switch ${on ? 'on' : ''}" data-mcp="${m.id}" role="switch" aria-checked="${on}" aria-label="Enable ${esc(m.name)}"></button></div>
+                ${on ? `<div class="tools">${m.tools.map((tl) => { const md = modes[m.id][tl.t]; return `<div class="toolrow"><span class="tn" title="${esc(tl.t)}">${esc(tl.t)}</span><span class="mode">${tl.kind === 'read' ? `<button class="on read">read</button>` : ['auto', 'ask', 'off'].map((k) => `<button class="${md === k ? 'on ' + k : ''}" data-mode="${m.id}|${tl.t}|${k}">${k === 'auto' ? 'auto' : k === 'ask' ? 'ask me' : 'off'}</button>`).join('')}</span></div>`; }).join('')}</div>` : ''}
+              </div>`; }).join('')}
+            <span class="hint">Read tools run freely. Write tools are <b>auto</b> when they cannot reach a live system (drafts), <b>ask me</b> when they can. A department policy can only tighten these, never loosen them.</span>
+          </div>
+        </div>
+      </div>`;
+  };
+
+  VIEWS.org = () => {
+    const depts = Object.values(D());
+    const roster = Object.values(AGENTS).filter((a) => a.id !== 'you');
+    const cell = (a, d) => d.lead === a.id ? 'lead' : d.members.includes(a.id) ? 'member' : '';
+    return topbar('Departments', `${esc(COMPANIES[S.company].name)} · who sits where, and what each department may touch`, `<button class="btn ghost" data-act="designTeam">${av('peter', 's')}<span>Ask Peter to design a team</span></button><button class="btn primary" data-act="newdept">${I.plus}<span>Create department</span></button>`) + `
+      <div class="content"><div class="company scroll" style="gap:24px">
+        <div class="depts">${depts.map((d) => { const dt = tasks().filter((t) => t.dept === d.id); return `<div class="card dept" style="gap:10px"><div class="row"><span style="font-size:16px;font-weight:600">${esc(d.name)}</span><span class="pill ${d.policy === 'readonly' ? 'muted' : d.policy === 'drafts' ? 'ok' : 'warn'}">${esc(POLICY_LABEL[d.policy])}</span></div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">${[d.lead, ...d.members].map((id) => `<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 8px 3px 3px;border:1px solid var(--border);border-radius:14px">${av(id, 's')}<span>${esc(AGENTS[id].name)}${d.lead === id ? ' · lead' : ''}</span></span>`).join('')}</div>
+          <div class="dept-foot"><span style="color:var(--muted)">${dt.filter((t) => t.status !== 'done').length} open · ${dt.filter((t) => t.status === 'doing').length} running</span><span style="display:flex;gap:12px"><a data-go="board:${d.id}">Board</a><a data-deptdel="${d.id}" style="color:var(--bad)">Dissolve</a></span></div></div>`; }).join('')}
+          <button class="add-dept" data-act="newdept" style="min-height:120px;align-self:stretch;justify-content:center">${I.plus}<span>Create a department</span></button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="row"><span class="eyebrow">Teammate matrix</span><span class="hint">Click a cell: none → member → lead. One lead per department. A teammate can sit in several departments.</span></div>
+          <div class="card" style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:13px;min-width:${320 + depts.length * 150}px">
+            <thead><tr><th style="text-align:left;padding:12px 16px;font-weight:600;color:var(--muted);font-size:12px;letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--border)">Teammate</th>${depts.map((d) => `<th style="text-align:center;padding:12px 10px;font-weight:600;border-bottom:1px solid var(--border);min-width:150px"><div>${esc(d.name)}</div><div style="font-size:11px;color:var(--muted);font-weight:400">${esc(POLICY_LABEL[d.policy])}</div></th>`).join('')}<th style="text-align:left;padding:12px 16px;font-weight:600;color:var(--muted);font-size:12px;letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--border)">Toolbox</th></tr></thead>
+            <tbody>${roster.map((a) => `<tr style="border-bottom:1px solid var(--border-soft)"><td style="padding:10px 16px"><button class="member" data-go="mate:${a.id}" style="align-items:center">${av(a.id, 'l')}<span style="display:flex;flex-direction:column"><span class="name">${esc(a.name)}</span><span style="font-size:12px;color:var(--muted)">${esc(a.role)} · ${esc(a.brain.split(' · ')[1] || a.brain)}</span></span></button></td>
+              ${depts.map((d) => { const c = cell(a, d); return `<td style="text-align:center;padding:6px 10px"><button class="matrix-cell ${c}" data-cell="${a.id}|${d.id}" aria-label="${esc(a.name)} in ${esc(d.name)}: ${c || 'none'}" style="width:100%;height:36px;border-radius:8px;border:1px ${c ? 'solid' : 'dashed'} ${c === 'lead' ? 'var(--btn)' : c === 'member' ? 'var(--accent)' : 'var(--border)'};background:${c === 'lead' ? 'var(--btn)' : c === 'member' ? 'var(--accent-soft)' : 'transparent'};color:${c === 'lead' ? 'var(--btn-ink)' : c === 'member' ? 'var(--accent-ink)' : 'var(--faint)'};font-size:12px;font-weight:600">${c === 'lead' ? 'Lead' : c === 'member' ? 'Member' : '+'}</button></td>`; }).join('')}
+              <td style="padding:10px 16px"><div style="display:flex;gap:6px;flex-wrap:wrap">${a.tools.map((m) => `<span class="tool">${esc(m)}</span>`).join('') || '<span class="tool">none</span>'}</div></td></tr>`).join('')}</tbody>
+          </table></div>
+        </div>
+      </div></div>`;
+  };
+
+  function createDeptModal() {
+    const roster = Object.values(AGENTS).filter((a) => a.id !== 'you');
+    return () => `<div class="overlay" data-act="closeModal"><div class="modal" data-stop="1" style="width:640px">
+      <h2>Create a department</h2>
+      <form data-form="dept" style="display:flex;flex-direction:column;gap:14px">
+        <div class="grid2"><div class="field"><label>Name</label><input name="name" placeholder="e.g. Sales Engineering" required autocomplete="off"></div>
+          <div class="field"><label>Start from a template</label><select name="tpl">${Object.entries(DEPT_TEMPLATES).map(([k, v]) => `<option value="${k}">${esc(v.name)}${v.roles.length ? ' · ' + v.roles.length + ' roles' : ''}</option>`).join('')}</select></div></div>
+        <div class="grid2"><div class="field"><label>Lead</label><select name="lead">${roster.map((a) => `<option value="${a.id}">${esc(a.name)} · ${esc(a.role)}</option>`).join('')}</select></div>
+          <div class="field"><label>Write policy</label><select name="policy"><option value="readonly">Read only</option><option value="drafts" selected>Drafts auto, live writes ask</option><option value="ask">Every write asks</option></select></div></div>
+        <div class="field"><label>Members</label><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">${roster.map((a) => `<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer"><input type="checkbox" name="m" value="${a.id}" style="margin:0">${av(a.id, 's')}<span>${esc(a.name)}</span></label>`).join('')}</div></div>
+        <span class="hint">A department is a roster, a lead and a policy. The policy can only tighten what each teammate’s own toolbox allows.</span>
+        <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn ghost" data-act="closeModal">Cancel</button><button type="submit" class="btn primary">Create department</button></div>
+      </form></div></div>`;
+  }
+  const createCompanyModal = () => () => `<div class="overlay" data-act="closeModal"><div class="modal" data-stop="1">
+    <h2>Create a company</h2>
+    <form data-form="company" style="display:flex;flex-direction:column;gap:14px">
+      <div class="field"><label>Name</label><input name="name" placeholder="e.g. Globex Delivery" required autocomplete="off"></div>
+      <div class="field"><label>Template</label><select name="tpl"><option value="gtm">GTM company · Engineering, Research, Marketing ops</option><option value="studio">Product studio · Build cell, Docs shop, Audit office</option><option value="agency">Research agency · Research only</option><option value="blank">Blank · no departments yet</option></select></div>
+      <span class="hint">A company is its own board, departments, projects and budget. Teammate templates and plugged-in MCPs are shared across companies; permissions are not.</span>
+      <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn ghost" data-act="closeModal">Cancel</button><button type="submit" class="btn primary">Create company</button></div>
+    </form></div></div>`;
+  const createProjectModal = () => () => `<div class="overlay" data-act="closeModal"><div class="modal" data-stop="1">
+    <h2>New project</h2>
+    <form data-form="project" style="display:flex;flex-direction:column;gap:14px">
+      <div class="grid2"><div class="field"><label>Name</label><input name="name" placeholder="e.g. Gong weekly digest" required autocomplete="off"></div><div class="field"><label>Client</label><input name="client" placeholder="Internal" autocomplete="off"></div></div>
+      <div class="field"><label>Departments on this project</label><div style="display:flex;gap:6px;flex-wrap:wrap">${Object.values(D()).map((d) => `<label style="display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;cursor:pointer"><input type="checkbox" name="d" value="${d.id}" checked style="margin:0"><span>${esc(d.name)}</span></label>`).join('')}</div></div>
+      <span class="hint">Client rules bind here: a project for a client inherits that client’s policy register, and only that project.</span>
+      <div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn ghost" data-act="closeModal">Cancel</button><button type="submit" class="btn primary">Create project</button></div>
+    </form></div></div>`;
+
+  // ---------- Office visualiser ----------
+  const AGENT_COLORS = { peter: '#4f6bd8', ricky: '#1f7a5c', brody: '#b0632a', archy: '#7a4fa8', cody: '#c98a1c', cody2: '#d9a441', cody3: '#a8731a', verifier: '#5c5f6b', reporter: '#1c6478', finn: '#2a8c8c', you: '#1c1b19' };
+  const ROOM_COLORS = ['#e8eef9', '#e6f2ec', '#f7ece2', '#efe8f6', '#fbf1dd', '#e3f0f3', '#ecebe6'];
+  const OFFICE = { raf: 0, sprites: {}, packets: [], t: 0, lastPacket: 0, edgeIdx: 0, canvas: null, layout: null, bubbles: {}, mapW: 960, mapH: 540, err: null };
+  const scopedDepts = () => Object.values(D()).filter((d) => S.officeScope === 'all' || d.id === S.officeScope);
+  const inScope = (id) => id === 'you' || scopedDepts().some((d) => d.lead === id || d.members.includes(id));
+  const kindColor = (k) => k === 'task' ? '#1f7a5c' : k === 'approval' ? '#c98a1c' : k === 'blocked' ? '#b3261e' : '#4f6bd8';
+
+  function interactions() {
+    const edges = [];
+    const nameToId = (n) => Object.values(AGENTS).find((a) => a.name.toLowerCase().replace(/\s/g, '') === n.toLowerCase());
+    for (const t of tasks()) {
+      if (t.status === 'done') continue;
+      if (t.by !== t.assignee && t.by !== 'you') edges.push({ from: t.by, to: t.assignee, kind: 'task', label: `#${t.id} handed to ${AGENTS[t.assignee].name}`, go: 'task:' + t.id });
+      for (const m of t.thread) { if (m.sys) continue; const src = m.html || m.text || ''; const mm = src.match(/@(\w+)/); if (mm) { const to = nameToId(mm[1]); if (to && to.id !== m.who) edges.push({ from: m.who, to: to.id, kind: 'mention', label: `${m.who === 'you' ? 'You' : AGENTS[m.who].name} asked ${to.name} on #${t.id}`, go: 'task:' + t.id }); } }
+      if (t.blocker && t.blocker.kind === 'teammate') { const mm = t.blocker.text.match(/@(\w+)/); const to = mm && nameToId(mm[1]); if (to) edges.push({ from: t.assignee, to: to.id, kind: 'blocked', label: `${AGENTS[t.assignee].name} blocked on ${to.name} · #${t.id}`, go: 'task:' + t.id }); }
+    }
+    for (const r of Object.values(REVIEWS)) { const t = T[r.task]; if (t.company !== S.company || r.status === 'approved') continue; edges.push({ from: r.author, to: r.reviewer, kind: 'review', label: `${AGENTS[r.reviewer].name} reviewing ${AGENTS[r.author].name} · #${r.task}`, go: 'review:' + r.id }); }
+    for (const a of Object.values(APPROVALS)) { const t = T[a.task]; if (t.company !== S.company || a.status !== 'pending') continue; edges.push({ from: a.who, to: 'you', kind: 'approval', label: `${AGENTS[a.who].name} waiting on you · ${a.tool}`, go: 'approvals' }); }
+    return edges.filter((e) => inScope(e.from) || inScope(e.to));
+  }
+  function agentMode(id) {
+    const mine = tasks().filter((t) => t.assignee === id && t.status !== 'done');
+    if (Object.values(APPROVALS).some((a) => a.who === id && a.status === 'pending' && T[a.task].company === S.company)) return { mode: 'waiting', task: mine[0] };
+    const doing = mine.find((t) => t.status === 'doing'); if (doing) return { mode: AGENTS[id].role === 'reviewer' ? 'reading' : 'typing', task: doing };
+    if (Object.values(REVIEWS).some((r) => r.reviewer === id && r.status !== 'approved' && T[r.task].company === S.company)) return { mode: 'reading', task: mine[0] };
+    const blocked = mine.find((t) => t.status === 'blocked'); if (blocked) return { mode: 'blocked', task: blocked };
+    const rev = mine.find((t) => t.status === 'review'); if (rev) return { mode: 'reading', task: rev };
+    return { mode: 'idle', task: mine[0] };
+  }
+  function officeLayout() {
+    const depts = scopedDepts(); const W = 480; const single = depts.length === 1;
+    const perRow = single ? 1 : Math.min(3, Math.max(1, depts.length)); const roomW = single ? W - 16 : Math.floor((W - 16 - (perRow - 1) * 8) / perRow); const roomH = single ? 196 : 118; const top = 46; const perDeskRow = single ? 5 : 3;
+    const rows = Math.ceil(Math.max(1, depts.length) / perRow); const H = top + rows * (roomH + 10) + 6;
+    const rooms = depts.map((d, i) => { const r = Math.floor(i / perRow), c = i % perRow; const x = 8 + c * (roomW + 8), y = top + r * (roomH + 10); const people = [d.lead, ...d.members]; const gap = Math.floor((roomW - 28) / perDeskRow); const desks = people.map((id, k) => ({ id, x: x + 14 + (k % perDeskRow) * gap + (single ? Math.floor(gap / 2) - 8 : 0), y: y + (single ? 44 : 30) + Math.floor(k / perDeskRow) * (single ? 60 : 40) })); return { d, x, y, w: roomW, h: roomH, color: ROOM_COLORS[Object.keys(D()).indexOf(d.id) % ROOM_COLORS.length], desks, door: { x: x + 6, y: y + roomH - 6 } }; });
+    return { W, H, rooms, owner: { x: W / 2 - 10, y: 12 }, single };
+  }
+  function seatFor(id, L) { for (const r of L.rooms) { const d = r.desks.find((k) => k.id === id); if (d) return { x: d.x + 7, y: d.y + 15, room: r, desk: d }; } return null; }
+  function showOfficeError(e) { OFFICE.err = String(e && e.message || e); const st = document.querySelector('.office-stage'); if (st && !st.querySelector('.office-err')) { const d = document.createElement('div'); d.className = 'office-err'; d.textContent = 'Office failed to draw: ' + OFFICE.err; st.appendChild(d); } stopOffice(); }
+  function startOffice() {
+    stopOffice();
+    const canvas = document.getElementById('officeCanvas'); if (!canvas) return;
+    try {
+      const L = officeLayout(); OFFICE.layout = L; OFFICE.canvas = canvas; canvas.width = L.W * 2; canvas.height = L.H * 2;
+      const ids = new Set(L.rooms.flatMap((r) => r.desks.map((k) => k.id)));
+      for (const id of Object.keys(OFFICE.sprites)) if (!ids.has(id)) delete OFFICE.sprites[id];
+      for (const id of ids) { const s = seatFor(id, L); if (!OFFICE.sprites[id]) OFFICE.sprites[id] = { id, x: s.x, y: s.y, tx: s.x, ty: s.y, wanderAt: 0 }; }
+      OFFICE.packets = []; OFFICE.edgeIdx = 0; OFFICE.lastPacket = 0; OFFICE.bubbles = {}; OFFICE.err = null;
+      canvas.onclick = (e) => { const rect = canvas.getBoundingClientRect(); const sx = (e.clientX - rect.left) / rect.width * L.W, sy = (e.clientY - rect.top) / rect.height * L.H; if (Math.abs(sx - (L.owner.x + 10)) < 20 && sy < 40) { go('approvals'); return; } for (const s of Object.values(OFFICE.sprites)) { if (Math.abs(sx - s.x) < 7 && sy > s.y - 18 && sy < s.y + 2) { const st = agentMode(s.id); go(st.task ? 'task:' + st.task.id : 'mate:' + s.id); return; } } for (const r of L.rooms) { if (sx > r.x && sx < r.x + r.w && sy > r.y && sy < r.y + r.h) { if (S.officeScope === 'all') { S.officeScope = r.d.id; render(); } else go('board:' + r.d.id); return; } } };
+    } catch (e) { showOfficeError(e); return; }
+    const loop = () => { try { OFFICE.t++; stepOffice(); drawOffice(); OFFICE.raf = requestAnimationFrame(loop); } catch (e) { showOfficeError(e); } };
+    loop();
+  }
+  function stopOffice() { if (OFFICE.raf) cancelAnimationFrame(OFFICE.raf); OFFICE.raf = 0; }
+  const posOf = (id) => { if (id === 'you') return { x: OFFICE.layout.owner.x + 10, y: OFFICE.layout.owner.y + 22 }; if (OFFICE.sprites[id]) return OFFICE.sprites[id]; const r = OFFICE.layout.rooms[0]; return r ? { x: r.door.x, y: r.door.y, external: true } : null; };
+  function stepOffice() {
+    const L = OFFICE.layout; const t = OFFICE.t;
+    for (const s of Object.values(OFFICE.sprites)) {
+      const st = agentMode(s.id); const seat = seatFor(s.id, L); if (!seat) continue; s.mode = st.mode;
+      if (st.mode === 'typing' || st.mode === 'reading') { s.tx = seat.x; s.ty = seat.y; }
+      else if (st.mode === 'blocked') { s.tx = seat.x + 12; s.ty = seat.y + 4; }
+      else if (st.mode === 'waiting') { s.tx = L.owner.x + 10 + (Object.keys(OFFICE.sprites).indexOf(s.id) % 3 - 1) * 14; s.ty = L.owner.y + 30; }
+      else if (t > s.wanderAt) { const r = seat.room; s.tx = r.x + 10 + Math.random() * (r.w - 20); s.ty = r.y + 24 + Math.random() * (r.h - 30); s.wanderAt = t + 180 + Math.random() * 240; }
+      const dx = s.tx - s.x, dy = s.ty - s.y, dist = Math.hypot(dx, dy); const sp = 0.55; if (dist > sp) { s.x += dx / dist * sp; s.y += dy / dist * sp; s.walking = true; } else { s.x = s.tx; s.y = s.ty; s.walking = false; }
+    }
+    const edges = interactions();
+    if (edges.length && t - OFFICE.lastPacket > 150) { const e = edges[OFFICE.edgeIdx % edges.length]; OFFICE.edgeIdx++; OFFICE.lastPacket = t; OFFICE.packets.push({ e, p: 0 }); const ticks = document.querySelectorAll('.tick'); ticks.forEach((el) => el.classList.toggle('now', el.dataset.label === e.label)); }
+    for (const pk of OFFICE.packets) { pk.p += 0.011; if (pk.p >= 1 && !pk.done) { pk.done = true; if (OFFICE.sprites[pk.e.to] || pk.e.to === 'you') OFFICE.bubbles[pk.e.to] = { text: pk.e.kind === 'task' ? 'new task' : pk.e.kind === 'mention' ? '@' + (pk.e.from === 'you' ? 'you' : AGENTS[pk.e.from].name.toLowerCase()) : pk.e.kind === 'review' ? 'review' : pk.e.kind === 'approval' ? 'approve?' : 'blocked', until: t + 110, kind: pk.e.kind }; } }
+    OFFICE.packets = OFFICE.packets.filter((pk) => pk.p < 1.15);
+  }
+  function drawOffice() {
+    const c = OFFICE.canvas; if (!c) return; const ctx = c.getContext('2d'); if (!ctx) return; const L = OFFICE.layout; const t = OFFICE.t;
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark' || (!document.documentElement.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    ctx.setTransform(2, 0, 0, 2, 0, 0); ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = dark ? '#1a1b18' : '#efece6'; ctx.fillRect(0, 0, L.W, L.H);
+    for (let x = 0; x < L.W; x += 8) for (let y = 0; y < L.H; y += 8) if ((x + y) % 16 === 0) { ctx.fillStyle = dark ? '#1e1f1c' : '#e9e6df'; ctx.fillRect(x, y, 8, 8); }
+    ctx.fillStyle = dark ? '#3a3a36' : '#8b6b4a'; ctx.fillRect(L.owner.x - 10, L.owner.y + 8, 40, 8);
+    ctx.fillStyle = '#1c1b19'; ctx.fillRect(L.owner.x + 6, L.owner.y + 2, 8, 6); ctx.fillStyle = '#7fd1a8'; ctx.fillRect(L.owner.x + 7, L.owner.y + 3, 6, 4);
+    ctx.fillStyle = dark ? '#9a9d95' : '#6b675f'; ctx.font = '600 6px "IBM Plex Mono", monospace'; ctx.textAlign = 'center'; ctx.fillText('YOU · APPROVALS', L.owner.x + 10, L.owner.y + 24);
+    const pendingN = Object.values(APPROVALS).filter((a) => a.status === 'pending' && T[a.task].company === S.company && inScope(a.who)).length;
+    if (pendingN) { ctx.fillStyle = '#c98a1c'; ctx.fillRect(L.owner.x + 24, L.owner.y - 2, 9, 7); ctx.fillStyle = '#fff'; ctx.font = '700 6px "IBM Plex Mono", monospace'; ctx.fillText(String(pendingN), L.owner.x + 28.5, L.owner.y + 3.5); }
+    for (const r of L.rooms) {
+      ctx.fillStyle = dark ? '#22241f' : r.color; ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = dark ? '#3a3c36' : '#c9c4b8'; ctx.lineWidth = 1; ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+      ctx.fillStyle = dark ? '#3a3c36' : '#d6d2c8'; ctx.fillRect(r.x, r.y, r.w, 12);
+      ctx.fillStyle = dark ? '#ecebe6' : '#1c1b19'; ctx.font = '700 7px "Schibsted Grotesk", sans-serif'; ctx.textAlign = 'left'; ctx.fillText(r.d.name.toUpperCase(), r.x + 5, r.y + 9);
+      ctx.fillStyle = dark ? '#9a9d95' : '#6b675f'; ctx.font = '6px "IBM Plex Mono", monospace'; ctx.textAlign = 'right'; ctx.fillText(POLICY_LABEL[r.d.policy].toLowerCase(), r.x + r.w - 5, r.y + 9);
+      if (L.single) { ctx.fillStyle = dark ? '#4a4034' : '#8b6b4a'; ctx.fillRect(r.door.x - 4, r.door.y - 14, 8, 14); ctx.fillStyle = '#e2b75a'; ctx.fillRect(r.door.x + 1, r.door.y - 7, 1, 1); ctx.fillStyle = dark ? '#9a9d95' : '#6b675f'; ctx.font = '5px "IBM Plex Mono", monospace'; ctx.textAlign = 'left'; ctx.fillText('other departments', r.door.x + 8, r.door.y - 3); }
+      for (const k of r.desks) { const s = OFFICE.sprites[k.id]; const typing = s && s.mode === 'typing' && !s.walking; ctx.fillStyle = dark ? '#4a4034' : '#8b6b4a'; ctx.fillRect(k.x, k.y + 8, 16, 6); ctx.fillStyle = '#1c1b19'; ctx.fillRect(k.x + 5, k.y + 2, 7, 6); ctx.fillStyle = typing ? (t % 40 < 20 ? '#9ec5ff' : '#7fb0f5') : (dark ? '#2c2e29' : '#4a4741'); ctx.fillRect(k.x + 6, k.y + 3, 5, 4); ctx.fillStyle = dark ? '#5c5f58' : '#6b675f'; ctx.font = '5px "IBM Plex Mono", monospace'; ctx.textAlign = 'center'; ctx.fillText(AGENTS[k.id].name + (L.single ? ' · ' + AGENTS[k.id].role : ''), k.x + 8, k.y + 20); }
+    }
+    for (const pk of OFFICE.packets) { const a = posOf(pk.e.from), b = posOf(pk.e.to); if (!a || !b) continue; const p = Math.min(pk.p, 1); const x = a.x + (b.x - a.x) * p, y = a.y - 8 + (b.y - a.y) * p - Math.sin(p * Math.PI) * 14; const col = kindColor(pk.e.kind); ctx.strokeStyle = col; ctx.setLineDash([2, 2]); ctx.beginPath(); ctx.moveTo(a.x, a.y - 8); ctx.quadraticCurveTo((a.x + b.x) / 2, Math.min(a.y, b.y) - 30, b.x, b.y - 8); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = col; ctx.fillRect(x - 3, y - 3, 6, 6); ctx.fillStyle = '#fff'; ctx.fillRect(x - 1, y - 1, 2, 2); }
+    const sorted = Object.values(OFFICE.sprites).sort((a, b) => a.y - b.y);
+    for (const s of sorted) {
+      const col = AGENT_COLORS[s.id] || '#888'; const step = s.walking ? Math.floor(t / 8) % 2 : 0; const x = Math.round(s.x), y = Math.round(s.y);
+      ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(x - 4, y - 1, 8, 2);
+      ctx.fillStyle = '#2b2b2b'; ctx.fillRect(x - 3, y - 4, 2, 4 - (step ? 1 : 0)); ctx.fillRect(x + 1, y - 4, 2, 4 - (step ? 0 : 1));
+      ctx.fillStyle = col; ctx.fillRect(x - 4, y - 11, 8, 7);
+      if (s.mode === 'typing' && !s.walking) { ctx.fillStyle = '#f1c9a5'; ctx.fillRect(x - 5, y - 7 + (t % 20 < 10 ? 0 : 1), 2, 2); ctx.fillRect(x + 3, y - 7 + (t % 20 < 10 ? 1 : 0), 2, 2); }
+      if (s.mode === 'reading' && !s.walking) { ctx.fillStyle = '#fff'; ctx.fillRect(x - 3, y - 9, 6, 4); ctx.fillStyle = '#9a958b'; ctx.fillRect(x - 2, y - 8, 4, 1); ctx.fillRect(x - 2, y - 6, 3, 1); }
+      ctx.fillStyle = '#f1c9a5'; ctx.fillRect(x - 3, y - 16, 6, 5); ctx.fillStyle = s.id === 'verifier' ? '#3b3b44' : s.id === 'finn' ? '#5a3d2b' : '#2b2b2b'; ctx.fillRect(x - 3, y - 17, 6, 2);
+      ctx.fillStyle = '#1c1b19'; ctx.fillRect(x - 2, y - 14, 1, 1); ctx.fillRect(x + 1, y - 14, 1, 1);
+      if (s.mode === 'blocked' || s.mode === 'waiting') { ctx.fillStyle = s.mode === 'blocked' ? '#b3261e' : '#c98a1c'; ctx.fillRect(x + 5, y - 24, 7, 8); ctx.fillStyle = '#fff'; ctx.font = '700 7px "IBM Plex Mono", monospace'; ctx.textAlign = 'center'; ctx.fillText(s.mode === 'blocked' ? '!' : '?', x + 8.5, y - 17.5); }
+      const b = OFFICE.bubbles[s.id]; if (b && b.until > t) { ctx.font = '600 6px "IBM Plex Mono", monospace'; const w = ctx.measureText(b.text).width + 6; ctx.fillStyle = '#fff'; ctx.fillRect(x - w / 2, y - 28, w, 9); ctx.fillStyle = kindColor(b.kind); ctx.fillRect(x - w / 2, y - 28, w, 1); ctx.fillStyle = '#1c1b19'; ctx.textAlign = 'center'; ctx.fillText(b.text, x, y - 21.5); ctx.fillStyle = '#fff'; ctx.fillRect(x - 1, y - 19, 2, 2); }
+    }
+    const yb = OFFICE.bubbles.you; if (yb && yb.until > t) { ctx.font = '600 6px "IBM Plex Mono", monospace'; const w = ctx.measureText(yb.text).width + 6; const x = L.owner.x + 32; ctx.fillStyle = '#fff'; ctx.fillRect(x - w / 2, L.owner.y + 26, w, 9); ctx.fillStyle = '#c98a1c'; ctx.fillRect(x - w / 2, L.owner.y + 26, w, 1); ctx.fillStyle = '#1c1b19'; ctx.textAlign = 'center'; ctx.fillText(yb.text, x, L.owner.y + 32.5); }
+  }
+  function interactionMap() {
+    const depts = scopedDepts(); const edges = interactions(); const W = 960;
+    const external = [...new Set(edges.flatMap((e) => [e.from, e.to]).filter((id) => !inScope(id)))];
+    const cols = depts.length + (external.length ? 1 : 0); const colW = Math.floor((W - 40) / Math.max(1, cols)); const nodes = {}; let maxRows = 1;
+    depts.forEach((d, i) => { const people = [d.lead, ...d.members]; maxRows = Math.max(maxRows, people.length); people.forEach((id, k) => { nodes[id] = { x: 20 + i * colW + colW / 2, y: 130 + k * 64, dept: d }; }); });
+    external.forEach((id, k) => { nodes[id] = { x: 20 + depts.length * colW + colW / 2, y: 130 + k * 64, dept: deptOf(id), ghost: true }; maxRows = Math.max(maxRows, k + 1); });
+    const H = 130 + maxRows * 64 + 10; nodes.you = { x: W / 2, y: 40 }; OFFICE.mapW = W; OFFICE.mapH = H;
+    const ringColor = (id) => { const m = agentMode(id).mode; return m === 'typing' ? 'var(--accent)' : m === 'reading' ? 'var(--info)' : m === 'blocked' ? 'var(--bad)' : m === 'waiting' ? 'var(--warn)' : 'var(--border)'; };
+    const path = (a, b) => { const mx = (a.x + b.x) / 2, my = Math.min(a.y, b.y) - 40; return `M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`; };
+    const roomRect = (i, label, sub, ghost) => `<rect class="room" x="${24 + i * colW}" y="88" width="${colW - 8}" height="${H - 96}" rx="12" ${ghost ? 'stroke-dasharray="6 4" fill="transparent"' : ''}></rect><text class="roomlabel" x="${24 + i * colW + 14}" y="108">${esc(label.toUpperCase())}</text><text class="roomlabel" x="${24 + i * colW + 14}" y="122" style="text-transform:none;letter-spacing:0;font-weight:400">${esc(sub)}</text>`;
+    return `<svg class="map" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Interaction map">
+      <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"></path></marker></defs>
+      ${depts.map((d, i) => roomRect(i, d.name, POLICY_LABEL[d.policy], false)).join('')}${external.length ? roomRect(depts.length, 'Other departments', 'handoffs crossing the boundary', true) : ''}
+      ${edges.map((e) => nodes[e.from] && nodes[e.to] ? `<path class="edge ${e.kind}" d="${path(nodes[e.from], nodes[e.to])}" marker-end="url(#arr)"><title>${esc(e.label)}</title></path>` : '').join('')}
+      ${Object.entries(nodes).map(([id, n]) => `<g class="node" data-go="${id === 'you' ? 'approvals' : (agentMode(id).task ? 'task:' + agentMode(id).task.id : 'mate:' + id)}" ${n.ghost ? 'opacity="0.55"' : ''}><circle class="status-ring" cx="${n.x}" cy="${n.y}" r="22" stroke="${id === 'you' ? 'var(--warn)' : ringColor(id)}"></circle><circle cx="${n.x}" cy="${n.y}" r="17" fill="${AGENT_COLORS[id]}" stroke="var(--surface)"></circle><text x="${n.x}" y="${n.y}" fill="#fff">${id === 'you' ? 'D' : AGENTS[id].name[0]}</text><text class="nlabel" x="${n.x}" y="${n.y + 36}">${id === 'you' ? 'You · approvals' : esc(AGENTS[id].name) + (n.dept && n.dept.lead === id ? ' · lead' : '')}</text><text class="nlabel" x="${n.x}" y="${n.y + 48}" style="fill:var(--muted);font-size:10px">${id === 'you' ? '' : n.ghost ? esc(n.dept ? n.dept.name : 'Unassigned') : esc(AGENTS[id].role)}</text></g>`).join('')}
+    </svg>`;
+  }
+  VIEWS.office = () => {
+    const map = S.officeMode === 'map' ? interactionMap() : '';
+    const L = officeLayout(); const ar = S.officeMode === 'map' ? OFFICE.mapW / OFFICE.mapH : L.W / L.H;
+    const edges = interactions();
+    const modeSegs = `<div class="segs"><button class="seg ${S.officeMode === 'pixel' ? 'active' : ''}" data-officemode="pixel">Pixel office</button><button class="seg ${S.officeMode === 'map' ? 'active' : ''}" data-officemode="map">Interaction map</button></div>`;
+    const scopeSegs = `<div class="segs"><button class="seg ${S.officeScope === 'all' ? 'active' : ''}" data-officescope="all">Whole company</button>${Object.values(D()).map((d) => `<button class="seg ${S.officeScope === d.id ? 'active' : ''}" data-officescope="${d.id}">${esc(d.name)}</button>`).join('')}</div>`;
+    const scopeName = S.officeScope === 'all' ? COMPANIES[S.company].name : (D()[S.officeScope] || {}).name || COMPANIES[S.company].name;
+    return topbar('Office', `${esc(scopeName)} · live`, modeSegs).replace('</span></div><div class="topbar-r">', `</span>${scopeSegs}</div><div class="topbar-r">`) + `
+      <div class="content"><div class="office scroll">
+        <div class="office-stage" style="aspect-ratio: ${ar.toFixed(3)}; min-height: ${S.officeMode === 'map' ? 320 : 360}px">${S.officeMode === 'pixel' ? '<canvas id="officeCanvas" aria-label="Pixel office"></canvas>' : map}</div>
+        <div class="legend">${S.officeMode === 'pixel' ? `<span><span class="sw" style="background:#7fb0f5"></span>screen on = building</span><span><span class="sw" style="background:#fff;border:1px solid var(--border)"></span>paper = reading or reviewing</span><span><span class="sw" style="background:var(--bad)"></span>! = blocked</span><span><span class="sw" style="background:var(--warn)"></span>? = waiting on you, at your desk</span><span>Arcs are handoffs: <b style="color:var(--accent)">task</b>, <b style="color:var(--info)">mention or review</b>, <b style="color:var(--warn)">approval</b>, <b style="color:var(--bad)">blocked</b>. Click a room to zoom to that department, a teammate to open their task, your desk for approvals.</span>` : `<span><span class="sw" style="background:var(--accent)"></span>created a task for</span><span><span class="sw" style="background:var(--info)"></span>mentioned (dashed) or reviewing (solid)</span><span><span class="sw" style="background:var(--warn)"></span>waiting on you</span><span><span class="sw" style="background:var(--bad)"></span>blocked on</span><span>Ring colour is what they are doing right now. Faded nodes are teammates in other departments.</span>`}</div>
+        <div style="display:flex;flex-direction:column;gap:8px"><span class="eyebrow">Handoffs in flight · ${edges.length}</span><div class="ticker">${edges.map((e) => `<button class="tick" data-label="${esc(e.label)}" data-go="${e.go}">${av(e.from, 's')}<span style="color:var(--faint)">${I.arrow}</span>${av(e.to, 's')}<span style="flex-grow:1;text-align:left">${esc(e.label)}</span><span class="pill ${e.kind === 'task' ? 'ok' : e.kind === 'approval' ? 'warn' : e.kind === 'blocked' ? 'bad' : 'info'}">${e.kind}</span></button>`).join('') || '<div class="empty">Nothing moving between teammates right now.</div>'}</div></div>
+      </div></div>`;
+  };
+  function syncOffice() { if (S.view === 'office' && S.officeMode === 'pixel') startOffice(); else stopOffice(); }
+
+  // ---------- Costs ----------
+  const PRICES = {
+    'Claude Opus 5': { kind: 'api', input: 15, output: 75, cached: 1.5 },
+    'Claude Sonnet 5': { kind: 'api', input: 3, output: 15, cached: 0.3 },
+    'Claude Code seat': { kind: 'seat', month: 200 },
+    'Codex seat': { kind: 'seat', month: 200 },
+    'OpenCode seat': { kind: 'seat', month: 0 },
+  };
+  const modelOf = (a) => a.brain.split(' · ')[0];
+  const engineOf = (a) => a.brain.split(' · ')[1] || '';
+  // sample usage per teammate this week (tokens), deterministic from id
+  const usageFor = (id) => { let h = 0; for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) % 9973; const base = 120000 + (h % 700) * 1000; const running = tasks().filter((t) => t.assignee === id && t.status === 'doing').length; const inTok = Math.round(base * (1 + running * 0.6)); return { input: inTok, output: Math.round(inTok * 0.28), cached: Math.round(inTok * 0.45) }; };
+  const apiCost = (u, model) => { const p = PRICES[model]; if (!p || p.kind !== 'api') return 0; return (u.input * p.input + u.output * p.output + u.cached * p.cached) / 1e6; };
+  const money = (n) => '£' + n.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
+  const BUDGETS = { gtm: { company: 900, engineering: 420, research: 260, marketing: 120, finance: 100 }, labs: { company: 300, build: 200, docs: 100 } };
+  function costRows() {
+    const depts = Object.values(D()); const rows = [];
+    for (const d of depts) { for (const id of [d.lead, ...d.members]) { const a = AGENTS[id]; const u = usageFor(id); const model = modelOf(a); const seat = PRICES[engineOf(a) + ' seat'] || { month: 0 }; rows.push({ id, dept: d, model, engine: engineOf(a), u, api: apiCost(u, model), seat: seat.month / 4.33, runs: tasks().filter((t) => t.assignee === id && t.status !== 'todo').length }); } }
+    return rows;
+  }
+  VIEWS.costs = () => {
+    const rows = costRows(); const mode = S.costMode || 'api'; const val = (r) => mode === 'api' ? r.api : r.seat;
+    const total = rows.reduce((s, r) => s + val(r), 0); const totalTok = rows.reduce((s, r) => s + r.u.input + r.u.output, 0);
+    const budgets = BUDGETS[S.company] || { company: 500 }; const budget = budgets.company; const pct = Math.min(100, total / budget * 100); const dayOfWeek = 4; const forecast = total / dayOfWeek * 7;
+    const byDept = Object.values(D()).map((d) => { const rs = rows.filter((r) => r.dept.id === d.id); const v = rs.reduce((s, r) => s + val(r), 0); const b = budgets[d.id] || Math.round(budget / Object.keys(D()).length); return { d, v, b, pct: Math.min(100, v / b * 100), tok: rs.reduce((s, r) => s + r.u.input + r.u.output, 0), n: rs.length }; });
+    const byModel = Object.entries(rows.reduce((acc, r) => { const k = mode === 'api' ? r.model : r.engine + ' seat'; acc[k] = acc[k] || { v: 0, tok: 0, n: 0 }; acc[k].v += val(r); acc[k].tok += r.u.input + r.u.output; acc[k].n++; return acc; }, {}));
+    const byProject = Object.values(P()).map((p) => { const ids = new Set(tasks().filter((t) => t.project === p.id).map((t) => t.assignee)); const v = rows.filter((r) => ids.has(r.id)).reduce((s, r) => s + val(r) / Math.max(1, tasks().filter((t) => t.assignee === r.id).length) * tasks().filter((t) => t.assignee === r.id && t.project === p.id).length, 0); return { p, v }; }).sort((a, b) => b.v - a.v);
+    const alertPill = (pc) => pc >= 100 ? '<span class="pill bad">Over budget</span>' : pc >= 80 ? '<span class="pill warn">80% alert</span>' : '<span class="pill ok">On track</span>';
+    const bar = (pc, col) => `<div class="meter" style="width:120px"><div style="width:${pc.toFixed(0)}%;background:${pc >= 100 ? 'var(--bad)' : pc >= 80 ? 'var(--warn)' : (col || 'var(--accent)')}"></div></div>`;
+    const segs = `<div class="segs"><button class="seg ${mode === 'api' ? 'active' : ''}" data-costmode="api">API billing</button><button class="seg ${mode === 'seat' ? 'active' : ''}" data-costmode="seat">Seat billing</button></div>`;
+    return topbar('Costs', `${esc(COMPANIES[S.company].name)} · this week, Monday to today`, segs) + `
+      <div class="content"><div class="company scroll" style="gap:22px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+          <div class="card" style="padding:16px 18px;display:flex;flex-direction:column;gap:6px"><span class="eyebrow">Spend so far</span><span style="font-size:26px;font-weight:700;letter-spacing:-0.02em" class="mono">${money(total)}</span><span class="hint">${fmtTok(totalTok)} tokens · ${rows.length} teammates</span></div>
+          <div class="card" style="padding:16px 18px;display:flex;flex-direction:column;gap:6px"><span class="eyebrow">Weekly budget</span><span style="font-size:26px;font-weight:700;letter-spacing:-0.02em" class="mono">${money(budget)}</span><div style="display:flex;align-items:center;gap:10px">${bar(pct)}<span class="hint">${pct.toFixed(0)}% used</span></div></div>
+          <div class="card" style="padding:16px 18px;display:flex;flex-direction:column;gap:6px"><span class="eyebrow">Forecast to Sunday</span><span style="font-size:26px;font-weight:700;letter-spacing:-0.02em;color:${forecast > budget ? 'var(--bad)' : 'var(--ink)'}" class="mono">${money(forecast)}</span><span class="hint">${forecast > budget ? 'Will exceed budget at this pace' : 'Within budget at this pace'}</span></div>
+          <div class="card" style="padding:16px 18px;display:flex;flex-direction:column;gap:6px"><span class="eyebrow">If billed the other way</span><span style="font-size:26px;font-weight:700;letter-spacing:-0.02em" class="mono">${money(rows.reduce((s, r) => s + (mode === 'api' ? r.seat : r.api), 0))}</span><span class="hint">${mode === 'api' ? 'Same work on subscription seats' : 'Same work on API tokens'}</span></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px">
+          <div class="card" style="padding:0;overflow:hidden"><div style="padding:14px 18px;border-bottom:1px solid var(--border-soft)" class="eyebrow">By department</div><table style="width:100%;border-collapse:collapse;font-size:13px">${byDept.map((x) => `<tr style="border-bottom:1px solid var(--border-soft)"><td style="padding:10px 18px"><a data-go="board:${x.d.id}" style="font-weight:600;color:var(--ink)">${esc(x.d.name)}</a><div class="hint">${x.n} teammates · ${fmtTok(x.tok)} tokens</div></td><td style="padding:10px 8px">${bar(x.pct)}</td><td style="padding:10px 8px;text-align:right" class="mono">${money(x.v)}<div class="hint">of ${money(x.b)}</div></td><td style="padding:10px 18px 10px 8px;text-align:right">${alertPill(x.pct)}</td></tr>`).join('')}</table></div>
+          <div class="card" style="padding:0;overflow:hidden"><div style="padding:14px 18px;border-bottom:1px solid var(--border-soft)" class="eyebrow">By ${mode === 'api' ? 'model' : 'engine'}</div><table style="width:100%;border-collapse:collapse;font-size:13px">${byModel.map(([k, x]) => `<tr style="border-bottom:1px solid var(--border-soft)"><td style="padding:10px 18px"><span style="font-weight:600">${esc(k)}</span><div class="hint">${x.n} teammates · ${fmtTok(x.tok)} tokens</div></td><td style="padding:10px 18px;text-align:right" class="mono">${money(x.v)}</td></tr>`).join('')}<tr><td style="padding:10px 18px" class="hint">Prices are samples. Set real ones in Settings → Model prices.</td><td></td></tr></table></div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden"><div style="padding:14px 18px;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center"><span class="eyebrow">By teammate</span><span class="hint">Click a row for their tasks</span></div>
+          <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;min-width:720px"><thead><tr style="color:var(--muted);font-size:12px"><th style="text-align:left;padding:8px 18px;font-weight:600">Teammate</th><th style="text-align:left;padding:8px;font-weight:600">${mode === 'api' ? 'Model' : 'Engine'}</th><th style="text-align:right;padding:8px;font-weight:600">Input</th><th style="text-align:right;padding:8px;font-weight:600">Output</th><th style="text-align:right;padding:8px;font-weight:600">Cached</th><th style="text-align:right;padding:8px;font-weight:600">Runs</th><th style="text-align:right;padding:8px 18px;font-weight:600">Cost</th></tr></thead>
+          <tbody>${rows.sort((a, b) => val(b) - val(a)).map((r) => `<tr style="border-bottom:1px solid var(--border-soft);cursor:pointer" data-go="mate:${r.id}"><td style="padding:9px 18px"><span style="display:inline-flex;align-items:center;gap:8px">${av(r.id, 's')}<span><b>${esc(AGENTS[r.id].name)}</b> <span class="hint">· ${esc(r.dept.name)}</span></span></span></td><td style="padding:9px 8px">${esc(mode === 'api' ? r.model : r.engine)}</td><td style="padding:9px 8px;text-align:right" class="mono">${fmtTok(r.u.input)}</td><td style="padding:9px 8px;text-align:right" class="mono">${fmtTok(r.u.output)}</td><td style="padding:9px 8px;text-align:right" class="mono">${fmtTok(r.u.cached)}</td><td style="padding:9px 8px;text-align:right" class="mono">${r.runs}</td><td style="padding:9px 18px;text-align:right" class="mono">${money(val(r))}</td></tr>`).join('')}</tbody></table></div></div>
+        <div class="card" style="padding:0;overflow:hidden"><div style="padding:14px 18px;border-bottom:1px solid var(--border-soft)" class="eyebrow">By project</div><table style="width:100%;border-collapse:collapse;font-size:13px">${byProject.map((x) => `<tr style="border-bottom:1px solid var(--border-soft)"><td style="padding:10px 18px"><a data-go="project:${x.p.id}" style="font-weight:600;color:var(--ink)">${esc(x.p.name)}</a> <span class="hint">· ${esc(x.p.client)}</span></td><td style="padding:10px 18px;text-align:right" class="mono">${money(x.v)}</td></tr>`).join('') || '<tr><td style="padding:10px 18px" class="hint">No projects yet</td></tr>'}</table></div>
+        <div class="card" style="padding:14px 18px;display:flex;flex-direction:column;gap:8px"><span class="eyebrow">Model prices · per 1M tokens, or per seat per month</span><div style="display:flex;gap:8px;flex-wrap:wrap">${Object.entries(PRICES).map(([k, p]) => `<span class="tool" style="padding:5px 9px;font-size:12px">${esc(k)} · ${p.kind === 'api' ? `in ${money(p.input)} · out ${money(p.output)} · cached ${money(p.cached)}` : `${money(p.month)} / seat / month`}</span>`).join('')}</div><span class="hint">Sample figures for the prototype. In the build these are editable per company, and a company that runs on API keys sees exactly what each department costs; one on seats sees seats and utilisation instead.</span></div>
+      </div></div>`;
+  };
+
+  // ---------- Peter as company architect ----------
+  const NEW_AGENT_PALETTE = [['#e0f0f4', '#1c6478'], ['#ece4f6', '#63409a'], ['#f6e7dd', '#9a4f1c'], ['#e3e8fa', '#2f4bb5'], ['#e2f1ea', '#1f6b52']];
+  function designTeamModal(st) {
+    return () => `<div class="overlay" data-act="closeModal"><div class="modal" data-stop="1" style="width:640px">
+      <div style="display:flex;align-items:center;gap:10px">${av('peter', 'l')}<h2 style="margin:0">Ask Peter to design a team</h2></div>
+      ${st.phase === 'input' ? `<form data-form="design" style="display:flex;flex-direction:column;gap:12px"><div class="field"><label>What do you need this team to do?</label><textarea id="designInput" style="min-height:96px">Handle customer support for our participants: answer tickets from the inbox, escalate anything medical, and keep a weekly summary of themes.</textarea></div><span class="hint">Peter proposes a department, its teammates with personas, the MCP toolbox each needs, and a write policy. Nothing is created until you accept.</span><div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn ghost" data-act="closeModal">Cancel</button><button type="submit" class="btn primary">Ask Peter</button></div></form>` : ''}
+      ${st.phase === 'thinking' ? `<div class="thinking"><span class="spin"></span><span>Peter is reading the brief, checking which MCPs are already plugged in, and drafting a roster…</span></div>` : ''}
+      ${st.phase === 'proposal' ? `<div style="font-size:13px;color:var(--ink-2);line-height:1.5">Peter proposes a <b>${esc(st.dept.name)}</b> department with <b>${st.dept.policy === 'ask' ? 'every write asking you' : st.dept.policy === 'drafts' ? 'drafts automatic, live writes asking' : 'read-only tools'}</b>. ${esc(st.dept.reason)}</div>
+        <div class="plan">${st.roster.map((r, i) => `<div class="plan-item" style="align-items:flex-start;flex-direction:column;gap:6px"><div style="display:flex;align-items:center;gap:10px;width:100%"><span class="av s" style="background:${r.bg};color:${r.fg}">${r.name[0]}</span><span style="flex-grow:1"><b>${esc(r.name)}</b> · ${esc(r.role)}${i === 0 ? ' · lead' : ''}</span><span class="hint">${esc(r.brain)}</span></div><span class="hint" style="line-height:1.45">${esc(r.persona)}</span><div style="display:flex;gap:6px;flex-wrap:wrap">${r.tools.map((t) => `<span class="tool ${t.gate ? 'gate' : ''}">${esc(t.m)} · ${esc(t.mode)}</span>`).join('')}</div></div>`).join('')}</div>
+        <span class="hint">${st.needsMcp ? `Peter notes: <b>${esc(st.needsMcp)}</b> is not plugged in yet. Accepting creates the team with that toolbox empty until you add it.` : 'All toolboxes use MCPs that are already plugged in.'}</span>
+        <div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" data-act="closeModal">Not now</button><button class="btn primary" data-act="acceptDesign">Create this department</button></div>` : ''}
+    </div></div>`;
+  }
+  function startDesign(brief) {
+    const st = { phase: 'thinking' }; S.modal = designTeamModal(st); render();
+    setTimeout(() => {
+      const b = brief.toLowerCase();
+      const finance = /finance|invoice|xero|reconcil|ledger|payroll/.test(b); const support = /support|ticket|inbox|customer|helpdesk/.test(b); const sales = /sales|outbound|sequence|prospect|pipeline/.test(b);
+      st.dept = finance ? { name: 'Finance', policy: 'ask', reason: 'Money moves, so every write to the ledger comes to you with the exact records.' } : sales ? { name: 'Sales Development', policy: 'drafts', reason: 'Drafting sequences is safe to automate; sending anything to a prospect asks first.' } : support ? { name: 'Customer Support', policy: 'ask', reason: 'Replies go to real people and some may be medical, so every outbound message asks first and anything medical is escalated, never answered.' } : { name: 'New Team', policy: 'drafts', reason: 'Drafts are automatic; anything that reaches a live system asks first.' };
+      const nm = (n) => n;
+      st.roster = finance ? [
+        { name: 'Finn 2', role: 'finance lead', brain: 'Claude Opus 5 · Claude Code', persona: 'Runs the close. Reconciles, matches, prepares journals, never posts without approval.', tools: [{ m: 'xero', mode: 'read' }, { m: 'xero', mode: 'write ⋅ approval', gate: true }] },
+        { name: 'Audrey', role: 'AP analyst', brain: 'Claude Sonnet 5 · Claude Code', persona: 'Matches supplier invoices to bank lines and flags gaps. Account numbers never appear in notes.', tools: [{ m: 'xero', mode: 'read' }] },
+        { name: 'Verifier', role: 'reviewer', brain: 'Claude Opus 5 · Claude Code', persona: 'Checks every reconciliation for leaks and unsupported claims before it reaches you.', tools: [] } ]
+      : support ? [
+        { name: 'Sam', role: 'support lead', brain: 'Claude Opus 5 · Claude Code', persona: 'Owns the inbox. Triages tickets, drafts replies in the approved tone, escalates anything medical to a human immediately, never answers it.', tools: [{ m: 'gmail', mode: 'read' }, { m: 'gmail', mode: 'send ⋅ approval', gate: true }, { m: 'hubspot', mode: 'read' }] },
+        { name: 'Tess', role: 'support agent', brain: 'Claude Sonnet 5 · Claude Code', persona: 'Drafts first replies for routine questions using the knowledge base. Every draft goes through Sam.', tools: [{ m: 'gmail', mode: 'read' }, { m: 'browser', mode: 'read' }] },
+        { name: 'Reporter', role: 'reporting', brain: 'Claude Sonnet 5 · Claude Code', persona: 'Writes the weekly themes summary from closed tickets, no personal data included.', tools: [{ m: 'slack', mode: 'draft' }] } ]
+      : sales ? [
+        { name: 'Sid', role: 'SDR lead', brain: 'Claude Opus 5 · Claude Code', persona: 'Builds sequences from research, never sends without approval.', tools: [{ m: 'hubspot', mode: 'read' }, { m: 'hubspot', mode: 'write ⋅ approval', gate: true }] },
+        { name: 'Ricky', role: 'researcher', brain: 'Claude Sonnet 5 · Claude Code', persona: 'Account research with sources.', tools: [{ m: 'browser', mode: 'read' }] } ]
+      : [
+        { name: 'Lead', role: 'team lead', brain: 'Claude Opus 5 · Claude Code', persona: 'Splits work, reviews output, escalates at gates.', tools: [] },
+        { name: 'Maker', role: 'specialist', brain: 'Claude Sonnet 5 · Claude Code', persona: 'Does the work in drafts.', tools: [{ m: 'browser', mode: 'read' }] } ];
+      st.roster.forEach((r, i) => { const pal = NEW_AGENT_PALETTE[i % NEW_AGENT_PALETTE.length]; r.bg = pal[0]; r.fg = pal[1]; });
+      st.needsMcp = st.roster.some((r) => r.tools.some((t) => !MCPS[t.m])) ? st.roster.flatMap((r) => r.tools).find((t) => !MCPS[t.m]).m : null;
+      st.phase = 'proposal'; S.modal = designTeamModal(st); OFFICE.design = st; render();
+    }, 1500);
+  }
+  function acceptDesign() {
+    const st = OFFICE.design; if (!st) return;
+    const id = st.dept.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + (++seq);
+    const ids = st.roster.map((r) => { const existing = Object.values(AGENTS).find((a) => a.name === r.name && a.role === r.role); if (existing) return existing.id; const aid = 'a' + (++seq); AGENTS[aid] = { id: aid, name: r.name, role: r.role, dept: id, brain: r.brain, tools: [...new Set(r.tools.map((t) => t.m).filter((m) => MCPS[m]))], bg: r.bg, fg: r.fg }; PERSONAS[aid] = r.persona; TOOLMODES[aid] = {}; for (const m of AGENTS[aid].tools) { TOOLMODES[aid][m] = {}; for (const tl of MCPS[m].tools) TOOLMODES[aid][m][tl.t] = tl.kind === 'read' ? 'read' : 'ask'; } return aid; });
+    D()[id] = { id, name: st.dept.name, lead: ids[0], members: ids.slice(1), policy: st.dept.policy };
+    feedPush({ who: 'peter', html: `<b>Peter</b> designed the <b>${esc(st.dept.name)}</b> department and you accepted it`, meta: `now · ${ids.length} teammates · ${POLICY_LABEL[st.dept.policy]}`, go: 'org' });
+    S.modal = null; S.view = 'org'; OFFICE.design = null; toast(`${st.dept.name} created with ${ids.length} teammates`); render();
+  }
+
+  VIEWS.settings = () => topbar('Settings', '') + `<div class="content"><div class="approvals scroll" style="gap:12px">${[
+      ['Deployment', 'Helm chart · 1 board pod, 3 worker pods, autoscale 1 to 20 on queue depth'],
+      ['Secrets', 'Names only. N8N_API, HUBSPOT_APP, SLACK_BOT, VMS_SMTP resolve from the cluster secret store at run time.'],
+      ['Git', 'Pull requests open against gtm-automations. Merges to main need an owner.'],
+      ['Budgets', '3M tokens per week across the company. Departments: Engineering 1.5M, Research 1M, Marketing Ops 0.5M.'],
+      ['Notifications', 'Needs-you items go to Slack #gtm-studio and email.'] ].map(([k, v]) => `<div class="card" style="padding:16px 18px;display:flex;flex-direction:column;gap:4px"><span style="font-weight:600">${k}</span><span style="font-size:13px;color:var(--ink-2);line-height:1.5">${v}</span></div>`).join('')}</div></div>`;
+
+  // ---------- Modals ----------
+  function goalModal(state) {
+    return () => `<div class="overlay" data-act="closeModal"><div class="modal" data-stop="1">
+      <h2>New goal</h2>
+      ${state.phase === 'input' ? `<form data-form="goal" style="display:flex;flex-direction:column;gap:12px"><div class="field"><label>Tell Peter what you want done</label><textarea id="goalInput" placeholder="e.g. Map every downstream process of the VMS workflow and give me diagrams with notes" style="min-height:96px">Send a weekly digest of Gong calls with next steps to #sales every Friday</textarea></div><div style="display:flex;justify-content:flex-end;gap:8px"><button type="button" class="btn ghost" data-act="closeModal">Cancel</button><button type="submit" class="btn primary">Hand to Peter</button></div></form>` : ''}
+      ${state.phase === 'thinking' ? `<div class="thinking"><span class="spin"></span><span>Peter is reading the goal and splitting it into tasks…</span></div>` : ''}
+      ${state.phase === 'plan' ? `<div style="font-size:13px;color:var(--ink-2);line-height:1.5">Peter proposes four tasks for <b>Engineering</b> and <b>Research</b>. Gong is read-only for everyone; the Slack post is a draft until you approve the first one.</div><div class="plan">${state.plan.map((p) => `<div class="plan-item">${av(p.a, 's')}<span class="t">${esc(p.t)}</span><span class="role">${esc(AGENTS[p.a].role)}</span></div>`).join('')}</div><div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" data-act="closeModal">Not now</button><button class="btn primary" data-act="acceptPlan">Put it on the board</button></div>` : ''}
+    </div></div>`;
+  }
+  const simpleModal = (title, body) => () => `<div class="overlay" data-act="closeModal"><div class="modal" data-stop="1"><h2>${title}</h2><div style="font-size:13px;color:var(--ink-2);line-height:1.55">${body}</div><div style="display:flex;justify-content:flex-end"><button class="btn primary" data-act="closeModal">Close</button></div></div></div>`;
+
+  // ---------- Navigation ----------
+  function go(target) {
+    if (!target) return;
+    const [kind, id] = target.split(':');
+    if (kind === 'board') { S.view = 'board'; if (id) S.deptFilter = id; S.selTask = null; }
+    else if (kind === 'task') { const t = T[Number(id)]; if (!t) return; S.view = 'board'; S.deptFilter = 'all'; S.selTask = t.id; S.drawerTab = 'conv'; }
+    else if (kind === 'review') { S.view = 'reviews'; S.selReview = id; S.selFile = REVIEWS[id].id === 'r142' ? 1 : 0; }
+    else if (kind === 'approvals') { S.view = 'approvals'; }
+    else if (kind === 'agent' || kind === 'mate') { S.view = 'team'; S.selMate = id; }
+    else if (kind === 'project') { S.view = 'board'; S.project = id; S.deptFilter = 'all'; S.selTask = null; }
+    else if (VIEWS[kind]) { S.view = kind; }
+    render();
+  }
+  function switchCompany(id) {
+    S.company = id; S.project = 'all'; S.deptFilter = 'all'; S.selTask = null; S.companyMenu = false; S.officeScope = 'all';
+    const firstDept = Object.values(D())[0];
+    S.selMate = firstDept ? firstDept.lead : 'peter';
+    const firstReview = Object.values(REVIEWS).find((r) => T[r.task].company === id);
+    S.selReview = firstReview ? firstReview.id : S.selReview;
+    if (S.view === 'reviews' && !firstReview) S.view = 'company';
+    render();
+  }
+
+  // ---------- Actions ----------
+  function bind() {
+    const app = document.getElementById('app');
+    app.querySelectorAll('[data-view]').forEach((el) => el.addEventListener('click', () => { S.view = el.dataset.view; S.companyMenu = false; if (S.view !== 'board') S.selTask = null; render(); }));
+    app.querySelectorAll('[data-company]').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); switchCompany(el.dataset.company); }));
+    app.querySelectorAll('[data-projsel]').forEach((el) => el.addEventListener('change', () => { S.project = el.value; S.selTask = null; render(); }));
+    app.querySelectorAll('[data-cell]').forEach((el) => el.addEventListener('click', () => {
+      const [aid, did] = el.dataset.cell.split('|'); const d = D()[did]; const a = AGENTS[aid];
+      if (d.lead === aid) { const next = d.members[0]; if (!next) { toast(`${d.name} needs a lead. Add another member first.`); return; } d.lead = next; d.members = d.members.filter((x) => x !== next); toast(`${AGENTS[next].name} now leads ${d.name}. ${a.name} removed.`); }
+      else if (d.members.includes(aid)) { d.members = d.members.filter((x) => x !== aid); const old = d.lead; d.members.push(old); d.lead = aid; toast(`${a.name} now leads ${d.name}`); }
+      else { d.members.push(aid); toast(`${a.name} added to ${d.name}`); }
+      render();
+    }));
+    app.querySelectorAll('[data-deptdel]').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); const d = D()[el.dataset.deptdel]; const open = tasks().filter((t) => t.dept === d.id && t.status !== 'done').length; if (open) { toast(`${d.name} still has ${open} open task${open > 1 ? 's' : ''}. Move or finish them first.`); return; } delete D()[d.id]; toast(`${d.name} dissolved. Teammates keep their toolboxes.`); render(); }));
+    app.querySelectorAll('[data-filter]').forEach((el) => el.addEventListener('click', () => { S.deptFilter = el.dataset.filter; render(); }));
+    app.querySelectorAll('[data-officemode]').forEach((el) => el.addEventListener('click', () => { S.officeMode = el.dataset.officemode; render(); }));
+    app.querySelectorAll('[data-officescope]').forEach((el) => el.addEventListener('click', () => { S.officeScope = el.dataset.officescope; render(); }));
+    app.querySelectorAll('[data-costmode]').forEach((el) => el.addEventListener('click', () => { S.costMode = el.dataset.costmode; render(); }));
+    app.querySelectorAll('[data-task]').forEach((el) => {
+      el.addEventListener('click', () => { const id = Number(el.dataset.task); if (T[id].status === 'done') { toast('#' + id + ' is done. Open Activity for the history.'); return; } S.selTask = S.selTask === id ? null : id; S.drawerTab = 'conv'; render(); });
+      el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', el.dataset.task); el.classList.add('dragging'); });
+      el.addEventListener('dragend', () => el.classList.remove('dragging'));
+    });
+    app.querySelectorAll('.col').forEach((col) => {
+      col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('over'); });
+      col.addEventListener('dragleave', () => col.classList.remove('over'));
+      col.addEventListener('drop', (e) => { e.preventDefault(); col.classList.remove('over'); const id = Number(e.dataTransfer.getData('text/plain')); if (!id) return; moveTask(id, col.dataset.col); });
+    });
+    app.querySelectorAll('[data-tab]').forEach((el) => el.addEventListener('click', () => { S.drawerTab = el.dataset.tab; render(); }));
+    app.querySelectorAll('[data-file]').forEach((el) => el.addEventListener('click', () => { S.selFile = Number(el.dataset.file); render(); }));
+    app.querySelectorAll('[data-review]').forEach((el) => el.addEventListener('click', () => { S.selReview = el.dataset.review; S.selFile = 0; render(); }));
+    app.querySelectorAll('[data-mate]').forEach((el) => el.addEventListener('click', () => { S.selMate = el.dataset.mate; render(); }));
+    app.querySelectorAll('[data-mcp]').forEach((el) => el.addEventListener('click', () => { const a = AGENTS[S.selMate]; const m = el.dataset.mcp; if (a.tools.includes(m)) { a.tools = a.tools.filter((x) => x !== m); toast(`${MCPS[m].name} removed from ${a.name}’s toolbox`); } else { a.tools.push(m); TOOLMODES[a.id][m] = TOOLMODES[a.id][m] || Object.fromEntries(MCPS[m].tools.map((t) => [t.t, defaultMode(t.kind, t.t)])); toast(`${MCPS[m].name} plugged into ${a.name}’s toolbox`); } render(); }));
+    app.querySelectorAll('[data-mode]').forEach((el) => el.addEventListener('click', () => { const [m, t, k] = el.dataset.mode.split('|'); TOOLMODES[S.selMate][m][t] = k; render(); }));
+    app.querySelectorAll('[data-approve]').forEach((el) => el.addEventListener('click', () => decideApproval(el.dataset.approve, true)));
+    app.querySelectorAll('[data-reject]').forEach((el) => el.addEventListener('click', () => decideApproval(el.dataset.reject, false)));
+    app.querySelectorAll('[data-resolve]').forEach((el) => el.addEventListener('click', () => { REVIEWS[S.selReview].comments[el.dataset.resolve].resolved = true; toast('Comment resolved'); render(); }));
+    app.querySelectorAll('[data-addc]').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); toast('In the build this opens an inline comment on that line'); }));
+    app.querySelectorAll('[data-go]').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); go(el.dataset.go); }));
+    app.querySelectorAll('[data-act]').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); act(el.dataset.act); }));
+    app.querySelectorAll('form[data-form="msg"]').forEach((f) => f.addEventListener('submit', (e) => { e.preventDefault(); sendMsg(f.querySelector('input').value); }));
+    app.querySelectorAll('form[data-form="reply"]').forEach((f) => f.addEventListener('submit', (e) => { e.preventDefault(); const v = f.querySelector('input').value.trim(); if (!v) return; REVIEWS[S.selReview].comments[f.dataset.cid].msgs.push({ who: 'you', when: 'now', text: v }); render(); }));
+    const root = document.getElementById('modal-root');
+    root.querySelectorAll('[data-stop]').forEach((el) => el.addEventListener('click', (e) => e.stopPropagation()));
+    root.querySelectorAll('[data-act]').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); act(el.dataset.act); }));
+    root.querySelectorAll('form[data-form="goal"]').forEach((f) => f.addEventListener('submit', (e) => { e.preventDefault(); startPlanning(f.querySelector('textarea').value); }));
+    root.querySelectorAll('form[data-form="design"]').forEach((f) => f.addEventListener('submit', (e) => { e.preventDefault(); startDesign(f.querySelector('textarea').value); }));
+    root.querySelectorAll('form[data-form="dept"]').forEach((f) => f.addEventListener('submit', (e) => {
+      e.preventDefault(); const fd = new FormData(f); const name = String(fd.get('name') || '').trim(); if (!name) return;
+      const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'dept-' + (++seq);
+      const lead = String(fd.get('lead')); const members = fd.getAll('m').map(String).filter((m) => m !== lead);
+      D()[id] = { id, name, lead, members, policy: String(fd.get('policy')) };
+      const tpl = DEPT_TEMPLATES[String(fd.get('tpl'))];
+      feedPush({ who: 'you', html: `<b>You</b> created the <b>${esc(name)}</b> department${tpl && tpl.roles.length ? ` from the ${esc(tpl.name)} template` : ''}`, meta: `now · ${AGENTS[lead].name} leads · ${members.length} member${members.length === 1 ? '' : 's'}`, go: 'org' });
+      S.modal = null; S.view = 'org'; toast(`${name} created`); render();
+    }));
+    root.querySelectorAll('form[data-form="company"]').forEach((f) => f.addEventListener('submit', (e) => {
+      e.preventDefault(); const fd = new FormData(f); const name = String(fd.get('name') || '').trim(); if (!name) return;
+      const id = 'co-' + (++seq); const tpl = String(fd.get('tpl'));
+      const depts = tpl === 'gtm' ? { engineering: { id: 'engineering', name: 'Engineering', lead: 'peter', members: ['cody', 'verifier'], policy: 'drafts' }, research: { id: 'research', name: 'Research', lead: 'ricky', members: ['brody'], policy: 'readonly' }, marketing: { id: 'marketing', name: 'Marketing Ops', lead: 'reporter', members: ['cody3'], policy: 'ask' } }
+        : tpl === 'studio' ? { build: { id: 'build', name: 'Build cell', lead: 'peter', members: ['cody', 'cody2', 'verifier'], policy: 'drafts' }, docs: { id: 'docs', name: 'Docs shop', lead: 'reporter', members: ['brody'], policy: 'readonly' }, audit: { id: 'audit', name: 'Audit office', lead: 'verifier', members: [], policy: 'readonly' } }
+        : tpl === 'agency' ? { research: { id: 'research', name: 'Research', lead: 'ricky', members: ['brody', 'archy'], policy: 'readonly' } } : {};
+      COMPANIES[id] = { id, name, template: f.querySelector('select[name="tpl"] option:checked').textContent.split(' · ')[0], depts, projects: {} };
+      S.modal = null; switchCompany(id); toast(`${name} created. Hand Peter a goal to open its first project.`);
+    }));
+    root.querySelectorAll('form[data-form="project"]').forEach((f) => f.addEventListener('submit', (e) => {
+      e.preventDefault(); const fd = new FormData(f); const name = String(fd.get('name') || '').trim(); if (!name) return;
+      const id = 'p-' + (++seq); P()[id] = { id, name, client: String(fd.get('client') || '').trim() || 'Internal' };
+      feedPush({ who: 'you', html: `<b>You</b> opened project <b>${esc(name)}</b>`, meta: 'now · no tasks yet', go: 'project:' + id });
+      S.modal = null; S.view = 'board'; S.project = id; toast(`${name} opened. Hand Peter a goal to fill it.`); render();
+    }));
+  }
+
+  function act(a) {
+    if (a === 'theme') { const r = document.documentElement; const cur = r.getAttribute('data-theme'); const dark = cur ? cur === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches; r.setAttribute('data-theme', dark ? 'light' : 'dark'); return; }
+    if (a === 'closeDrawer') { S.selTask = null; render(); return; }
+    if (a === 'closeModal') { S.modal = null; render(); return; }
+    if (a === 'companyMenu') { S.companyMenu = !S.companyMenu; render(); return; }
+    if (a === 'newcompany') { S.companyMenu = false; S.modal = createCompanyModal(); render(); return; }
+    if (a === 'newproject') { S.modal = createProjectModal(); render(); return; }
+    if (a === 'newdept' || a === 'adddept') { S.modal = createDeptModal(); render(); return; }
+    if (a === 'designTeam') { S.modal = designTeamModal({ phase: 'input' }); render(); return; }
+    if (a === 'acceptDesign') { acceptDesign(); return; }
+    if (a === 'newgoal') { S.modal = goalModal({ phase: 'input' }); render(); return; }
+    if (a === 'acceptPlan') { acceptPlan(); return; }
+    if (a === 'approve') { const r = REVIEWS[S.selReview]; const open = Object.values(r.comments).filter((c) => !c.resolved).length; if (open) { toast(`Resolve the ${open} open comment${open > 1 ? 's' : ''} first, or request changes`); return; } r.status = 'approved'; r.youDecided = 'Approved'; const t = T[r.task]; t.status = 'done'; t.doneBy = 'Approved by you'; feedPush({ who: 'you', html: `<b>You</b> approved <b>#${t.id} ${esc(t.title)}</b>`, meta: 'now · pull request opened, merge needs you', go: 'review:' + r.id }); toast('Approved. Pull request opened.'); render(); return; }
+    if (a === 'reqchanges') { const r = REVIEWS[S.selReview]; r.status = 'changes'; r.youDecided = 'Changes requested'; const t = T[r.task]; t.status = 'doing'; t.running = 'just restarted'; feedPush({ who: 'you', html: `<b>You</b> requested changes on <b>#${t.id}</b>`, meta: 'now · back to ' + AGENTS[t.assignee].name, go: 'task:' + t.id }); toast(`Sent back to ${AGENTS[t.assignee].name}`); render(); return; }
+    if (a === 'hire') { S.modal = simpleModal('Hire from template', 'Choose a persona template (n8n engineer, HubSpot analyst, researcher, reviewer, reporter), give it a name and a department, and adjust the toolbox. The new teammate is a prompt and a permission set. No new code.'); render(); return; }
+    if (a === 'plugmcp') { S.modal = simpleModal('Plug in an MCP server', 'Paste the server URL or pick one from the catalog. The platform reads its tool list, classifies each tool as read or write, and defaults writes that can reach a live system to <b>ask me</b>. Credentials are stored as names that resolve from the cluster secret store; the platform never sees values.'); render(); return; }
+    if (a === 'clone') { toast('Duplicated as a new teammate draft'); return; }
+    if (a === 'save') { toast('Saved. Changes apply on the next run.'); return; }
+  }
+
+  function moveTask(id, col) {
+    const t = T[id];
+    if (t.status === col) return;
+    if (col === 'done') { toast(`#${id} needs an approved review before Done. Open the review instead.`); if (t.review) { S.view = 'reviews'; S.selReview = t.review; } render(); return; }
+    if (col === 'blocked') { t.blocker = { kind: 'teammate', text: 'Blocked by you. Tell the team why in the conversation.' }; }
+    else { t.blocker = null; }
+    if (col === 'doing') t.running = 'just started';
+    t.status = col;
+    feedPush({ who: 'you', html: `<b>You</b> moved <b>#${id}</b> to ${({ todo: 'To do', doing: 'In progress', blocked: 'Blocked', review: 'In review' })[col]}`, meta: 'now', go: 'task:' + id });
+    S.selTask = id; render();
+  }
+
+  function sendMsg(v) {
+    v = v.trim(); if (!v) return;
+    const t = T[S.selTask];
+    const m = v.match(/@(\w+)/);
+    const target = m && Object.values(AGENTS).find((a) => a.name.toLowerCase().replace(/\s/g, '') === m[1].toLowerCase());
+    t.thread.push({ who: 'you', when: 'now', text: v, routed: target ? target.name : null });
+    t.msgs = (t.msgs || 0) + 1;
+    feedPush({ who: 'you', html: `<b>You</b> wrote on <b>#${t.id}</b>${target ? ` and routed it to <b>${esc(target.name)}</b>` : ''}`, meta: 'now', go: 'task:' + t.id });
+    render();
+    const inp = document.getElementById('msgInput'); if (inp) inp.focus();
+  }
+
+  function decideApproval(id, yes) {
+    const a = APPROVALS[id]; const t = T[a.task];
+    a.status = yes ? 'approved' : 'rejected';
+    a.decidedNote = yes ? 'Executed with the bound payload. Result attached to the task.' : 'Rejected. The teammate is told why and re-plans.';
+    if (yes) { t.status = 'done'; t.doneBy = 'Approved by you'; t.blocker = null; }
+    else { t.status = 'doing'; t.running = 're-planning'; t.blocker = null; t.thread.push({ sys: true, text: `You rejected the ${esc(a.tool)} action · ${AGENTS[a.who].name} is re-planning`, go: 'approvals' }); }
+    feedPush({ who: 'you', html: `<b>You</b> ${yes ? 'approved' : 'rejected'} <em>${esc(a.title)}</em>`, meta: 'now · ' + a.tool, go: 'approvals' });
+    FEED = FEED.filter((f) => !(f.attention && f.go === 'approvals' && f.who === a.who));
+    toast(yes ? 'Approved and executed' : 'Rejected');
+    render();
+  }
+
+  function startPlanning(goal) {
+    const st = { phase: 'thinking' }; S.modal = goalModal(st); render();
+    setTimeout(() => {
+      st.phase = 'plan';
+      st.plan = [
+        { a: 'ricky', t: 'Map which Gong calls and fields carry next steps' },
+        { a: 'brody', t: 'Requirements: digest format, Friday schedule, timezone' },
+        { a: 'cody2', t: 'Build the Gong to Slack digest workflow (draft, inactive)' },
+        { a: 'verifier', t: 'Verify the digest against two real weeks of calls' } ];
+      st.goal = goal; S.modal = goalModal(st); render();
+    }, 1400);
+  }
+  function acceptPlan() {
+    const plan = [
+      { a: 'ricky', t: 'Map which Gong calls and fields carry next steps', d: 'research' },
+      { a: 'brody', t: 'Requirements: digest format, Friday schedule, timezone', d: 'research' },
+      { a: 'cody2', t: 'Build the Gong to Slack digest workflow (draft, inactive)', d: 'engineering' },
+      { a: 'verifier', t: 'Verify the digest against two real weeks of calls', d: 'engineering' } ];
+    const ids = [];
+    const pid = 'p-' + (++seq); P()[pid] = { id: pid, name: 'Weekly Gong digest', client: 'Internal' };
+    const deptIds = Object.keys(D());
+    plan.forEach((p, i) => { const id = ++seq; ids.push(id); addTask({ id, title: p.t, dept: deptIds.includes(p.d) ? p.d : deptIds[0], company: S.company, project: pid, status: i === 0 ? 'doing' : 'todo', assignee: p.a, by: 'peter', running: i === 0 ? 'just started' : '', thread: [ { who: 'peter', when: 'now', text: `From the owner’s goal: weekly Gong digest to #sales on Fridays. ${i === 0 ? 'Start now.' : 'Queued behind #' + (seq - 1) + '.'}` } ] }); });
+    T[ids[3]].status = 'blocked'; T[ids[3]].blocker = { kind: 'dependency', text: `Waiting on #${ids[2]} to reach review.` };
+    feedPush({ who: 'peter', html: `<b>Peter</b> split your goal <em>“Weekly Gong digest to #sales”</em> into 4 tasks`, meta: 'now · assigned to Ricky, Brody, Cody 2, Verifier', go: 'board' });
+    feedPush({ who: 'ricky', html: `<b>Ricky</b> started <b>#${ids[0]}</b>`, meta: 'now', go: 'task:' + ids[0] });
+    S.modal = null; S.view = 'board'; S.deptFilter = 'all'; S.project = pid; S.selTask = ids[0]; render();
+    toast('Four tasks on the board. Ricky has started.');
+  }
+
+  render();
+})();
+</script>

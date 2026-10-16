@@ -1,0 +1,232 @@
+/* Design tokens. Must match docs/prototype.html. Green means only "an agent is
+   working", amber only "needs you", red blocked, blue review or mention. */
+@import "tailwindcss";
+
+:root {
+  --ground: #f6f5f2;
+  --panel: #f1efea;
+  --surface: #ffffff;
+  --surface-2: #fbfaf8;
+  --border: #e6e3dc;
+  --border-soft: #efece6;
+  --ink: #1c1b19;
+  --ink-2: #4a4741;
+  --muted: #6b675f;
+  --faint: #b8b3aa;
+  --accent: #1f7a5c;
+  --accent-soft: #e2f1ea;
+  --accent-ink: #1f6b52;
+  --warn: #c98a1c;
+  --warn-soft: #fbf1dd;
+  --warn-ink: #8a5a0e;
+  --warn-line: #f0dcb0;
+  --info: #4f6bd8;
+  --info-soft: #e3e8fa;
+  --info-ink: #2f4bb5;
+  --bad: #b3261e;
+  --bad-soft: #fdecec;
+  --bad-ink: #7a1c15;
+  --add-bg: #e8f5ee;
+  --add-ink: #14563f;
+  --del-bg: #fdecec;
+  --del-ink: #7a1c15;
+  --btn: #1c1b19;
+  --btn-ink: #f6f5f2;
+  --av-p-bg: #e3e8fa;
+  --av-p-ink: #2f4bb5;
+  --av-r-bg: #e2f1ea;
+  --av-r-ink: #1f6b52;
+  --av-b-bg: #f6e7dd;
+  --av-b-ink: #9a4f1c;
+  --av-a-bg: #ece4f6;
+  --av-a-ink: #63409a;
+  --av-c-bg: #fdf0d8;
+  --av-c-ink: #8a5a0e;
+  --av-v-bg: #e9e9ec;
+  --av-v-ink: #3b3b44;
+  --av-rp-bg: #e0f0f4;
+  --av-rp-ink: #1c6478;
+  --shadow: 0 8px 30px rgba(28, 27, 25, 0.1);
+  --sans: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #141513;
+    --panel: #191a17;
+    --surface: #1e1f1c;
+    --surface-2: #1a1b18;
+    --border: #2c2e29;
+    --border-soft: #262823;
+    --ink: #ecebe6;
+    --ink-2: #c9c7c0;
+    --muted: #9a9d95;
+    --faint: #5c5f58;
+    --accent: #4fb58a;
+    --accent-soft: #1b3a2e;
+    --accent-ink: #8fdcb8;
+    --warn: #e2b75a;
+    --warn-soft: #3a2f16;
+    --warn-ink: #f0d08a;
+    --warn-line: #5a4720;
+    --info: #8fa3ea;
+    --info-soft: #1f2640;
+    --info-ink: #b6c3f2;
+    --bad: #e07a72;
+    --bad-soft: #3d1f1c;
+    --bad-ink: #f0a9a3;
+    --add-bg: #1b3a2e;
+    --add-ink: #a5e3c3;
+    --del-bg: #3d1f1c;
+    --del-ink: #f0a9a3;
+    --btn: #ecebe6;
+    --btn-ink: #141513;
+    --av-p-bg: #26305a;
+    --av-p-ink: #b6c3f2;
+    --av-r-bg: #1b3a2e;
+    --av-r-ink: #a5e3c3;
+    --av-b-bg: #3f2a1c;
+    --av-b-ink: #f0c3a2;
+    --av-a-bg: #33264a;
+    --av-a-ink: #cdb8f0;
+    --av-c-bg: #3a2f16;
+    --av-c-ink: #f0d08a;
+    --av-v-bg: #2c2e33;
+    --av-v-ink: #d0d2da;
+    --av-rp-bg: #17333b;
+    --av-rp-ink: #a3dbe8;
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #141513;
+  --panel: #191a17;
+  --surface: #1e1f1c;
+  --surface-2: #1a1b18;
+  --border: #2c2e29;
+  --border-soft: #262823;
+  --ink: #ecebe6;
+  --ink-2: #c9c7c0;
+  --muted: #9a9d95;
+  --faint: #5c5f58;
+  --accent: #4fb58a;
+  --accent-soft: #1b3a2e;
+  --accent-ink: #8fdcb8;
+  --warn: #e2b75a;
+  --warn-soft: #3a2f16;
+  --warn-ink: #f0d08a;
+  --warn-line: #5a4720;
+  --info: #8fa3ea;
+  --info-soft: #1f2640;
+  --info-ink: #b6c3f2;
+  --bad: #e07a72;
+  --bad-soft: #3d1f1c;
+  --bad-ink: #f0a9a3;
+  --add-bg: #1b3a2e;
+  --add-ink: #a5e3c3;
+  --del-bg: #3d1f1c;
+  --del-ink: #f0a9a3;
+  --btn: #ecebe6;
+  --btn-ink: #141513;
+  --av-p-bg: #26305a;
+  --av-p-ink: #b6c3f2;
+  --av-r-bg: #1b3a2e;
+  --av-r-ink: #a5e3c3;
+  --av-b-bg: #3f2a1c;
+  --av-b-ink: #f0c3a2;
+  --av-a-bg: #33264a;
+  --av-a-ink: #cdb8f0;
+  --av-c-bg: #3a2f16;
+  --av-c-ink: #f0d08a;
+  --av-v-bg: #2c2e33;
+  --av-v-ink: #d0d2da;
+  --av-rp-bg: #17333b;
+  --av-rp-ink: #a3dbe8;
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+
+/* The tokens as the Tailwind theme: bg-ground, text-muted, border-border, font-mono, rounded-card... */
+@theme inline {
+  --color-ground: var(--ground);
+  --color-panel: var(--panel);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-ink: var(--warn-ink);
+  --color-warn-line: var(--warn-line);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-ink: var(--info-ink);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-bad-ink: var(--bad-ink);
+  --color-btn: var(--btn);
+  --color-btn-ink: var(--btn-ink);
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+  --radius-card: 8px;
+  --radius-control: 6px;
+  --shadow-card: var(--shadow);
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--ground);
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+a:hover {
+  text-decoration: underline;
+}
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+button:focus-visible,
+[tabindex]:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 2px;
+}
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

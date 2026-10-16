@@ -1,0 +1,18 @@
+{
+  "type": "file",
+  "encoding": "base64",
+  "size": 0,
+  "name": "file",
+  "path": "file",
+  "content": "",
+  "sha": "e545e91d2b0c3a4f5e6d7c8b9a0f1e2d3c4b5a69",
+  "url": "https://api.github.com/repos/acme/gtm-automations/contents/file?ref=0253df7ed00df5f84097e01499f26e4be2f011cf",
+  "git_url": "https://api.github.com/repos/acme/gtm-automations/git/blobs/e545e91d2b0c3a4f5e6d7c8b9a0f1e2d3c4b5a69",
+  "html_url": "https://github.com/acme/gtm-automations/blob/main/file",
+  "download_url": "https://raw.githubusercontent.com/acme/gtm-automations/main/file",
+  "_links": {
+    "self": "",
+    "git": "",
+    "html": ""
+  }
+}

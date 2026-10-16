@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[{\"name\":\"name\",\"type\":\"string\",\"label\":\"Company name\"},{\"name\":\"domain\",\"type\":\"string\",\"label\":\"Company domain\"},{\"name\":\"lifecyclestage\",\"type\":\"enumeration\",\"label\":\"Lifecycle stage\"}]"
+      }
+    ]
+  }
+}

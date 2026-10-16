@@ -1,0 +1,46 @@
+{{- if and .Values.worker.enabled .Values.worker.podMetrics.enabled }}
+# With worker.podMetrics.enabled a worker pod reads its own CPU and memory from the metrics API, for an
+# engine that forks beyond what the cgroup counts. That takes a service account token in a pod that runs
+# model output, so the token is a separate account's, bound to one Role: get pod metrics in this
+# namespace, and nothing else (never the board's Secrets Role).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-worker
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-worker-metrics
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+rules:
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-worker-metrics
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rosterdock.fullname" . }}-worker-metrics
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rosterdock.fullname" . }}-worker
+    namespace: {{ .Release.Namespace }}
+{{- end }}

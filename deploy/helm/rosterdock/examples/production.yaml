@@ -1,0 +1,91 @@
+# A production starting point. Every name below is a Secret in the release namespace that you (or
+# External Secrets) create; the chart never carries a value. See docs/install.md.
+#
+#   helm upgrade --install rosterdock oci://ghcr.io/dawbatteriesnotincluded/charts/rosterdock --version 0.1.0 \
+#     -n rosterdock --create-namespace -f production.yaml
+#
+# The chart's version picks the images (its appVersion is their tag); set image.tag only to run others.
+
+board:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+  podDisruptionBudget:
+    enabled: true
+  modelSecret:
+    name: rosterdock-model # ANTHROPIC_API_KEY
+  connectionsSecret:
+    name: rosterdock-connections # one key per connection credential NAME (HUBSPOT_MCP_TOKEN, ...)
+  # The keys above every company may name; any company's owners and admins can use them. A credential for
+  # one company goes in that company's secrets instead (Settings, with oauth.enabled).
+  sharedEnvNames: [HUBSPOT_MCP_TOKEN]
+  # oauth: { enabled: true } # connections may authorise by OAuth; the board then keeps tokens in its own Secrets
+  notifySecret:
+    name: rosterdock-notify # ROSTERDOCK_NOTIFY_WEBHOOK_URL
+  githubSecret:
+    name: rosterdock-github # ROSTERDOCK_GITHUB_TOKEN
+  # Who may create a company; everyone else is invited to one by its owners.
+  companyCreators: ["@example.com"]
+  oidc:
+    issuer: https://accounts.google.com
+    clientId: 1234567890-abc.apps.googleusercontent.com
+    name: Google
+    allowedDomains: example.com # required at Google: anyone holds an account there
+    secret:
+      name: rosterdock-oidc # ROSTERDOCK_OIDC_CLIENT_SECRET
+
+worker:
+  tokenSecret:
+    name: rosterdock-worker # ROSTERDOCK_WORKER_TOKEN, shared with the board
+  engineSecret:
+    name: rosterdock-engines # ANTHROPIC_API_KEY for the engine process
+  autoscaling:
+    enabled: true # needs KEDA
+    minReplicas: 1
+    maxReplicas: 10
+  # A fleet for departments whose sandbox says pool: secure. It reaches the board and Postgres only.
+  pools:
+    - name: secure
+      replicas: 1
+      egressTo: []
+      egressPorts: []
+      autoscaling:
+        maxReplicas: 3
+
+postgres:
+  externalSecret:
+    name: rosterdock-db # DATABASE_URL
+  cidr: 10.20.0.0/16 # where your Postgres answers, for the network policies
+  port: 5432
+
+storage:
+  endpoint: https://s3.eu-west-2.amazonaws.com
+  bucket: rosterdock-artifacts
+  region: eu-west-2
+  forcePathStyle: false
+  externalSecret:
+    name: rosterdock-storage # S3_ACCESS_KEY, S3_SECRET_KEY
+
+ingress:
+  enabled: true
+  className: nginx
+  host: rosterdock.example.com
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  tls:
+    - secretName: rosterdock-tls
+      hosts: [rosterdock.example.com]
+
+observability:
+  otlp:
+    endpoint: http://otel-collector.observability.svc:4318
+  serviceMonitor:
+    enabled: true
+
+networkPolicy:
+  enabled: true
+  webIngressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx

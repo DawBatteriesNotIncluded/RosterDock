@@ -1,0 +1,33 @@
+{{- if .Values.board.oauth.enabled }}
+# With board.oauth.enabled the board keeps the tokens a connection's OAuth flow obtains in Secrets of
+# its own (rosterdock-connection-<id>) in this namespace, and nothing else: the one Role in the chart.
+# A Role cannot name Secrets that do not exist yet, so it reaches every Secret in the namespace; keep
+# RosterDock in a namespace of its own.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-board-secrets
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: board
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, update, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-board-secrets
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: board
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rosterdock.fullname" . }}-board-secrets
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rosterdock.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

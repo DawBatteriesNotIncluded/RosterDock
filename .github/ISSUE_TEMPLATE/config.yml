@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/DawBatteriesNotIncluded/RosterDock/security/advisories/new
+    about: Privately, through GitHub's form; never in a public issue.

@@ -1,0 +1,46 @@
+{{- /*
+Scale each worker fleet on its own queue depth with KEDA (https://keda.sh): one worker per waiting
+run, between minReplicas and maxReplicas. The query counts pg-boss jobs on the fleet's queue that are
+not finished. Pools may override the bounds.
+*/ -}}
+{{- define "rosterdock.worker.scaledobject" -}}
+{{- $root := .root -}}
+{{- $pool := .pool -}}
+{{- $w := $root.Values.worker -}}
+{{- $name := $pool.name | default "" -}}
+{{- $suffix := ternary "" (printf "-%s" $name) (eq $name "") -}}
+{{- $queue := ternary "runs" (printf "runs.%s" $name) (eq $name "") -}}
+{{- $a := mergeOverwrite (deepCopy $w.autoscaling) ($pool.autoscaling | default dict) -}}
+{{- if $a.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "rosterdock.fullname" $root }}-worker{{ $suffix }}
+  labels:
+    {{- include "rosterdock.labels" $root | nindent 4 }}
+    rosterdock.dev/pool: {{ $name | default "default" | quote }}
+spec:
+  scaleTargetRef:
+    name: {{ include "rosterdock.fullname" $root }}-worker{{ $suffix }}
+  minReplicaCount: {{ $a.minReplicas }}
+  maxReplicaCount: {{ $a.maxReplicas }}
+  cooldownPeriod: {{ $a.cooldownSeconds }}
+  triggers:
+    - type: postgresql
+      metadata:
+        connectionFromEnv: DATABASE_URL
+        targetQueryValue: {{ $a.runsPerWorker | quote }}
+        query: "SELECT count(*) FROM pgboss.job WHERE name = '{{ $queue }}' AND state IN ('created', 'retry', 'active')"
+{{- end }}
+{{- end -}}
+
+{{- if .Values.worker.enabled }}
+{{- include "rosterdock.worker.scaledobject" (dict "root" $ "pool" (dict "name" "")) }}
+{{- range .Values.worker.pools }}
+{{- $rendered := include "rosterdock.worker.scaledobject" (dict "root" $ "pool" .) }}
+{{- if $rendered }}
+---
+{{ $rendered }}
+{{- end }}
+{{- end }}
+{{- end }}

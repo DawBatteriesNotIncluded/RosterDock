@@ -1,0 +1,228 @@
+{{- /*
+One worker Deployment for the default queue, and one per pool in worker.pools. A pool is a fleet
+with its own network policy (networkpolicy.yaml) and its own queue (runs.<pool>); a department
+whose sandbox names the pool sends its runs there. Each pool may override replicas, resources,
+autoscaling bounds, the engine env names and the worker image; everything else follows worker.*.
+*/ -}}
+{{- define "rosterdock.worker.deployment" -}}
+{{- $root := .root -}}
+{{- $pool := .pool -}}
+{{- $w := $root.Values.worker -}}
+{{- $name := $pool.name | default "" -}}
+{{- $suffix := ternary "" (printf "-%s" $name) (eq $name "") -}}
+{{- $autoscaling := mergeOverwrite (deepCopy $w.autoscaling) ($pool.autoscaling | default dict) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rosterdock.fullname" $root }}-worker{{ $suffix }}
+  labels:
+    {{- include "rosterdock.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: worker
+    rosterdock.dev/pool: {{ $name | default "default" | quote }}
+spec:
+  {{- if not $autoscaling.enabled }}
+  replicas: {{ $pool.replicas | default $w.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "rosterdock.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: worker
+      {{- /* A Deployment's selector is immutable: the default fleet keeps the selector it had before pools
+             existed, so an upgrade from an earlier chart applies. Pools are new Deployments and select
+             on their name. The pod labels carry the pool either way, for the network policies. */}}
+      {{- if $name }}
+      rosterdock.dev/pool: {{ $name | quote }}
+      {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "rosterdock.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: worker
+        rosterdock.dev/pool: {{ $name | default "default" | quote }}
+      {{- if or $root.Values.podAnnotations $w.metrics.enabled }}
+      annotations:
+        {{- if $w.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $w.metrics.port | quote }}
+        prometheus.io/path: /metrics
+        {{- end }}
+        {{- with $root.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $w.podMetrics.enabled }}
+      # Its own account, with one Role (pod metrics), and the token mounted for that; see worker-rbac.yaml.
+      serviceAccountName: {{ include "rosterdock.fullname" $root }}-worker
+      automountServiceAccountToken: true
+      {{- else }}
+      serviceAccountName: {{ include "rosterdock.serviceAccountName" $root }}
+      # No cluster credentials in a pod that runs model output.
+      automountServiceAccountToken: false
+      {{- end }}
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $w.terminationGracePeriodSeconds }}
+      containers:
+        - name: worker
+          {{- /* A pool may run its own worker image (an engine build, a pinned tag); otherwise worker.image (the
+                 published image with Claude Code added), else the chart's. */}}
+          image: {{ $pool.image | default $w.image | default (printf "%s/rosterdock-worker:%s" $root.Values.image.registry (include "rosterdock.imageTag" $root)) | quote }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          {{- if $w.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ $w.metrics.port }}
+              protocol: TCP
+          {{- end }}
+          env:
+            - name: BOARD_URL
+              value: "http://{{ include "rosterdock.fullname" $root }}-board:{{ $root.Values.board.service.port }}"
+            - name: ROSTERDOCK_WORK_ROOT
+              value: /work
+            {{- if $w.metrics.enabled }}
+            - name: ROSTERDOCK_WORKER_METRICS_PORT
+              value: {{ $w.metrics.port | quote }}
+            {{- end }}
+            - name: ROSTERDOCK_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- if $w.podMetrics.enabled }}
+            - name: ROSTERDOCK_POD_METRICS
+              value: "1"
+            - name: ROSTERDOCK_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Node trusts the cluster's CA for the API server, on top of the system store.
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            {{- end }}
+            {{- if $name }}
+            - name: ROSTERDOCK_WORKER_POOL
+              value: {{ $name | quote }}
+            {{- end }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.postgres.externalSecret.name }}
+                  key: {{ $root.Values.postgres.externalSecret.key }}
+            - name: ROSTERDOCK_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $w.tokenSecret.name }}
+                  key: {{ $w.tokenSecret.key }}
+            {{- $envNames := $pool.engineEnvNames | default $w.engineEnvNames }}
+            - name: ROSTERDOCK_ENGINE_PASS_ENV
+              value: {{ join "," $envNames | quote }}
+            {{- if $root.Values.observability.otlp.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ $root.Values.observability.otlp.endpoint | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: rosterdock-worker
+            {{- if $root.Values.observability.otlp.headersSecret.name }}
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.observability.otlp.headersSecret.name }}
+                  key: {{ $root.Values.observability.otlp.headersSecret.key }}
+            {{- end }}
+            {{- end }}
+            {{- if $w.gitSecret.name }}
+            - name: ROSTERDOCK_GIT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $w.gitSecret.name }}
+                  key: {{ $w.gitSecret.key }}
+            {{- end }}
+            {{- range $envNames }}
+            - name: {{ . }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pool.engineSecret | default $w.engineSecret.name }}
+                  key: {{ . }}
+                  optional: true
+            {{- end }}
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: home
+              mountPath: /home/node
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml ($pool.resources | default $w.resources) | nindent 12 }}
+      volumes:
+        # Ephemeral: every run gets a fresh directory and nothing survives the pod.
+        - name: work
+          emptyDir:
+            sizeLimit: {{ $pool.workVolumeSize | default $w.workVolumeSize }}
+        - name: home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end -}}
+
+{{- if .Values.worker.enabled }}
+{{- include "rosterdock.worker.deployment" (dict "root" $ "pool" (dict "name" "")) }}
+{{- range .Values.worker.pools }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,31}$" .name) }}
+{{- fail (printf "worker.pools[].name must be a slug (a-z, 0-9, dashes): %q" .name) }}
+{{- end }}
+---
+{{ include "rosterdock.worker.deployment" (dict "root" $ "pool" .) }}
+{{- end }}
+{{- end }}
+{{- if and .Values.worker.enabled .Values.worker.metrics.enabled }}
+---
+# One headless Service over every worker pod, whatever its pool, so a ServiceMonitor can scrape the fleet.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-workers
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  clusterIP: None
+  ports:
+    - name: metrics
+      port: {{ .Values.worker.metrics.port }}
+      targetPort: metrics
+  selector:
+    {{- include "rosterdock.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+{{- if .Values.observability.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-workers
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+    {{- with .Values.observability.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "rosterdock.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.observability.serviceMonitor.interval }}
+{{- end }}
+{{- end }}

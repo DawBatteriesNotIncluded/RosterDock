@@ -1,0 +1,10 @@
+node_modules
+dist
+docs/*.html
+pnpm-lock.yaml
+deploy/helm/**/templates
+# Model CLI recordings: as the CLI printed them, one line each
+apps/board/test/fixtures/claude-cli/*.json
+apps/board/test/fixtures/planners/*.json
+# Style packs as their authors published them: one changed byte breaks the pin
+apps/board/styles/vendor

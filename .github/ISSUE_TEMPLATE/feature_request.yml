@@ -1,0 +1,21 @@
+name: Feature request
+description: Something RosterDock should do that it does not do yet.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+      description: The change you have in mind, if you have one. How would a person see it on the board?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead
+      description: Workarounds or other tools you use for it now.

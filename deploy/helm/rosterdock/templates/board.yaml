@@ -1,0 +1,383 @@
+{{- if not .Values.postgres.externalSecret.name }}
+{{- fail "postgres.externalSecret.name is required: a Secret holding DATABASE_URL for the board" }}
+{{- end }}
+{{- /* The board's own check (config.ts), early: anyone holds an account at these providers. */}}
+{{- $public := list "https://accounts.google.com" "https://login.microsoftonline.com/common/v2.0" "https://login.microsoftonline.com/consumers/v2.0" "https://login.microsoftonline.com/organizations/v2.0" "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0" "https://gitlab.com" "https://appleid.apple.com" }}
+{{- if and .Values.board.oidc.issuer .Values.board.oidc.clientId (not .Values.board.oidc.allowedDomains) (has (lower (trimSuffix "/" .Values.board.oidc.issuer)) $public) }}
+{{- fail (printf "board.oidc.issuer is %s, where anyone can hold an account, and board.oidc.allowedDomains is empty: list the email domains that may sign in, or \"*\" to let every account in" .Values.board.oidc.issuer) }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-board
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: board
+spec:
+  {{- if .Values.board.persistence.enabled }}
+  {{- if or .Values.board.autoscaling.enabled (gt (int .Values.board.replicas) 1) }}
+  {{- fail "board.persistence needs a single board replica: its volume is ReadWriteOnce" }}
+  {{- end }}
+  replicas: 1
+  # One pod holds the volume at a time.
+  strategy:
+    type: Recreate
+  {{- else if not .Values.board.autoscaling.enabled }}
+  replicas: {{ .Values.board.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "rosterdock.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: board
+  template:
+    metadata:
+      labels:
+        {{- include "rosterdock.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: board
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.board.service.port | quote }}
+        prometheus.io/path: /metrics
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "rosterdock.serviceAccountName" . }}
+      {{- if .Values.board.oauth.enabled }}
+      # The one pod with cluster credentials: the token reaches the Role in rbac.yaml and nothing else.
+      automountServiceAccountToken: true
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: board
+          image: "{{ .Values.image.registry }}/rosterdock-board:{{ include "rosterdock.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: {{ .Values.board.service.port | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.board.logLevel | quote }}
+            - name: ROSTERDOCK_DEV_LOGIN
+              value: {{ ternary "1" "0" .Values.board.devLogin | quote }}
+            - name: ROSTERDOCK_COOKIE_SECURE
+              value: "1"
+            {{- with .Values.board.companyCreators }}
+            - name: ROSTERDOCK_COMPANY_CREATORS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- if .Values.board.corsOrigin }}
+            - name: CORS_ORIGIN
+              value: {{ .Values.board.corsOrigin | quote }}
+            {{- end }}
+            {{- $public := .Values.board.publicUrl | default (ternary (printf "http%s://%s" (ternary "s" "" (not (empty .Values.ingress.tls))) .Values.ingress.host) "" .Values.ingress.enabled) }}
+            {{- if $public }}
+            - name: ROSTERDOCK_PUBLIC_URL
+              value: {{ $public | quote }}
+            {{- end }}
+            {{- with .Values.board.sharedEnvNames }}
+            # The names every company may use besides its own secrets; nothing else on this pod reaches one.
+            - name: ROSTERDOCK_SHARED_ENV_NAMES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.board.stdioCommands }}
+            # The only command lines a stdio connection may start in this pod.
+            - name: ROSTERDOCK_STDIO_COMMANDS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- if .Values.board.oauth.enabled }}
+            - name: ROSTERDOCK_SECRET_STORE
+              value: kubernetes
+            # Node trusts the cluster's CA for the API server, on top of the system store.
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            {{- end }}
+            {{- if .Values.board.metricsSecret.name }}
+            - name: ROSTERDOCK_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.board.metricsSecret.name }}
+                  key: {{ .Values.board.metricsSecret.key }}
+            {{- end }}
+            {{- if .Values.board.oidc.issuer }}
+            - name: ROSTERDOCK_OIDC_ISSUER
+              value: {{ .Values.board.oidc.issuer | quote }}
+            - name: ROSTERDOCK_OIDC_CLIENT_ID
+              value: {{ required "board.oidc.clientId is required with an issuer" .Values.board.oidc.clientId | quote }}
+            - name: ROSTERDOCK_OIDC_NAME
+              value: {{ .Values.board.oidc.name | quote }}
+            - name: ROSTERDOCK_OIDC_SCOPES
+              value: {{ .Values.board.oidc.scopes | quote }}
+            - name: ROSTERDOCK_OIDC_ALLOWED_DOMAINS
+              value: {{ .Values.board.oidc.allowedDomains | quote }}
+            - name: ROSTERDOCK_OIDC_TOKEN_AUTH
+              value: {{ .Values.board.oidc.tokenAuth | quote }}
+            {{- if .Values.board.oidc.secret.name }}
+            - name: ROSTERDOCK_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.board.oidc.secret.name }}
+                  key: {{ .Values.board.oidc.secret.key }}
+            {{- end }}
+            {{- end }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.externalSecret.name }}
+                  key: {{ .Values.postgres.externalSecret.key }}
+            {{- if .Values.storage.endpoint }}
+            - name: S3_ENDPOINT
+              value: {{ .Values.storage.endpoint | quote }}
+            - name: S3_BUCKET
+              value: {{ .Values.storage.bucket | quote }}
+            {{- if .Values.storage.region }}
+            - name: S3_REGION
+              value: {{ .Values.storage.region | quote }}
+            {{- end }}
+            - name: S3_FORCE_PATH_STYLE
+              value: {{ ternary "1" "0" .Values.storage.forcePathStyle | quote }}
+            {{- if .Values.storage.externalSecret.name }}
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.storage.externalSecret.name }}
+                  key: {{ .Values.storage.externalSecret.accessKeyKey }}
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.storage.externalSecret.name }}
+                  key: {{ .Values.storage.externalSecret.secretKeyKey }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.worker.enabled }}
+            - name: ROSTERDOCK_WORKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.worker.tokenSecret.name }}
+                  key: {{ .Values.worker.tokenSecret.key }}
+            {{- end }}
+            - name: ROSTERDOCK_PETER_INTERVAL_MS
+              value: {{ .Values.board.peterIntervalMs | quote }}
+            {{- if .Values.board.modelSecret.name }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.board.modelSecret.name }}
+                  key: {{ .Values.board.modelSecret.key }}
+            {{- end }}
+            {{- if .Values.board.githubSecret.name }}
+            - name: ROSTERDOCK_GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.board.githubSecret.name }}
+                  key: {{ .Values.board.githubSecret.key }}
+            {{- end }}
+            {{- if .Values.board.gitlabSecret.name }}
+            - name: ROSTERDOCK_GITLAB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.board.gitlabSecret.name }}
+                  key: {{ .Values.board.gitlabSecret.key }}
+            {{- if .Values.board.gitlabApi }}
+            - name: ROSTERDOCK_GITLAB_API
+              value: {{ .Values.board.gitlabApi | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.observability.otlp.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.observability.otlp.endpoint | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: rosterdock-board
+            {{- if .Values.observability.otlp.headersSecret.name }}
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.observability.otlp.headersSecret.name }}
+                  key: {{ .Values.observability.otlp.headersSecret.key }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.board.notifySecret.name }}
+            - name: ROSTERDOCK_NOTIFY_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.board.notifySecret.name }}
+                  key: {{ .Values.board.notifySecret.key }}
+            {{- end }}
+            {{- if .Values.board.notifyEmail.smtpSecret.name }}
+            - name: ROSTERDOCK_NOTIFY_SMTP_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.board.notifyEmail.smtpSecret.name }}
+                  key: {{ .Values.board.notifyEmail.smtpSecret.key }}
+            - name: ROSTERDOCK_NOTIFY_EMAIL_TO
+              value: {{ .Values.board.notifyEmail.to | quote }}
+            {{- if .Values.board.notifyEmail.from }}
+            - name: ROSTERDOCK_NOTIFY_EMAIL_FROM
+              value: {{ .Values.board.notifyEmail.from | quote }}
+            {{- end }}
+            {{- end }}
+            # Credentials for the model CLIs Peter may plan with, by NAME; only the CLI the board starts sees them.
+            {{- range .Values.board.plannerEnvNames }}
+            - name: {{ . }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.board.plannerSecret.name }}
+                  key: {{ . }}
+                  optional: true
+            {{- end }}
+          {{- if .Values.board.connectionsSecret.name }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.board.connectionsSecret.name }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.board.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /api/ready
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 15
+          volumeMounts:
+            # A writable home under the read-only root: a model CLI's config, npx's cache for stdio connections.
+            - name: home
+              mountPath: /home/node
+            # Scratch for a model CLI's call directory and npm's temp files.
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.board.persistence.enabled }}
+            - name: data
+              mountPath: {{ .Values.board.persistence.mountPath }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.board.resources | nindent 12 }}
+      volumes:
+        - name: home
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.board.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "rosterdock.fullname" . }}-board-data
+        {{- end }}
+{{- if .Values.board.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-board-data
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: board
+  annotations:
+    # The data outlives an uninstall; delete the claim by hand to let it go.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.board.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.board.persistence.size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-board
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: board
+spec:
+  type: {{ .Values.board.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.board.service.port }}
+      targetPort: http
+  selector:
+    {{- include "rosterdock.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: board
+{{- if .Values.observability.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-board
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: board
+    {{- with .Values.observability.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "rosterdock.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: board
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.observability.serviceMonitor.interval }}
+      {{- if .Values.board.metricsSecret.name }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.board.metricsSecret.name }}
+          key: {{ .Values.board.metricsSecret.key }}
+      {{- end }}
+{{- end }}
+{{- if .Values.board.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-board
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: board
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "rosterdock.fullname" . }}-board
+  minReplicas: {{ .Values.board.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.board.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.board.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- if .Values.board.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "rosterdock.fullname" . }}-board
+  labels:
+    {{- include "rosterdock.labels" . | nindent 4 }}
+    app.kubernetes.io/component: board
+spec:
+  minAvailable: {{ .Values.board.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "rosterdock.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: board
+{{- end }}

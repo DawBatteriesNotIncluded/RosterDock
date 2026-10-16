@@ -1,0 +1,14 @@
+{
+  "id": "0253df7ed00df5f84097e01499f26e4be2f011cf",
+  "short_id": "0253df7e",
+  "title": "Intake workflow: route by client",
+  "message": "Intake workflow: route by client\n",
+  "author_name": "Daniel",
+  "author_email": "daniel@example.com",
+  "authored_date": "2026-09-01T09:12:00.000+00:00",
+  "committer_name": "Daniel",
+  "committer_email": "daniel@example.com",
+  "committed_date": "2026-09-01T09:12:00.000+00:00",
+  "parent_ids": ["7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b"],
+  "web_url": "https://gitlab.com/acme/gtm-automations/-/commit/0253df7ed00df5f84097e01499f26e4be2f011cf"
+}

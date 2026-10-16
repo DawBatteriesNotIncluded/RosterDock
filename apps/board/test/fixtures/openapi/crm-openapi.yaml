@@ -1,0 +1,73 @@
+openapi: 3.1.0
+info:
+  title: Sample CRM
+  version: 1.0.0
+servers:
+  - url: https://crm.example.test/v1
+paths:
+  /contacts:
+    get:
+      operationId: listContacts
+      summary: List contacts, optionally filtered by domain
+      parameters:
+        - name: domain
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ok
+    post:
+      operationId: createContact
+      summary: Create a contact
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                name:
+                  type: string
+      responses:
+        "201":
+          description: created
+  /contacts/{contactId}:
+    get:
+      operationId: getContact
+      summary: One contact
+      parameters:
+        - name: contactId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ok
+    delete:
+      operationId: deleteContact
+      summary: Delete a contact
+      parameters:
+        - name: contactId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: gone
+  /reports/run:
+    get:
+      operationId: runReport
+      summary: Run a report; billed per call
+      responses:
+        "200":
+          description: ok
+  /health:
+    get:
+      summary: No operationId here; skipped
+      responses:
+        "200":
+          description: ok

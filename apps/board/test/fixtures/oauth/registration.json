@@ -1,0 +1,11 @@
+{
+  "client_id": "client-1",
+  "client_secret": "client-secret-placeholder",
+  "client_id_issued_at": 1789300934,
+  "client_secret_expires_at": 0,
+  "client_name": "RosterDock",
+  "redirect_uris": ["https://rosterdock.example.test/api/oauth/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "client_secret_basic"
+}

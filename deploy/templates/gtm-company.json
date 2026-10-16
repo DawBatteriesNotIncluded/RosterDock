@@ -1,0 +1,51 @@
+{
+  "format": "rosterdock/templates/1",
+  "company": {
+    "name": "GTM company",
+    "template": "GTM company"
+  },
+  "teammateTemplates": [],
+  "teammates": [
+    { "name": "Archy", "template": "Archy" },
+    { "name": "Cody", "template": "Cody", "toolbox": [{ "connection": "n8n", "mode": "ask" }] },
+    { "name": "Verifier", "template": "Verifier" },
+    { "name": "Ricky", "template": "Ricky" },
+    { "name": "Brody", "template": "Brody" },
+    {
+      "name": "Reporter",
+      "template": "Reporter",
+      "toolbox": [
+        { "connection": "hubspot", "mode": "read" },
+        { "connection": "slack", "mode": "ask" },
+        { "connection": "gong", "mode": "read" }
+      ]
+    },
+    {
+      "name": "Cody 3",
+      "template": "Cody 3",
+      "engine": "claude_code",
+      "toolbox": [{ "connection": "hubspot", "mode": "ask" }]
+    }
+  ],
+  "departments": [
+    {
+      "name": "Engineering",
+      "writePolicy": "drafts",
+      "lead": "Archy",
+      "members": ["Cody", "Verifier"],
+      "sandbox": { "timeoutSeconds": 3600 }
+    },
+    {
+      "name": "Research",
+      "writePolicy": "readonly",
+      "lead": "Ricky",
+      "members": ["Brody", "Archy"]
+    },
+    {
+      "name": "Marketing ops",
+      "writePolicy": "ask",
+      "lead": "Reporter",
+      "members": ["Cody 3"]
+    }
+  ]
+}

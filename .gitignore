@@ -1,0 +1,21 @@
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+*.log
+.pnpm-store/
+deploy/helm/*/charts/
+deploy/helm/*.tgz
+.claude/launch.json.local
+
+# the board's local file secret store and other local data; never in the tree
+.data/
+
+# Working notes kept on one machine (per-chat logs, handoffs between chats); never in the tree
+.notes/

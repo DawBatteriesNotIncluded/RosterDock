@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+**/.data
+.git
+docs
+deploy
+.github
+**/coverage
+**/*.log
+**/*.tsbuildinfo

@@ -1,0 +1,38 @@
+{
+  "name": "rosterdock",
+  "version": "0.0.1",
+  "private": true,
+  "description": "RosterDock: a self-hosted, Kubernetes-native platform for running an AI company.",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.12",
+    "pnpm": ">=10"
+  },
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "postinstall": "pnpm --filter @rosterdock/shared build",
+    "dev": "pnpm -r --parallel --filter @rosterdock/shared --filter @rosterdock/board --filter @rosterdock/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm --filter @rosterdock/shared build && pnpm -r test",
+    "db:up": "docker compose up -d postgres minio",
+    "db:migrate": "pnpm --filter @rosterdock/board migrate",
+    "compose:up": "docker compose up --build -d",
+    "compose:down": "docker compose down -v",
+    "dev:worker": "pnpm --filter @rosterdock/worker dev"
+  },
+  "devDependencies": {
+    "eslint": "catalog:",
+    "prettier": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

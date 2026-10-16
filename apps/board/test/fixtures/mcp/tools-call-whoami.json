@@ -1,0 +1,7 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "result": {
+    "content": [{ "type": "text", "text": "authenticated as fixture-user@example.com (credential by name)" }]
+  }
+}

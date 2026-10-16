@@ -1,0 +1,36 @@
+RosterDock {{ .Chart.AppVersion }} is installing as release {{ .Release.Name }}.
+
+Board:  {{ include "rosterdock.fullname" . }}-board:{{ .Values.board.service.port }}  (migrations run on boot, serialised across replicas)
+Web:    {{ include "rosterdock.fullname" . }}-web:{{ .Values.web.service.port }}
+{{- if .Values.ingress.enabled }}
+URL:    http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+{{- else }}
+
+No ingress. To reach the UI locally:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rosterdock.fullname" . }}-web 8080:{{ .Values.web.service.port }}
+{{- end }}
+
+Database: the board reads DATABASE_URL from Secret "{{ .Values.postgres.externalSecret.name }}" key "{{ .Values.postgres.externalSecret.key }}".
+{{- if .Values.storage.endpoint }}
+Storage: {{ .Values.storage.endpoint }} bucket {{ .Values.storage.bucket }}{{ if .Values.storage.externalSecret.name }}, credentials from Secret "{{ .Values.storage.externalSecret.name }}"{{ end }}.
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+Network policies are on: the web reaches only the board; workers reach the board, Postgres and public HTTPS.
+{{- else }}
+Network policies are off (networkPolicy.enabled). Worker pods run model output: turn them on in production.
+{{- end }}
+{{- if .Values.board.oidc.issuer }}
+Sign-in: {{ .Values.board.oidc.name }} ({{ .Values.board.oidc.issuer }}). Register the redirect URI <public URL>/api/auth/oidc/callback with the provider.
+{{- if .Values.board.companyCreators }}
+Companies: created by {{ join ", " .Values.board.companyCreators }}; everyone else joins one when an owner invites them.
+{{- else }}
+Companies: the first person to create one on the empty board owns it; list who may create more in board.companyCreators.
+{{- end }}
+{{- else if not .Values.board.devLogin }}
+
+WARNING: neither board.oidc.issuer nor board.devLogin is set: nobody can sign in. Configure single sign-on (docs/install.md).
+{{- end }}
+{{- if .Values.board.devLogin }}
+
+WARNING: board.devLogin is on. Anyone reaching the board can sign in with any email. Turn it off outside local development.
+{{- end }}

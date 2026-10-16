@@ -1,0 +1,42 @@
+# One person's RosterDock on a local cluster (kind): what deploy/scripts/local-cluster.sh installs with. Dev login
+# instead of single sign-on; the images built locally; Peter able to plan through the Claude Code CLI in
+# the board image and the teammates on Claude Code, both with a subscription token (`claude setup-token`)
+# in the rosterdock-engines secret; company secrets in the cluster's Secrets; and a volume at ~/Lighthouse in the
+# board pod for what the Lighthouse demo's stdio connections serve (deploy/demo/lighthouse), whose servers
+# are the only commands the board runs. Not for a shared cluster: start from production.yaml for that.
+image:
+  registry: docker.io/library
+  tag: local
+  pullPolicy: IfNotPresent
+
+board:
+  devLogin: true
+  oauth:
+    enabled: true
+  plannerEnvNames: [CLAUDE_CODE_OAUTH_TOKEN]
+  plannerSecret:
+    name: rosterdock-engines
+  persistence:
+    enabled: true
+    size: 2Gi
+    mountPath: /home/node/Lighthouse
+  # The demos' servers, each on its own folders (deploy/scripts/demo.mjs --board-root starts them there).
+  # A filesystem line ending in * would let a company serve any folder in the pod, /proc and the service
+  # account token included: pin each folder.
+  stdioCommands:
+    - "npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /home/node/Lighthouse/drive"
+    - "npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /home/node/Lighthouse/staging"
+    - "npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /home/node/Lighthouse/cirrus/drive"
+    - "npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /home/node/Lighthouse/cirrus/staging"
+    - "npx -y @modelcontextprotocol/server-memory@2026.8.31"
+    - "npx -y @playwright/mcp@0.0.83 --headless --isolated --browser chromium --allowed-origins http://127.0.0.1:4178"
+
+worker:
+  replicas: 2
+  engineEnvNames: [CLAUDE_CODE_OAUTH_TOKEN]
+  engineSecret:
+    name: rosterdock-engines
+
+postgres:
+  externalSecret:
+    name: rosterdock-db

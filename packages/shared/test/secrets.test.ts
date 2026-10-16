@@ -1,0 +1,95 @@
+import { describe, expect, it } from "vitest";
+import {
+  assertNoRawSecrets,
+  findRawSecrets,
+  isEnvVarName,
+  looksLikeRawSecret,
+  RawSecretError,
+} from "../src/index.js";
+
+describe("looksLikeRawSecret", () => {
+  it("accepts references: env-var names, vault paths, short handles", () => {
+    for (const ref of [
+      "N8N_API_KEY",
+      "HUBSPOT_APP",
+      "vault://kv/gtm/n8n",
+      "secrets/prod/slack",
+      "XERO_TENANT",
+    ]) {
+      expect(looksLikeRawSecret(ref), ref).toBe(false);
+    }
+  });
+
+  it("rejects key-shaped values", () => {
+    const samples = [
+      "sk-abcdefghijklmnopqrstuvwxyz0123456789",
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjMifQ.sig",
+      "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+      "github_pat_11ABCDEFG",
+      "xoxb-123-456-abc",
+      "AKIAIOSFODNN7EXAMPLE",
+      "Bearer abcdefghijklmnop.qrstuvwxyz0123",
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIE",
+      // prefix-less base64-ish blob (Azure/AWS style secret)
+      "Q2xhdWRlIGlzIGEgZ29vZCBhc3Npc3RhbnQgYW5kIHRoaXMgaXMgYSBrZXk=",
+      "x".repeat(129),
+    ];
+    for (const sample of samples) expect(looksLikeRawSecret(sample), sample.slice(0, 12)).toBe(true);
+  });
+});
+
+describe("isEnvVarName", () => {
+  it("matches shell-style names only", () => {
+    expect(isEnvVarName("OPENAI_API_KEY")).toBe(true);
+    expect(isEnvVarName("_x1")).toBe(true);
+    expect(isEnvVarName("1abc")).toBe(false);
+    expect(isEnvVarName("has-dash")).toBe(false);
+    expect(isEnvVarName("vault://x")).toBe(false);
+  });
+});
+
+describe("findRawSecrets / assertNoRawSecrets", () => {
+  it("walks nested payloads and reports paths, never values", () => {
+    const payload = {
+      name: "n8n",
+      credentialRef: "N8N_API_KEY",
+      settings: { apiKey: "sk-live-0123456789abcdef0123456789", nested: [{ token: "xoxb-1-2-3" }] },
+      notes: "Bearer tokens must never be pasted here",
+    };
+    const findings = findRawSecrets(payload);
+    expect(findings.map((f) => f.path)).toEqual(["settings.apiKey", "settings.nested[0].token"]);
+    expect(() => assertNoRawSecrets(payload)).toThrow(RawSecretError);
+    try {
+      assertNoRawSecrets(payload);
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toContain("settings.apiKey");
+      expect(message).not.toContain("sk-live");
+      expect(message).not.toContain("xoxb");
+    }
+  });
+
+  it("does not reject prose or long descriptions in non-reference fields", () => {
+    const payload = {
+      personaMd: "You are a senior n8n automation engineer. ".repeat(20),
+      description: "Q2xhdWRlIGlzIGEgZ29vZCBhc3Npc3RhbnQgYW5kIHRoaXMgaXMgYSBrZXk=",
+      credentialRef: "vault://kv/gtm/n8n",
+    };
+    expect(findRawSecrets(payload)).toEqual([]);
+    expect(() => assertNoRawSecrets(payload)).not.toThrow();
+  });
+
+  it("applies the stricter reference check under secret-shaped keys", () => {
+    expect(findRawSecrets({ apiKeyEnvVar: "x".repeat(200) })).toHaveLength(1);
+    expect(
+      findRawSecrets({ password: "Q2xhdWRlIGlzIGEgZ29vZCBhc3Npc3RhbnQgYW5kIHRoaXMgaXMgYSBrZXk=" }),
+    ).toHaveLength(1);
+    expect(findRawSecrets({ apiKeyEnvVar: "OPENAI_API_KEY" })).toEqual([]);
+  });
+
+  it("handles scalars and null at the root", () => {
+    expect(findRawSecrets(null)).toEqual([]);
+    expect(findRawSecrets(42)).toEqual([]);
+    expect(findRawSecrets("sk-abcdef0123456789")).toEqual([{ path: "", reason: "secret-shaped string" }]);
+  });
+});

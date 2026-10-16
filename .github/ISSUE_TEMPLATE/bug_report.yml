@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in RosterDock does not work the way its docs say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting it. A security problem goes through private reporting instead (see SECURITY.md), never an issue. Leave secret values, tokens and personal data out of everything below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The fewest steps that show it. Teammates on the stub engine are fine, and easier for others to follow.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The image tag, or the commit you built from.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Where it runs
+      options:
+        - Local development (pnpm dev)
+        - Docker Compose
+        - Kubernetes (the Helm chart)
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engines involved
+      multiple: true
+      options:
+        - Stub
+        - Claude Code
+        - Codex
+        - None (not about a teammate's run)
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Board or worker lines from around the time it happened. Read them for anything private first.
+      render: text

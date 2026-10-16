@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "result": {
+    "protocolVersion": "2025-06-18",
+    "capabilities": { "tools": { "listChanged": false } },
+    "serverInfo": { "name": "crm-fixture", "version": "1.0.0" },
+    "instructions": "A sample CRM. Reads are free; writes change live records."
+  }
+}
