@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mutate } from "../src/mutate.js";
 import { addProject, addTeammate, seedCompany, startTestBoard, type TestBoard } from "./helpers.js";
 
 let board: TestBoard;
@@ -111,6 +112,63 @@ describe("tasks", () => {
     expect((await api.put(`${base}/tasks/${first.id}/dependencies/${second.id}`)).status).toBe(409);
     expect((await api.del(`${base}/tasks/${second.id}/dependencies/${first.id}`)).status).toBe(200);
     expect((await api.post(`${base}/tasks/${second.id}/move`, { status: "doing" })).status).toBe(200);
+  });
+
+  it("files a task that waits on one being started without a deadlock: it waits for the task first", async () => {
+    const { api, base, owner, companyId } = await seedCompany(board, "t7@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const project = await addProject(api, base);
+    const first = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Research",
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    // Starting a task locks it, then records the start under the company's event counter. Peter filing
+    // the plan's next task meanwhile (the request planned the goal, the loop starts what is ready) must
+    // wait for that task, not hold the counter while it waits.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const isLocked = new Promise<void>((resolve) => (locked = resolve));
+    const starting = mutate(board.db, companyId, { kind: "user", id: owner.userId }, async (ctx) => {
+      await ctx.client.query("SELECT 1 FROM tasks WHERE id = $1 FOR UPDATE", [first.id]);
+      locked();
+      await released;
+      await ctx.client.query("UPDATE tasks SET status = 'doing', updated_at = now() WHERE id = $1", [
+        first.id,
+      ]);
+      await ctx.emit(
+        "task.moved",
+        { kind: "task", id: first.id },
+        { number: first.number, title: first.title, from: "todo", to: "doing", toLabel: "In progress" },
+      );
+    });
+    await isLocked;
+    const filing = api.post(`${base}/tasks`, {
+      projectId: project.id,
+      title: "Build",
+      dependsOn: [first.id],
+    });
+    try {
+      // Let the start go on only once the filing is waiting on its lock.
+      for (const until = Date.now() + 5000; ;) {
+        const waiting = await board.db.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        );
+        if (waiting.rows[0]!.n > 0) break;
+        if (Date.now() > until) throw new Error("the filing never waited on the task being started");
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    } finally {
+      release();
+    }
+    await starting;
+    const second = await filing;
+    expect(second.status).toBe(201);
+    expect(second.body.dependsOn).toEqual([first.id]);
+    expect((await api.get(`${base}/tasks/${first.id}`)).body.status).toBe("doing");
   });
 
   it("validates assignees against the company and lists by project, department and status", async () => {

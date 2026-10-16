@@ -70,6 +70,12 @@ install built from that tree changes each of these:
 - Docker compose: the project, the database with its role and password, the bucket and MinIO's root user are
   `rosterdock`, so the stack starts on new volumes; copy the old ones across or start empty.
 
+### Fixed
+
+- Handing Peter a goal could fail with an internal error, and leave it half planned, when Peter's loop started
+  the plan's first task while the rest were still being filed: filing a task and starting the task it waits on
+  took their locks in opposite orders, and Postgres broke the deadlock by cancelling the filing.
+
 ### Security
 
 - CI's token only reads the repository, every action is pinned to a commit with its tag beside it, and

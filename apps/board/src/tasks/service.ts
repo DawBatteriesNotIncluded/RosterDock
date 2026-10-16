@@ -229,6 +229,23 @@ export async function createTask(
     }
     await assertWithinGoalCaps(ctx.client, body.projectId, actor, opts);
     const assignee = body.assignee ? await assertActorInCompany(ctx.client, companyId, body.assignee) : null;
+    // What the task points at (the tasks it waits on, the one it was filed from) is locked before it takes a
+    // number. Every other mutation locks its rows first and the company counter last, with its first event;
+    // numbering first and locking a dependency after deadlocked with a task being started (Peter filing a
+    // plan's second task while the loop started the first).
+    const references = opts.parentTaskId ? [...body.dependsOn, opts.parentTaskId] : body.dependsOn;
+    if (references.length) {
+      const found = new Set(
+        (
+          await ctx.client.query<{ id: string }>(
+            "SELECT id FROM tasks WHERE id = ANY($1::uuid[]) AND company_id = $2 ORDER BY number FOR KEY SHARE",
+            [references, companyId],
+          )
+        ).rows.map((r) => r.id),
+      );
+      const missing = body.dependsOn.find((dep) => !found.has(dep));
+      if (missing) throw new HttpError(422, `dependency ${missing} is not a task in this company`);
+    }
     const num = await ctx.client.query<{ n: number }>(
       "UPDATE company_counters SET next_task_number = next_task_number + 1 WHERE company_id = $1 RETURNING next_task_number - 1 AS n",
       [companyId],
@@ -256,11 +273,6 @@ export async function createTask(
     );
     const id = inserted.rows[0]!.id;
     for (const dep of body.dependsOn) {
-      const ok = await ctx.client.query("SELECT 1 FROM tasks WHERE id = $1 AND company_id = $2", [
-        dep,
-        companyId,
-      ]);
-      if (!ok.rowCount) throw new HttpError(422, `dependency ${dep} is not a task in this company`);
       await ctx.client.query(
         "INSERT INTO task_dependencies (company_id, task_id, depends_on_task_id) VALUES ($1, $2, $3)",
         [companyId, id, dep],
