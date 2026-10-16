@@ -2,7 +2,9 @@
 // Streamable HTTP), bound to the run-scoped principal that authenticated it,
 // or to a manager-scope teammate token acting outside a run.
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, type ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ShapeOutput, ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
+import { can, type Action } from "@rosterdock/shared";
 import { z } from "zod";
 import {
   approveTool,
@@ -33,8 +35,41 @@ const taskRef = z
     'Task number like "#144" or a task id. Defaults to the task this run is for; outside a run, required.',
   );
 
-function wrap<T>(fn: () => Promise<T>) {
+/**
+ * What each tool is in the role matrix. POST /api/mcp names no company, so the route guard never sees a
+ * tool call: every call is checked here instead, against the same matrix, and a teammate role narrowed
+ * there narrows the tools with it. A tool must be in this list to be registered at all.
+ */
+export const TOOL_ACTIONS = {
+  board_read_task: "company.read",
+  board_read_output: "company.read",
+  board_list_my_tasks: "company.read",
+  board_post_message: "message.post",
+  board_create_task: "task.create",
+  board_set_blocker: "task.update",
+  board_request_review: "task.update",
+  board_log_decision: "task.update",
+  board_list_tools: "company.read",
+  // A read runs; a write is proposed and the task waits on the person who approves it.
+  board_tool_call: "task.update",
+  board_review_diff: "company.read",
+  board_review_comment: "review.comment",
+  board_review_score: "review.decide",
+  board_request_changes: "review.decide",
+  board_approve: "review.decide",
+} as const satisfies Record<string, Action>;
+export type BoardTool = keyof typeof TOOL_ACTIONS;
+
+function wrap<T>(name: BoardTool, fn: () => Promise<T>) {
   return async () => {
+    const action = TOOL_ACTIONS[name];
+    if (!can("teammate", action))
+      return {
+        content: [
+          { type: "text" as const, text: `${name} is refused: teammates on this board may not ${action}` },
+        ],
+        isError: true,
+      };
     try {
       const result = await fn();
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
@@ -54,16 +89,26 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
         : `You are ${actor.teammateName} (@${actor.handle}), acting on the RosterDock board as yourself outside a run. Name the task ("#144") in every call, and the project when you create a task.`,
     },
   );
-  server.registerTool(
+  // Every tool goes through wrap() under its own name, so none skips the matrix.
+  function tool<Args extends ZodRawShapeCompat>(
+    name: BoardTool,
+    config: { description: string; inputSchema: Args },
+    run: (input: ShapeOutput<Args>) => Promise<unknown>,
+  ): void {
+    const cb = (input: ShapeOutput<Args>) => wrap(name, () => run(input))();
+    // ToolCallback<Args> is conditional on Args and stays unresolved while Args is generic; cb is its shape branch.
+    server.registerTool(name, config, cb as unknown as ToolCallback<Args>);
+  }
+  tool(
     "board_read_task",
     {
       description:
         "Read a task: title, brief, status, assignee, conversation, decisions and the files it delivered (board_read_output reads one).",
       inputSchema: { task: taskRef },
     },
-    async ({ task }) => wrap(() => readTask(deps, actor, { task }))(),
+    ({ task }) => readTask(deps, actor, { task }),
   );
-  server.registerTool(
+  tool(
     "board_read_output",
     {
       description:
@@ -74,26 +119,26 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
         offset: z.number().int().min(0).optional(),
       },
     },
-    async (input) => wrap(() => readOutputTool(deps, actor, input))(),
+    (input) => readOutputTool(deps, actor, input),
   );
-  server.registerTool(
+  tool(
     "board_list_my_tasks",
     {
       description: "Tasks assigned to you that are not done.",
       inputSchema: { status: z.enum(["todo", "doing", "blocked", "review"]).optional() },
     },
-    async ({ status }) => wrap(() => listMyTasks(deps, actor, { status }))(),
+    ({ status }) => listMyTasks(deps, actor, { status }),
   );
-  server.registerTool(
+  tool(
     "board_post_message",
     {
       description:
         "Write on a task's conversation. Mention a teammate with @handle to route the message to them; they get a turn to answer. Never include credential values.",
       inputSchema: { task: taskRef, body: z.string().min(1).max(20_000) },
     },
-    async ({ task, body }) => wrap(() => postMessageTool(deps, actor, { task, body }))(),
+    ({ task, body }) => postMessageTool(deps, actor, { task, body }),
   );
-  server.registerTool(
+  tool(
     "board_create_task",
     {
       description:
@@ -113,9 +158,9 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
         declaredOutputs: z.array(z.string().max(200)).max(20).optional(),
       },
     },
-    async (input) => wrap(() => createTaskTool(deps, actor, input))(),
+    (input) => createTaskTool(deps, actor, input),
   );
-  server.registerTool(
+  tool(
     "board_set_blocker",
     {
       description:
@@ -126,18 +171,18 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
         waitingOnHandle: z.string().max(64).optional(),
       },
     },
-    async (input) => wrap(() => setBlockerTool(deps, actor, input))(),
+    (input) => setBlockerTool(deps, actor, input),
   );
-  server.registerTool(
+  tool(
     "board_request_review",
     {
       description:
         "You are done with your task: move it to In review with an optional note for the reviewer. You cannot mark a task Done.",
       inputSchema: { task: taskRef, note: z.string().max(4000).optional() },
     },
-    async (input) => wrap(() => requestReviewTool(deps, actor, input))(),
+    (input) => requestReviewTool(deps, actor, input),
   );
-  server.registerTool(
+  tool(
     "board_log_decision",
     {
       description:
@@ -149,19 +194,19 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
         confidence: z.number().min(0).max(1),
       },
     },
-    async (input) => wrap(() => logDecisionTool(deps, actor, input))(),
+    (input) => logDecisionTool(deps, actor, input),
   );
   // Governed tools (M5): every external system is reached through the broker, never directly.
-  server.registerTool(
+  tool(
     "board_list_tools",
     {
       description:
         "The live systems in your toolbox as they apply to a task: each connection with its mode (read: reads run; ask: reads run and writes are proposed for a person), why it was narrowed, and its tools with a verdict each (run, propose, refuse).",
       inputSchema: { task: taskRef },
     },
-    async (input) => wrap(() => listToolsTool(deps, actor, input))(),
+    (input) => listToolsTool(deps, actor, input),
   );
-  server.registerTool(
+  tool(
     "board_tool_call",
     {
       description:
@@ -175,19 +220,19 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
         why: z.string().max(4000).optional(),
       },
     },
-    async (input) => wrap(() => toolCallTool(deps, actor, input))(),
+    (input) => toolCallTool(deps, actor, input),
   );
   // Review tools. Anyone may read and comment; deciding is for the assigned reviewer, never the author.
-  server.registerTool(
+  tool(
     "board_review_diff",
     {
       description:
         "The diff under review on a task: files, hunks with numbered lines, comments so far, checks, acceptance criteria and scores. Pass file to read one file.",
       inputSchema: { task: taskRef, file: z.string().max(500).optional() },
     },
-    async (input) => wrap(() => reviewDiffTool(deps, actor, input))(),
+    (input) => reviewDiffTool(deps, actor, input),
   );
-  server.registerTool(
+  tool(
     "board_review_comment",
     {
       description:
@@ -201,9 +246,9 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
         body: z.string().min(1).max(20_000),
       },
     },
-    async (input) => wrap(() => reviewCommentTool(deps, actor, input))(),
+    (input) => reviewCommentTool(deps, actor, input),
   );
-  server.registerTool(
+  tool(
     "board_review_score",
     {
       description:
@@ -222,25 +267,25 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
           .max(20),
       },
     },
-    async (input) => wrap(() => reviewScoreTool(deps, actor, input))(),
+    (input) => reviewScoreTool(deps, actor, input),
   );
-  server.registerTool(
+  tool(
     "board_request_changes",
     {
       description:
         "Send the author back with your comments: the review waits and the author gets a new run with every comment in their pack. Only the assigned reviewer.",
       inputSchema: { task: taskRef, summary: z.string().max(4000).optional() },
     },
-    async (input) => wrap(() => requestChangesTool(deps, actor, input))(),
+    (input) => requestChangesTool(deps, actor, input),
   );
-  server.registerTool(
+  tool(
     "board_approve",
     {
       description:
         "Approve the review: the task is Done and a pull request opens for the project's repository. Only the assigned reviewer; never the author.",
       inputSchema: { task: taskRef, summary: z.string().max(4000).optional() },
     },
-    async (input) => wrap(() => approveTool(deps, actor, input))(),
+    (input) => approveTool(deps, actor, input),
   );
   return server;
 }

@@ -34,7 +34,8 @@ model output on their cluster.
   company already has.
 - **One event stream, per company.** Every mutation appends an event in the same transaction, with the
   actor (a person or a teammate). Activity, the Office, notifications, metrics and traces are projections
-  of it. Every row carries `company_id`; every company route goes through one role guard.
+  of it. Every row carries `company_id`; every company route goes through one role guard, and every board
+  tool a teammate calls over MCP is checked against the same role matrix.
 
 ## Companies on one board
 
