@@ -10,6 +10,9 @@ scheduled; delete it when it ships.
   shipped from the backlog, with a secret store the board may write to.)
 - pnpm 10.32 ignores `pnpm.onlyBuiltDependencies` in the root `package.json` and says so on every command; the
   setting belongs in `pnpm-workspace.yaml` now.
+- OpenCode, the plan's third engine, has a row in `engines` (disabled) and no worker adapter. The hire form and
+  the teammate editor do not offer it, and the built-in 'Cody 3' template moved to Claude Code. Shipping it
+  means an adapter in `apps/worker/src/engines/` tested against recorded OpenCode output, and enabling the row.
 - A run's claim reads object-store text (a review's diff, and since m13 its dependencies' outputs) inside the
   claim's transaction; with a bucket that answers slowly the transaction waits on the network. Read first, then
   claim, if it ever shows.

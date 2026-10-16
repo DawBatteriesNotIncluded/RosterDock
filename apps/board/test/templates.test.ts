@@ -35,6 +35,19 @@ afterAll(async () => {
   await board.destroy();
 });
 
+describe("the built-in templates", () => {
+  it("run on an engine a worker has, on the current models", async () => {
+    const { api } = await seedCompany(board, "tf-builtin@example.com");
+    const builtIn = ((await api.get("/api/templates/teammates")).body as any[]).filter(
+      (t) => t.companyId === null,
+    );
+    expect(builtIn).toHaveLength(9);
+    expect(builtIn.find((t) => t.name === "Cody 3").engine).toBe("claude_code");
+    expect(new Set(builtIn.map((t) => t.engine))).toEqual(new Set(["claude_code"]));
+    expect(new Set(builtIn.map((t) => t.model))).toEqual(new Set(["claude-opus-5-5", "claude-sonnet-5-5"]));
+  });
+});
+
 describe("templates as files", () => {
   it("exports a company by name and imports it into another, resolving members, leads and templates", async () => {
     const src = await seedCompany(board, "tf1@example.com");

@@ -80,6 +80,9 @@ install built from that tree changes each of these:
   the plan's first task while the rest were still being filed: filing a task and starting the task it waits on
   took their locks in opposite orders, and Postgres broke the deadlock by cancelling the filing.
 
+- A teammate hired from the built-in 'Cody 3' template, or put on OpenCode in its editor, failed every run:
+  no worker runs OpenCode yet. The template runs on Claude Code, and the pickers no longer offer OpenCode.
+
 ### Security
 
 - CI's token only reads the repository, every action is pinned to a commit with its tag beside it, and

@@ -93,6 +93,18 @@ export const ENGINE_LABEL: Record<string, string> = {
   stub: "Stub (no model)",
 };
 
+/** Engines a person can pick. OpenCode has no worker yet (docs/backlog.md): its label stays for display only. */
+export const PICKABLE_ENGINES = ["claude_code", "codex", "stub"];
+
+/** An engine picker's choices: the pickable engines, and a teammate's own when it runs on another. */
+export function engineChoices(current: string): [string, string][] {
+  const ids = PICKABLE_ENGINES.includes(current) ? PICKABLE_ENGINES : [...PICKABLE_ENGINES, current];
+  return ids.map((id) => [
+    id,
+    PICKABLE_ENGINES.includes(id) ? (ENGINE_LABEL[id] ?? id) : `${ENGINE_LABEL[id] ?? id} (not available)`,
+  ]);
+}
+
 /** What a teammate is doing right now, derived from the board. */
 export function teammateStatus(
   t: Teammate,

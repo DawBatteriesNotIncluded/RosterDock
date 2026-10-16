@@ -71,7 +71,9 @@ var name in Settings) and a row in the Approvals or Company page:
   Claude Code out. Build the image with it and set `worker.image` (`docs/install.md`, Engines on the
   worker), or move the teammate to Codex.
 - **Failed at once with "no engine adapter"**: the teammate's engine is not on that worker image
-  (`stub`, `claude_code` and `codex` ship; `opencode` does not yet).
+  (`stub`, `claude_code` and `codex` ship).
+- **"runs on opencode, which is not available"**: OpenCode has no worker yet, so the board starts no run on it
+  and the pickers no longer offer it. Pick another engine in the teammate's editor.
 - **Stop a run.** The run panel's Stop: a queued run stops at once; a running one at its next heartbeat.
 
 ## Changing the company from files

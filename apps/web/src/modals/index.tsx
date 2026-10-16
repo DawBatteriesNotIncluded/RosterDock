@@ -8,7 +8,7 @@ import type {
 import { useEffect, useState, type FormEvent } from "react";
 import type { CompanyData, GoalDetail, TeammateTemplate } from "../api/types.ts";
 import { Avatar, Button, Field, Modal, Thinking } from "../components/ui.tsx";
-import { DEFAULT_MODEL, ENGINE_LABEL, POLICY_LABEL } from "../lib/format.ts";
+import { DEFAULT_MODEL, engineChoices, PICKABLE_ENGINES, POLICY_LABEL } from "../lib/format.ts";
 
 export const DEPT_TEMPLATES: Record<
   string,
@@ -637,6 +637,9 @@ export function DesignCompanyModal({
   );
 }
 
+/** A template on an engine nobody can pick (OpenCode) hires onto Claude Code instead. */
+const engineOf = (t: TeammateTemplate) => (PICKABLE_ENGINES.includes(t.engine) ? t.engine : "claude_code");
+
 export function HireTeammateModal({
   templates,
   onClose,
@@ -650,14 +653,14 @@ export function HireTeammateModal({
   const tpl = templates.find((t) => t.id === templateId);
   const [name, setName] = useState(tpl?.name ?? "");
   const [role, setRole] = useState(tpl?.role ?? "");
-  const [engine, setEngine] = useState(tpl?.engine ?? "claude_code");
+  const [engine, setEngine] = useState(tpl ? engineOf(tpl) : "claude_code");
   const [model, setModel] = useState(tpl?.model ?? DEFAULT_MODEL);
   const { busy, submit } = useSubmit(onCreate);
   useEffect(() => {
     if (!tpl) return;
     setName(tpl.name);
     setRole(tpl.role);
-    setEngine(tpl.engine);
+    setEngine(engineOf(tpl));
     setModel(tpl.model);
   }, [tpl]);
   return (
@@ -695,7 +698,7 @@ export function HireTeammateModal({
         <div className="grid2">
           <Field label="Engine">
             <select value={engine} onChange={(e) => setEngine(e.target.value)}>
-              {Object.entries(ENGINE_LABEL).map(([k, l]) => (
+              {engineChoices(engine).map(([k, l]) => (
                 <option key={k} value={k}>
                   {l}
                 </option>
