@@ -1,6 +1,6 @@
 // Workspace against a local bare repository: no network.
 import { existsSync } from "node:fs";
-import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { applyFilePatch, parseUnifiedDiff, renderNewFileDiff } from "@rosterdock/shared";
@@ -25,7 +25,7 @@ beforeAll(async () => {
   bare = path.join(root, "origin.git");
   await (await import("node:fs/promises")).mkdir(src, { recursive: true });
   const env = {
-    ...process.env,
+    // An identity only: never the caller's environment, which under a rebase or a hook points at this repository.
     GIT_AUTHOR_NAME: "t",
     GIT_AUTHOR_EMAIL: "t@example.com",
     GIT_COMMITTER_NAME: "t",
@@ -235,6 +235,34 @@ describe("workspace", () => {
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: os.devNull,
     });
+  });
+
+  it("never lets an inherited GIT_DIR, work tree, index or -c config point git at another repository", async () => {
+    // What `git rebase -x` or a hook hands its commands: the outer repository's location and config.
+    const outer = {
+      GIT_DIR: path.join(bare),
+      GIT_WORK_TREE: root,
+      GIT_INDEX_FILE: path.join(root, "outer-index"),
+      GIT_CONFIG_PARAMETERS: "'core.bare'='true'",
+    };
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-outer-env",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    const where = await git(
+      ["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
+      ws.dir,
+      outer,
+    );
+    expect(where.stdout.trim().split("\n")).toEqual([
+      path.join(await realpath(ws.dir), ".git"),
+      await realpath(ws.dir),
+      "false",
+    ]);
+    expect(existsSync(path.join(root, "outer-index"))).toBe(false);
+    await cleanupWorkspace(ws);
   });
 
   it("runs nothing the run wrote into .git when it reads the changes back", async () => {

@@ -57,6 +57,13 @@ export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<str
   return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull };
 }
 
+/**
+ * What a caller's extra environment may set: an identity, nothing else of git's. GIT_DIR, GIT_WORK_TREE,
+ * GIT_INDEX_FILE or GIT_CONFIG_PARAMETERS (which git exports to the commands a rebase or a hook runs)
+ * would point git at another repository, or configure it.
+ */
+const GIT_KEY_ALLOWED = /^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL|DATE)$/;
+
 /** Every command: no fsmonitor and no hooks, whatever the repository's config says. */
 const GIT_SAFE_ARGS = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${os.devNull}`];
 
@@ -76,7 +83,12 @@ export function git(
     const group = process.platform !== "win32";
     const child = spawn("git", [...GIT_SAFE_ARGS, ...args], {
       cwd,
-      env: { ...gitEnvironment(), ...extraEnv },
+      env: {
+        ...gitEnvironment(),
+        ...Object.fromEntries(
+          Object.entries(extraEnv).filter(([k]) => !k.startsWith("GIT_") || GIT_KEY_ALLOWED.test(k)),
+        ),
+      },
       shell: false,
       windowsHide: true,
       detached: group,

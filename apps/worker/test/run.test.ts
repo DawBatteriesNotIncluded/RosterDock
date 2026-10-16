@@ -439,7 +439,7 @@ describe("repository tests", () => {
     const bare = path.join(workRoot, "origin.git");
     await (await import("node:fs/promises")).mkdir(src, { recursive: true });
     const env = {
-      ...process.env,
+      // An identity only: never the caller's environment, which under a rebase or a hook points at this repository.
       GIT_AUTHOR_NAME: "t",
       GIT_AUTHOR_EMAIL: "t@example.com",
       GIT_COMMITTER_NAME: "t",
