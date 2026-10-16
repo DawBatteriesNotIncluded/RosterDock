@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@rosterdock/shared": "workspace:*",
-    "pg-boss": "^12.31.0"
+    "pg-boss": "^12.37.1"
   },
   "devDependencies": {
     "@types/node": "catalog:",
