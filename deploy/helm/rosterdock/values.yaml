@@ -185,8 +185,9 @@ worker:
   engineEnvNames: [ANTHROPIC_API_KEY]
   engineSecret:
     name: rosterdock-engines
-  # The most a Claude Code teammate may use without asking (ROSTERDOCK_CLAUDE_ALLOWED_TOOLS). A department's
-  # sandbox only narrows it: a tool listed there and not here is left out of the run. Empty: the worker's
+  # The most a Claude Code teammate may use (ROSTERDOCK_CLAUDE_ALLOWED_TOOLS): the only built-in tools it has,
+  # with the rules it uses them under. A department's sandbox only narrows it: a tool listed there and not
+  # here is left out of the run. Empty: the worker's
   # default, Read, Write, Edit, Glob and Grep inside the workspace. A department that needs the web
   # (WebSearch, WebFetch) gets it from a pool that lists them. Codex runs in its own sandbox instead.
   claudeAllowedTools: []

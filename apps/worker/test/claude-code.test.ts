@@ -113,6 +113,8 @@ describe("invocation", () => {
       "--no-session-persistence",
       "--permission-mode",
       "acceptEdits",
+      "--tools",
+      "Write",
       "--allowedTools",
       "Write(./**)",
       "--model",
@@ -168,6 +170,19 @@ describe("invocation", () => {
     ]);
   });
 
+  it("gives Claude Code only the list's built-in tools, so a list without Bash leaves it no shell", () => {
+    // --allowedTools alone only pre-approves: in acceptEdits mode Claude Code still ran read-only Bash
+    // (wc, git status, grep, sed) for teammates whose list had no Bash. --tools is what exists.
+    const opts = { bin: "claude", allowedTools: DEFAULT_ALLOWED_TOOLS };
+    const available = (args: string[]) => args[args.indexOf("--tools") + 1];
+    expect(available(buildArgs(opts, "m", null, "/tmp/mcp.json"))).toBe("Read,Write,Edit,Glob,Grep");
+    expect(available(buildArgs(opts, "m", ["Read(./**)", "Bash"], null))).toBe("Read");
+    expect(available(buildArgs(opts, "m", ["WebFetch"], "/tmp/mcp.json"))).toBe("");
+    expect(
+      available(buildArgs({ bin: "claude", allowedTools: "Read,Bash(npm test:*),mcp__rosterdock" }, "m")),
+    ).toBe("Read,Bash");
+  });
+
   it("passes only the narrowed list, the board's tools added, and no list at all when nothing is left", () => {
     const opts = { bin: "claude", allowedTools: DEFAULT_ALLOWED_TOOLS };
     const tools = (args: string[]) =>
@@ -187,7 +202,8 @@ describe("invocation", () => {
       stub,
       `for await (const _ of process.stdin);
 const a = process.argv.slice(2);
-process.stderr.write("tools=" + a[a.indexOf("--allowedTools") + 1] + "\\n");`,
+process.stderr.write("tools=" + a[a.indexOf("--allowedTools") + 1] + "\\n");
+process.stderr.write("available=" + a[a.indexOf("--tools") + 1] + "\\n");`,
       "utf8",
     );
     const events: RunEventInput[] = [];
@@ -212,6 +228,7 @@ process.stderr.write("tools=" + a[a.indexOf("--allowedTools") + 1] + "\\n");`,
         "The department's sandbox names tools this worker does not allow, so the run goes without them: WebSearch, WebFetch",
       );
       expect(texts).toContain("tools=Write(./**)");
+      expect(texts).toContain("available=Write");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -246,7 +263,7 @@ const chunks = [];
 for await (const c of process.stdin) chunks.push(c);
 const prompt = Buffer.concat(chunks).toString("utf8");
 const args = process.argv.slice(2);
-const must = ["-p", "--output-format", "stream-json", "--strict-mcp-config", "--no-session-persistence", "--allowedTools", "--mcp-config", "--model", "claude-sonnet-5"];
+const must = ["-p", "--output-format", "stream-json", "--strict-mcp-config", "--no-session-persistence", "--tools", "--allowedTools", "--mcp-config", "--model", "claude-sonnet-5"];
 const tools = args[args.indexOf("--allowedTools") + 1];
 // No settings file is read, the cloned repository's included.
 if (args[args.indexOf("--setting-sources") + 1] !== "") { process.stderr.write("stub: settings loaded"); process.exit(7); }

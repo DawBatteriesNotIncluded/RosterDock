@@ -44,6 +44,8 @@ const args = [
   "--no-session-persistence",
   "--permission-mode",
   "acceptEdits",
+  "--tools",
+  "Write,Edit",
   "--allowedTools",
   "Write(./**),Edit(./**)",
   "--model",

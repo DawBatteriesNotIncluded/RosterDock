@@ -139,7 +139,10 @@ What they cannot reach:
 - The engine sees only the env var names the worker was told to pass, narrowed again by the department's
   sandbox, which also sets a time limit. A department's tool list narrows the worker's Claude Code
   allowlist (`ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`, chart `worker.claudeAllowedTools`, per pool too) and never
-  widens it: a tool the worker does not allow is left out of the run, and the run log says which. Codex
+  widens it: a tool the worker does not allow is left out of the run, and the run log says which. The
+  narrowed list is the whole of Claude Code's built-in tools for the run (`--tools`), not only the ones it
+  may use without asking, so a list without Bash leaves the engine no shell, read-only commands
+  included; the rules on it (`Read(./**)`) are what it may do with them without asking. Codex
   has no per-tool list: it runs in the worker's Codex sandbox (`ROSTERDOCK_CODEX_SANDBOX`) whatever the
   department lists.
 - Claude Code starts with no settings file (`--setting-sources` empty): not the operator's, and not the

@@ -112,6 +112,11 @@ export function narrowTools(
   return { tools: [...new Set(tools)], dropped };
 }
 
+/** The built-in tools a list names, once each: what --tools takes (rules and MCP tools are not built-ins). */
+export function builtInTools(rules: string[]): string[] {
+  return [...new Set(rules.map(toolName).filter((name) => !name.startsWith("mcp__")))];
+}
+
 export function buildArgs(
   opts: ClaudeCodeOptions,
   model: string,
@@ -120,6 +125,9 @@ export function buildArgs(
   effort?: string | null,
 ): string[] {
   const { tools } = narrowTools(opts.allowedTools, allowedTools);
+  // --tools is what exists; --allowedTools only pre-approves. Without the first, acceptEdits still lets
+  // Claude Code run Bash for read-only and in-folder commands on its own.
+  const builtIn = builtInTools(tools);
   if (mcpConfigPath && !tools.includes(MCP_TOOL_PATTERN)) tools.push(MCP_TOOL_PATTERN);
   return [
     ...(opts.prefixArgs ?? []),
@@ -134,6 +142,9 @@ export function buildArgs(
     "--no-session-persistence",
     "--permission-mode",
     opts.permissionMode ?? "acceptEdits",
+    // Only the list's built-in tools exist for the run; "" leaves none (the board's MCP tools remain).
+    "--tools",
+    builtIn.join(","),
     // Nothing left after the department narrowed it: no tool is allowed up front.
     ...(tools.length ? ["--allowedTools", tools.join(",")] : []),
     ...(mcpConfigPath ? ["--mcp-config", mcpConfigPath] : []),
