@@ -179,6 +179,10 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.board.githubSecret.name }}
                   key: {{ .Values.board.githubSecret.key }}
+            {{- if .Values.board.githubApi }}
+            - name: ROSTERDOCK_GITHUB_API
+              value: {{ .Values.board.githubApi | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.board.gitlabSecret.name }}
             - name: ROSTERDOCK_GITLAB_TOKEN
@@ -232,6 +236,13 @@ spec:
                   name: {{ $.Values.board.plannerSecret.name }}
                   key: {{ . }}
                   optional: true
+            {{- end }}
+            {{- if not .Values.board.fetchSources }}
+            - name: ROSTERDOCK_FETCH_SOURCES
+              value: "0"
+            {{- end }}
+            {{- with .Values.board.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- if .Values.board.connectionsSecret.name }}
           envFrom:
