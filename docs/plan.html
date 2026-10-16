@@ -76,7 +76,7 @@
   <tr><td>Department</td><td>A roster with a lead teammate and a write policy that can only tighten member toolboxes.</td><td>Company</td></tr>
   <tr><td>Teammate</td><td>Brain, persona, playbooks, toolbox. Templates are shared across companies; instances belong to one.</td><td>Company</td></tr>
   <tr><td>MCP connection</td><td>A plugged-in MCP server. The platform reads its tool list and classifies read vs write. Credentials by name only.</td><td>Company</td></tr>
-  <tr><td>Tool mode</td><td>Per teammate, per tool: <code>read</code>, <code>auto</code>, <code>ask</code>, <code>off</code>. Department policy and project client policy can only narrow.</td><td>Teammate</td></tr>
+  <tr><td>Tool mode</td><td>Per teammate, per connection, optionally on only some of its tools: <code>off</code>, <code>read</code> (writes refused) or <code>ask</code> (every write is an approval). No mode lets a live write skip the gate. Department policy and project client policy can only narrow.</td><td>Teammate</td></tr>
   <tr><td>Project</td><td>A goal's container. Binds a client policy register. Holds tasks.</td><td>Company</td></tr>
   <tr><td>Task</td><td>A card. Status: todo, doing, blocked, review, done. Has an assignee, a creator (human or teammate), dependencies, a conversation, runs, outputs.</td><td>Project</td></tr>
   <tr><td>Run</td><td>One execution of a task by a teammate on an engine, in a sandboxed worktree. Emits events, logs, usage, artifacts, and a diff.</td><td>Task</td></tr>
@@ -95,7 +95,7 @@
   <div class="card"><strong>2 · Intake planner</strong><p class="small">The v1 Peter, kept: a goal becomes a validated pack with background, required outcome, acceptance criteria, required artifacts, done definition and open questions. He asks at most a few clarifying questions, then hands off explicitly. Handoff opens a project and its tasks.</p></div>
   <div class="card"><strong>3 · Project manager</strong><p class="small">After handoff he stays on. He watches runs, reviews and budgets, re-plans on failure, chases blocked tasks, rebalances load between teammates, and escalates only at the two human gates. Department leads are Peter instances scoped to their department; the company Peter routes to them.</p></div>
 </div>
-<p>All three run on the same loop: the Claude Agent SDK against the board MCP server, with a company-design toolset added for the architect role (propose department, propose teammate, propose toolbox, propose policy). Proposals are always drafts a human accepts. Peter never grants a tool to anyone by himself.</p>
+<p>All three run on the same loop: board code that decides what to do and asks the model one structured question per decision (a plan, a re-plan note, an org draft), with a heuristic when no model is configured (<code>docs/m4.md</code>). The architect's proposals (departments, teammates, toolboxes, policies) are always drafts a human accepts. Peter never grants a tool to anyone by himself.</p>
 
 <h2 id="borrowed">Ideas we keep from the reference projects</h2>
 <p>Each of these was worth taking. Each is pinned to a milestone so it ships rather than lingers.</p>
@@ -103,13 +103,13 @@
   <tr><th>From</th><th>What we take</th><th>Where</th></tr>
   <tr><td>Agent Teams AI</td><td>Parallel agents on one board that message, delegate and review each other; hunk-level review with approve and reject; organisations with a global live overview.</td><td>M2, M3</td></tr>
   <tr><td>Agent Teams AI</td><td>Token analytics and budgets per company, department, project and teammate, with alerts at 80% and 100%, and a per-run cost line. Live process view per running teammate: what it is doing now, elapsed time, tokens so far, CPU and memory of its pod.</td><td>Budgets M1, analytics and alerts M2, pod metrics M6</td></tr>
-  <tr><td>Agent Teams AI</td><td>Flexible autonomy: fully autonomous, or approve tool actions one by one, per teammate. Becomes our read, auto, ask, off tool modes.</td><td>M5</td></tr>
+  <tr><td>Agent Teams AI</td><td>Flexible autonomy: fully autonomous, or approve tool actions one by one, per teammate. Becomes our off, read and ask tool modes; a live write always asks.</td><td>M5</td></tr>
   <tr><td>Veritas Kanban</td><td>Decision audit trail: a teammate records the assumptions and confidence behind a decision, in the run, visible in the task drawer.</td><td>M2</td></tr>
   <tr><td>Veritas Kanban</td><td>Output evaluation: scoring against weighted criteria from the task pack, used as review checks. Behavioural drift detection: alert when a teammate's cost, duration or rejection rate departs from its baseline.</td><td>Evaluation M3, drift M6</td></tr>
   <tr><td>Veritas Kanban</td><td>Sandbox policy presets: reusable filesystem, network and environment rules for worker pods, chosen per department.</td><td>M1 basic, M6 network policies</td></tr>
   <tr><td>Veritas Kanban</td><td>Crash-recovery checkpoints with secrets sanitised, so a requeued run resumes with context instead of from zero.</td><td>M1</td></tr>
   <tr><td>OneDev</td><td>AI users as first-class accounts: teammates appear as authors, reviewers and assignees everywhere, with the same permission checks as humans. Notification filtering so agents do not wake each other in loops.</td><td>M0, M2</td></tr>
-  <tr><td>OneDev</td><td>Workspaces per agent engine as container images (Claude Code, Codex, OpenCode), one template each.</td><td>M1</td></tr>
+  <tr><td>OneDev</td><td>Workspaces per agent engine as container images (Claude Code and Codex; OpenCode not yet), one template each.</td><td>M1</td></tr>
   <tr><td>pixel-agents</td><td>The office: characters that walk to desks, type when editing, read when searching, flag when waiting on you; a layout editor and importable asset packs later.</td><td>M2 from events; editor and packs after M6</td></tr>
   <tr><td>agent-board v1</td><td>Evidence gate, sha256 artifacts, propose-approve-execute broker, policy register bound per project, secrets by name, planner intake prompts.</td><td>Throughout</td></tr>
 </table></div>
@@ -128,15 +128,15 @@
 
 <h2 id="arch">Architecture</h2>
 <div class="grid2">
-  <div class="card"><strong>Board API</strong><p class="small">Node 22, TypeScript, Fastify. Owns all state, the event stream (SSE and WebSocket), the queue producer, the review and approval engines, and the broker. Stateless; scales horizontally.</p></div>
+  <div class="card"><strong>Board API</strong><p class="small">Node 22, TypeScript, Fastify. Owns all state, the event stream (SSE), the queue producer, the review and approval engines, and the broker. Stateless; scales horizontally.</p></div>
   <div class="card"><strong>Web UI</strong><p class="small">React, Vite, Tailwind, shadcn. The prototype's design system. Views: Company, Board, Reviews, Approvals, Activity, Office, Departments, Teammates, Settings.</p></div>
   <div class="card"><strong>Worker</strong><p class="small">Separate image. Claims a run from the queue, checks out a worktree on an ephemeral volume, runs the engine headless with the persona pack and a run-scoped board token, streams events, captures artifacts and the diff, exits. Killed workers are reaped and the task requeued.</p></div>
-  <div class="card"><strong>Engines</strong><p class="small">One runner adapter interface. Claude Code first, Codex second, OpenCode third. Each is a table row, not a copy of the code.</p></div>
+  <div class="card"><strong>Engines</strong><p class="small">One runner adapter interface. Claude Code and Codex ship; OpenCode is in the backlog. Each is a table row, not a copy of the code.</p></div>
   <div class="card"><strong>Board MCP server</strong><p class="small">The tools teammates use to act on the board: read task, post message, create task, request review, propose action. Scoped by run token. This is how agents talk to each other.</p></div>
-  <div class="card"><strong>Tool broker</strong><p class="small">Proxies external MCP servers. Applies tool modes and policies. Reads pass through; auto writes execute; ask writes become approval records; off is refused before any network call.</p></div>
-  <div class="card"><strong>PM loop</strong><p class="small">Peter runs on the Claude Agent SDK against the board MCP server on a schedule and on events. Plans, assigns, watches, re-plans, escalates at gates.</p></div>
+  <div class="card"><strong>Tool broker</strong><p class="small">Proxies external MCP servers. Applies tool modes and policies. Reads pass through; writes under ask become approval records and execute only once approved; read refuses writes and off refuses everything, before any network call.</p></div>
+  <div class="card"><strong>PM loop</strong><p class="small">Peter is a board loop that runs on a schedule and on events, with one structured model call per plan, re-plan or draft. Plans, assigns, watches, re-plans, escalates at gates.</p></div>
   <div class="card"><strong>Storage</strong><p class="small">Postgres for everything relational and the event log. pg-boss for the queue so day one needs no Redis. S3-compatible object storage for artifacts and diffs, MinIO locally.</p></div>
-  <div class="card"><strong>Git</strong><p class="small">Provider interface. GitHub first via app installation: clone, push branch, open PR, read checks. GitLab and OneDev later.</p></div>
+  <div class="card"><strong>Git</strong><p class="small">Provider interface. GitHub and GitLab: clone, push branch, open a pull or merge request, read checks. OneDev later.</p></div>
   <div class="card"><strong>Deploy</strong><p class="small">Docker Compose for local. Helm chart for production: board Deployment, worker Deployment with HPA on queue depth, Postgres and MinIO as optional subcharts or external, OIDC for login, External Secrets compatible.</p></div>
 </div>
 
@@ -148,9 +148,9 @@
   <tr><td><code>users</code>, <code>memberships</code></td><td>oidc subject, email; company_id, user_id, role</td></tr>
   <tr><td><code>departments</code>, <code>department_members</code></td><td>name, lead_teammate_id, write_policy; teammate_id, is_lead</td></tr>
   <tr><td><code>teammate_templates</code>, <code>teammates</code></td><td>name, role, persona_md, playbooks[], engine, model, avatar; instance overrides</td></tr>
-  <tr><td><code>mcp_connections</code>, <code>mcp_tools</code></td><td>transport, url, credential_ref (name), catalog_entry; tool name, kind read/write, schema</td></tr>
-  <tr><td><code>tool_modes</code></td><td>teammate_id, tool_id, mode</td></tr>
-  <tr><td><code>policy_registers</code>, <code>project_policies</code></td><td>named client rules; project binding</td></tr>
+  <tr><td><code>connections</code></td><td>name, kind (MCP or OpenAPI), transport, url or command, auth_env_name (a name), catalog_id; tools jsonb: name, read or write, who classified it</td></tr>
+  <tr><td><code>teammates.toolbox</code></td><td>jsonb: connection, mode, optionally some of its tools; the ceiling</td></tr>
+  <tr><td><code>projects.client_policy</code></td><td>jsonb: a default mode and caps per connection; only narrows</td></tr>
   <tr><td><code>projects</code>, <code>tasks</code>, <code>task_dependencies</code></td><td>goal, client; title, status, assignee_teammate_id, created_by (user or teammate), blocker jsonb</td></tr>
   <tr><td><code>messages</code></td><td>task_id, author (user or teammate), body, mentions[]</td></tr>
   <tr><td><code>runs</code>, <code>run_events</code></td><td>task_id, teammate_id, engine, status, worktree_ref, usage, run_spec_hash; seq, type, payload</td></tr>
@@ -241,7 +241,7 @@
 
 <div class="card"><div class="ms"><span class="n">M4</span><h3 style="margin:0">Peter: PM loop, architect, and research <span class="muted small">· weeks 9 to 10</span></h3></div>
   <ul class="small">
-    <li>Peter as a Claude Agent SDK loop: intake, decompose with done definitions, assign by role and load, watch runs and reviews, re-plan on failure, escalate only at gates. Runs on events and on a schedule.</li>
+    <li>Peter as a board loop with structured model calls: intake, decompose with done definitions, assign by role and load, watch runs and reviews, re-plan on failure, escalate only at gates. Runs on events and on a schedule.</li>
     <li>Research persona path: document artifacts with sources, a research review checklist instead of a diff.</li>
     <li>Department leads as scoped PM instances; company PM routes goals to leads.</li>
     <li>Recursion and cost caps per goal; Peter reports what it spent.</li>
@@ -279,9 +279,9 @@
   <tr><td>Database</td><td>Postgres only</td><td>Multi-replica from day one; drop JSON files entirely.</td></tr>
   <tr><td>Queue</td><td>pg-boss on Postgres</td><td>One fewer service; swap to Redis later only if throughput demands.</td></tr>
   <tr><td>Artifacts</td><td>S3-compatible, MinIO locally</td><td>Diffs and files do not belong in Postgres rows.</td></tr>
-  <tr><td>Engines</td><td>Claude Code first, Codex second, OpenCode third</td><td>Claude Code is live-proven in v1; Codex is your Cody build engine today.</td></tr>
+  <tr><td>Engines</td><td>Claude Code first, Codex second, OpenCode third</td><td>Claude Code is live-proven in v1; Codex is your Cody build engine today. The first two shipped; OpenCode is in the backlog.</td></tr>
   <tr><td>DeerFlow</td><td>Drop for now</td><td>Its research value returns as a research persona on Claude Code; the boundary was the most fragile v1 code.</td></tr>
-  <tr><td>Git host</td><td>GitHub first</td><td>App installation model fits PR flow; GitLab and OneDev via the same provider interface later.</td></tr>
+  <tr><td>Git host</td><td>GitHub first</td><td>App installation model fits PR flow; GitLab shipped through the same provider interface, OneDev later.</td></tr>
 </table></div>
 
 <h2 id="risks">Risks and how we hold them</h2>
