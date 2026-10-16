@@ -234,6 +234,31 @@ describe("executeRun", () => {
     expect(board.heartbeats).toBeGreaterThanOrEqual(2);
   });
 
+  it("keeps the tokens a stopped or timed-out engine had used", async () => {
+    const spent: EngineAdapter = {
+      id: "stub",
+      async run(ctx) {
+        ctx.onUsage({ inputTokens: 10, outputTokens: 3, cacheReadTokens: 0, cacheWriteTokens: 37471 });
+        await new Promise((resolve) => ctx.signal.addEventListener("abort", resolve, { once: true }));
+        return { ok: false, exitCode: null, usage: {}, resultText: null, error: "stopped" };
+      },
+    };
+    const stopped = fakeBoard(PACK(), [], { stopAfterHeartbeats: 2 });
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(stopped, { engines: { stub: spent } }));
+    expect(stopped.completion?.status).toBe("stopped");
+    expect(stopped.completion?.usage).toMatchObject({ inputTokens: 10, cacheWriteTokens: 37471 });
+
+    const slow = fakeBoard(PACK(), [], {
+      sandbox: { allowedTools: null, envNames: null, timeoutSeconds: 1 },
+    });
+    await executeRun(
+      { runId: "run-1", jobId: "job-1" },
+      deps(slow, { engines: { stub: spent }, heartbeatMs: 10_000 }),
+    );
+    expect(slow.completion?.blocker?.code).toBe("timeout");
+    expect(slow.completion?.usage).toMatchObject({ inputTokens: 10, cacheWriteTokens: 37471 });
+  });
+
   it("stops on worker shutdown", async () => {
     const board = fakeBoard(PACK("[stub:hang]"), []);
     const shutdown = new AbortController();

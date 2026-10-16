@@ -41,6 +41,28 @@ describe("stream-json parsing", () => {
     expect(types).not.toContain("stdout");
   });
 
+  it("counts what the recorded messages cost when the run ends before its result", async () => {
+    const raw = await readFile(path.join(fixtures, "claude-code-success.ndjson"), "utf8");
+    const cut = raw
+      .split("\n")
+      .filter((l) => l && JSON.parse(l).type !== "result")
+      .join("\n");
+    // Two messages: input and cache tokens in full, output as far as the stream had counted it.
+    expect(parseStream(cut).usage).toEqual({
+      inputTokens: 18,
+      outputTokens: 4,
+      cacheReadTokens: 37471,
+      cacheWriteTokens: 38068,
+    });
+    // The result's own count replaces the running sum.
+    expect(parseStream(raw).usage).toEqual({
+      inputTokens: 18,
+      outputTokens: 489,
+      cacheReadTokens: 37471,
+      cacheWriteTokens: 38068,
+    });
+  });
+
   it("recognises the recorded auth failure as an error result with no usage", async () => {
     const parsed = parseStream(await readFile(path.join(fixtures, "claude-code-auth-error.ndjson"), "utf8"));
     expect(parsed.isError).toBe(true);
@@ -363,6 +385,59 @@ process.exit(1);
     expect(stopped.ok).toBe(false);
     expect(stopped.error).toBe("stopped");
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps a stopped run's usage, reported as the recorded messages arrive", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-cc-"));
+    const stub = path.join(dir, "replay-then-hang.mjs");
+    await writeFile(
+      stub,
+      `import { readFile } from "node:fs/promises";
+for await (const _ of process.stdin);
+for (const l of (await readFile(process.env.FIXTURE_PATH, "utf8")).split("\\n").filter(Boolean))
+  if (JSON.parse(l).type !== "result") process.stdout.write(l + "\\n");
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+    const ac = new AbortController();
+    const reported: Record<string, unknown>[] = [];
+    try {
+      const result = await createClaudeCodeEngine({
+        bin: process.execPath,
+        allowedTools: "Write(./**)",
+        prefixArgs: [stub],
+      }).run({
+        workdir: dir,
+        pack: "x",
+        model: "m",
+        signal: ac.signal,
+        emit: () => {},
+        // Stopped once the second message is in, as the board's Stop or the time limit would.
+        onUsage: (u) => {
+          reported.push(u);
+          if (u.cacheReadTokens) ac.abort();
+        },
+        env: { FIXTURE_PATH: path.join(fixtures, "claude-code-success.ndjson") },
+        allowedTools: null,
+        mcp: null,
+      });
+      expect(result.error).toBe("stopped");
+      expect(result.usage).toEqual({
+        inputTokens: 18,
+        outputTokens: 4,
+        cacheReadTokens: 37471,
+        cacheWriteTokens: 38068,
+      });
+      expect(reported[0]).toEqual({
+        inputTokens: 10,
+        outputTokens: 3,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 37471,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("says Claude Code is not installed when the worker has no binary, as the published image has none", async () => {

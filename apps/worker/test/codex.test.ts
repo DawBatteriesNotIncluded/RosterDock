@@ -246,6 +246,13 @@ process.exit(1);`,
     const stopped = await p;
     expect(stopped.ok).toBe(false);
     expect(stopped.error).toBe("stopped");
+    // Codex counts tokens only when its turn completes: the run log says this one counted none.
+    expect(events.at(-1)).toEqual({
+      type: "stderr",
+      payload: {
+        text: "Codex stopped before it reported its token use, so this run's tokens are not counted.",
+      },
+    });
     await rm(dir, { recursive: true, force: true });
   });
 

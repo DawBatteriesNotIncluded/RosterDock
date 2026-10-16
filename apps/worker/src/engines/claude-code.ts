@@ -145,7 +145,12 @@ export function buildArgs(
 
 export interface ParsedStream {
   events: RunEventInput[];
+  /** The result's usage once it arrives; until then, the sum of what each message reported so far. */
   usage: Partial<RunUsage>;
+  /** Each assistant message's usage by message id, while the run has no result yet. */
+  messageUsage: Record<string, Record<string, number>>;
+  /** The result's usage has replaced the running sum. */
+  usageFinal: boolean;
   resultText: string | null;
   isError: boolean;
   subtype: string | null;
@@ -165,12 +170,52 @@ interface StreamMessage {
   subtype?: string;
   model?: string;
   tools?: unknown[];
-  message?: { content?: { type: string; text?: string; name?: string; input?: unknown }[] };
+  message?: {
+    id?: string;
+    content?: { type: string; text?: string; name?: string; input?: unknown }[];
+    usage?: Record<string, number>;
+  };
   usage?: Record<string, number>;
   result?: unknown;
   is_error?: boolean;
   duration_ms?: number;
   num_turns?: number;
+}
+
+function toRunUsage(u: Record<string, number>): Partial<RunUsage> {
+  return {
+    inputTokens: u.input_tokens ?? 0,
+    outputTokens: u.output_tokens ?? 0,
+    cacheReadTokens: u.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
+  };
+}
+
+const USAGE_KEYS = [
+  "input_tokens",
+  "output_tokens",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+];
+
+/**
+ * Each assistant line repeats its message's usage, so the running total takes every message once, at the
+ * most it reported. A run stopped before its result keeps what its messages cost: the input and cache
+ * tokens in full, the output of an unfinished message as far as it went.
+ */
+function addMessageUsage(acc: ParsedStream, id: string, usage: Record<string, number>): void {
+  const seen = acc.messageUsage[id] ?? {};
+  const merged: Record<string, number> = { ...seen };
+  for (const key of USAGE_KEYS) {
+    const v = usage[key];
+    if (typeof v === "number") merged[key] = Math.max(seen[key] ?? 0, v);
+  }
+  acc.messageUsage[id] = merged;
+  if (acc.usageFinal) return;
+  const sum: Record<string, number> = {};
+  for (const m of Object.values(acc.messageUsage))
+    for (const key of USAGE_KEYS) sum[key] = (sum[key] ?? 0) + (m[key] ?? 0);
+  acc.usage = toRunUsage(sum);
 }
 
 export function parseStreamLine(line: string, acc: ParsedStream): void {
@@ -195,6 +240,7 @@ export function parseStreamLine(line: string, acc: ParsedStream): void {
       }
       return;
     case "assistant": {
+      if (msg.message?.id && msg.message.usage) addMessageUsage(acc, msg.message.id, msg.message.usage);
       const content = msg.message?.content ?? [];
       for (const block of content) {
         if (block.type === "text" && block.text?.trim()) {
@@ -212,13 +258,8 @@ export function parseStreamLine(line: string, acc: ParsedStream): void {
       // tool results: recorded as a step only, content stays in the sandbox.
       return;
     case "result": {
-      const u = (msg.usage ?? {}) as Record<string, number>;
-      acc.usage = {
-        inputTokens: u.input_tokens ?? 0,
-        outputTokens: u.output_tokens ?? 0,
-        cacheReadTokens: u.cache_read_input_tokens ?? 0,
-        cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
-      };
+      acc.usage = toRunUsage((msg.usage ?? {}) as Record<string, number>);
+      acc.usageFinal = true;
       acc.resultText = typeof msg.result === "string" && msg.result.trim() ? msg.result.trim() : null;
       acc.isError = Boolean(msg.is_error);
       acc.subtype = typeof msg.subtype === "string" ? msg.subtype : null;
@@ -239,15 +280,21 @@ export function parseStreamLine(line: string, acc: ParsedStream): void {
   }
 }
 
-export function parseStream(text: string): ParsedStream {
-  const acc: ParsedStream = {
+export function emptyStream(): ParsedStream {
+  return {
     events: [],
     usage: {},
+    messageUsage: {},
+    usageFinal: false,
     resultText: null,
     isError: false,
     subtype: null,
     durationMs: null,
   };
+}
+
+export function parseStream(text: string): ParsedStream {
+  const acc = emptyStream();
   for (const line of text.split("\n")) {
     if (line.trim()) parseStreamLine(line, acc);
   }
@@ -281,14 +328,8 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
             ),
           },
         });
-      const acc: ParsedStream = {
-        events: [],
-        usage: {},
-        resultText: null,
-        isError: false,
-        subtype: null,
-        durationMs: null,
-      };
+      const acc = emptyStream();
+      let reported = acc.usage;
       let child: ReturnType<typeof spawn>;
       try {
         child = spawn(resolved.bin, args, {
@@ -338,7 +379,8 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
             const before = acc.events.length;
             parseStreamLine(line, acc);
             for (const ev of acc.events.slice(before)) ctx.emit(ev);
-            if (acc.events[acc.events.length - 1]?.type === "result") ctx.onUsage(acc.usage);
+            // As it grows, so the heartbeat shows it and a stopped run still counts it.
+            if (acc.usage !== reported) ctx.onUsage((reported = acc.usage));
           }
           nl = stdoutBuf.indexOf("\n");
         }

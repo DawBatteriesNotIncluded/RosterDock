@@ -337,7 +337,15 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
           resultText: null,
           error: startFailure("Codex", opts.bin, exit.error),
         };
-      if (ctx.signal.aborted)
+      if (ctx.signal.aborted) {
+        // Codex reports tokens only when its turn completes; a stopped turn reported none.
+        if (!Object.keys(acc.usage).length)
+          ctx.emit({
+            type: "stderr",
+            payload: {
+              text: "Codex stopped before it reported its token use, so this run's tokens are not counted.",
+            },
+          });
         return {
           ok: false,
           exitCode: exit.code,
@@ -345,6 +353,7 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
           resultText: acc.resultText,
           error: "stopped",
         };
+      }
       const ok = exit.code === 0 && !acc.isError;
       return {
         ok,
