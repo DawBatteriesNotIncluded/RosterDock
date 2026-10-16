@@ -77,8 +77,9 @@ const INSTALL_ARGS: Record<"pnpm" | "yarn" | "npm", string[]> = {
   npm: ["ci", "--ignore-scripts", "--no-audit", "--no-fund"],
 };
 
+/** The end of the output, the leading … included, within the board's MAX_TEST_OUTPUT_CHARS. */
 function tail(output: string): string {
-  return output.length > MAX_TEST_OUTPUT_CHARS ? `…${output.slice(-MAX_TEST_OUTPUT_CHARS)}` : output;
+  return output.length > MAX_TEST_OUTPUT_CHARS ? `…${output.slice(-(MAX_TEST_OUTPUT_CHARS - 1))}` : output;
 }
 
 /**
