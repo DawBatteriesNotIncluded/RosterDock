@@ -107,7 +107,9 @@ browser ──▶ web ──/api──▶ board ──────▶ connection
 
 - **board** (`apps/board`): owns state and events, runs Peter, reviews and approvals; alone calls connections.
 - **web** (`apps/web`): the React app; nginx proxies `/api` to the board.
-- **workers** (`apps/worker`): run engines headless, reaching only the board, Postgres and public HTTPS.
+- **workers** (`apps/worker`): run engines headless. They run model output, so on a cluster with
+  `networkPolicy.enabled` (on in `examples/production.yaml`) they reach only the board, Postgres and public
+  HTTPS.
 - **Postgres** holds everything; an S3 bucket is optional, for artifacts over 512 KB.
 
 More in the [operator guide](docs/operator.md).
@@ -132,9 +134,9 @@ public images ([Engines on the worker](docs/install.md#engines-on-the-worker)).
 ## On Kubernetes today
 
 Run `deploy/scripts/local-cluster.sh` (a kind cluster that stays) or `deploy/scripts/smoke.sh` (a throwaway
-install), or build the images and install `deploy/helm/rosterdock` with `image.registry`. Guides:
-[install](docs/install.md), [operator](docs/operator.md), [security](docs/security.md) and the
-[docs index](docs/README.md).
+install), or build the images and install `deploy/helm/rosterdock` with `image.registry` and `image.tag` set
+to where you pushed the images and the tag you gave them. Guides: [install](docs/install.md),
+[operator](docs/operator.md), [security](docs/security.md) and the [docs index](docs/README.md).
 
 ## Demo companies
 
