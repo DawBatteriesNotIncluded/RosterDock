@@ -8,7 +8,7 @@ import type {
 import { useEffect, useState, type FormEvent } from "react";
 import type { CompanyData, GoalDetail, TeammateTemplate } from "../api/types.ts";
 import { Avatar, Button, Field, Modal, Thinking } from "../components/ui.tsx";
-import { ENGINE_LABEL, POLICY_LABEL } from "../lib/format.ts";
+import { DEFAULT_MODEL, ENGINE_LABEL, POLICY_LABEL } from "../lib/format.ts";
 
 export const DEPT_TEMPLATES: Record<
   string,
@@ -651,7 +651,7 @@ export function HireTeammateModal({
   const [name, setName] = useState(tpl?.name ?? "");
   const [role, setRole] = useState(tpl?.role ?? "");
   const [engine, setEngine] = useState(tpl?.engine ?? "claude_code");
-  const [model, setModel] = useState(tpl?.model ?? "claude-sonnet-5");
+  const [model, setModel] = useState(tpl?.model ?? DEFAULT_MODEL);
   const { busy, submit } = useSubmit(onCreate);
   useEffect(() => {
     if (!tpl) return;

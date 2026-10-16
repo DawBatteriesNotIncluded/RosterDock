@@ -382,7 +382,7 @@ describe("Peter's loop", () => {
     await workerComplete(modelBoard, c2.token, next.id, { status: "failed", error: "401 from Gong" });
     anthropic.queue.push("replan-needs-person.json");
     const esc = (await api.post(`${base}/peter/pass`, {})).body;
-    expect(anthropic.requests.at(-1)!.body.model).toBe("claude-opus-5");
+    expect(anthropic.requests.at(-1)!.body.model).toBe("claude-opus-5-5");
     expect(esc.replanned).toEqual([]);
     expect(esc.escalated[0]!.reason).toMatch(/GONG_API_TOKEN/);
     expect((await api.get(`${base}/goals/${goal.id}`)).body.status).toBe("needs_you");

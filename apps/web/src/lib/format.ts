@@ -82,6 +82,10 @@ export const POLICY_LABEL: Record<string, string> = {
   ask: "Every write asks",
 };
 
+/** The model a hire starts on when its template names none: DEFAULT_MODEL in @rosterdock/shared, which the web
+ * takes types from only. */
+export const DEFAULT_MODEL = "claude-sonnet-5-5";
+
 export const ENGINE_LABEL: Record<string, string> = {
   claude_code: "Claude Code",
   codex: "Codex",

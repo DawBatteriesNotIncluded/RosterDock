@@ -44,6 +44,10 @@ Against the images built from the tree before this release:
   Codex 0.157.1 in a board built with `WITH_MODEL_CLIS=1`.
 - The chart is installed from `oci://ghcr.io/dawbatteriesnotincluded/charts/rosterdock` with `--version`, and
   `examples/production.yaml` no longer pins `image.tag`: the chart's version picks the images.
+- The built-in teammate templates, and the model a hire or Peter falls back on, are the current ones: Opus 5.5
+  for Peter, Verifier, Archy and Finn, Sonnet 5.5 for the rest. Opus 5.5 also costs less than the Opus 5 they
+  named. The demo templates' Haiku teammates run on Haiku 5.5, and Settings fills its list price. A teammate
+  already hired keeps its model.
 - The web image carries its fonts, Schibsted Grotesk and IBM Plex Mono (SIL Open Font License), where the
   page loaded them from Google Fonts: an install without internet access shows them, and no page load sends
   a visitor's address to Google.

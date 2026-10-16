@@ -25,6 +25,7 @@ import type {
 } from "../api/types.ts";
 import { Button, Field, Pill, Tip, Topbar } from "../components/ui.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
+import { DEFAULT_MODEL } from "../lib/format.ts";
 import type { SettingsTab } from "../state/store.tsx";
 import { ClientPoliciesPanel } from "./ClientPoliciesPanel.tsx";
 import { ConnectionsPanel, type ConnectionsPanelProps } from "./ConnectionsPanel.tsx";
@@ -722,7 +723,7 @@ function PriceForm({
         <input
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          placeholder={kind === "api" ? "claude-sonnet-5" : "claude_code"}
+          placeholder={kind === "api" ? DEFAULT_MODEL : "claude_code"}
           style={{ width: 180 }}
         />
       </Field>

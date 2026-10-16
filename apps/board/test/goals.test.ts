@@ -301,7 +301,7 @@ describe("goals by model (recorded responses)", () => {
     const req = anthropic.requests.at(-1)!;
     expect(req.path).toBe("/v1/messages");
     expect(req.headers["x-api-key"]).toBe("test-key-by-name");
-    expect(req.body.model).toBe("claude-opus-5");
+    expect(req.body.model).toBe("claude-opus-5-5");
     expect(req.body.system).toContain("@cody (Cody), n8n engineer");
     expect(req.body.system).toContain("@ricky (Ricky), researcher");
     expect(req.body.system).not.toContain("@peter");

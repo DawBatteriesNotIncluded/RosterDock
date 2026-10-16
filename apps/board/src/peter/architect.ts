@@ -8,7 +8,7 @@
 // nobody is granted a tool here (M5 binds toolboxes).
 
 import { z } from "zod";
-import { handleFor, WRITE_POLICIES, type ActorRef } from "@rosterdock/shared";
+import { DEFAULT_MODEL, handleFor, WRITE_POLICIES, type ActorRef } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate } from "../mutate.js";
@@ -566,7 +566,7 @@ export async function acceptDraft(
         for (const t of d.teammates) {
           const tpl = t.template ? org.templates.find((x) => x.name === t.template) : undefined;
           const engine = tpl && org.enabledEngines.includes(tpl.engine) ? tpl.engine : "claude_code";
-          const model = tpl?.model ?? "claude-sonnet-5";
+          const model = tpl?.model ?? DEFAULT_MODEL;
           const row = (
             await ctx.client.query<{ id: string; name: string }>(
               `INSERT INTO teammates (company_id, name, handle, role, persona_md, playbooks, engine, model, avatar)
