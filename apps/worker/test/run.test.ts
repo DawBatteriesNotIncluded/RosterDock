@@ -3,11 +3,16 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { RunArtifactInput, RunCompleteInput, RunEventInput } from "@rosterdock/shared";
+import {
+  RunCompleteSchema,
+  type RunArtifactInput,
+  type RunCompleteInput,
+  type RunEventInput,
+} from "@rosterdock/shared";
 import { BoardError, type BoardClient, type ClaimedRun } from "../src/board-client.js";
 import { stubEngine } from "../src/engines/stub.js";
 import type { EngineAdapter } from "../src/engines/types.js";
-import { engineEnvironment, executeRun, type RunDeps } from "../src/run.js";
+import { engineEnvironment, executeRun, fitCompletion, type RunDeps } from "../src/run.js";
 import { runRootSpanId, traceIdForRun } from "@rosterdock/shared";
 import { git } from "../src/workspace.js";
 
@@ -94,6 +99,9 @@ function fakeBoard(
       board.artifacts.push(a);
     },
     async complete(_t, _r, c) {
+      // What the board's route does with a body its schema refuses.
+      const parsed = RunCompleteSchema.safeParse(c);
+      if (!parsed.success) throw new BoardError(400, parsed.error.message);
       board.completion = c;
     },
   };
@@ -163,6 +171,27 @@ describe("executeRun", () => {
     expect(board.completion?.error).toMatch(/exited with code 1/);
     expect(board.artifacts.map((a) => a.path)).toEqual(["vms-architecture.md", "notes.md", "changes.diff"]);
     expect(board.shipped.some((e) => e.type === "stderr")).toBe(true);
+  });
+
+  it("fits an engine error longer than the board takes, so the failure is still recorded", async () => {
+    // Claude Code's error carries its last stderr line, which can be 4,000 characters on its own.
+    const long: EngineAdapter = {
+      id: "stub",
+      async run() {
+        return {
+          ok: false,
+          exitCode: 1,
+          usage: {},
+          resultText: null,
+          error: `Claude Code exited with code 1: ${"e".repeat(4000)}`,
+        };
+      },
+    };
+    const board = fakeBoard(PACK(), []);
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board, { engines: { stub: long } }));
+    expect(board.completion?.status).toBe("failed");
+    expect(board.completion?.error?.length).toBeLessThanOrEqual(4000);
+    expect(board.completion?.error).toMatch(/^Claude Code exited with code 1: e+$/);
   });
 
   it("turns blocked.md into a blocked completion routed to the mentioned teammate", async () => {
@@ -291,6 +320,21 @@ describe("repository tests", () => {
     // The diff was captured before the tests ran.
     expect(board.artifacts.find((a) => a.kind === "diff")?.content).toContain("+++ b/notes.md");
     expect(board.shipped.some((e) => e.type === "check")).toBe(true);
+  });
+});
+
+describe("fitCompletion", () => {
+  it("cuts every text field to the board's limit and leaves a valid completion valid", () => {
+    const fitted = fitCompletion({
+      status: "blocked",
+      summary: "s".repeat(5000),
+      blocker: { code: "unknown", what: "w".repeat(1200), why: "y".repeat(1200) },
+      checks: [{ kind: "tests", ok: false, title: "t".repeat(300), detail: "d".repeat(25_000) }],
+    });
+    expect(RunCompleteSchema.safeParse(fitted).success).toBe(true);
+    expect(fitted.checks?.[0]?.detail?.startsWith("…")).toBe(true);
+    const fine: RunCompleteInput = { status: "completed", summary: "Done.", usage: { inputTokens: 1 } };
+    expect(fitCompletion(fine)).toEqual(fine);
   });
 });
 

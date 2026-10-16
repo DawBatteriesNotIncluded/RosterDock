@@ -7,7 +7,7 @@ import type { EngineAdapter } from "./engines/types.js";
 import { createResourceSampler, type ResourceSampler } from "./resources.js";
 import { createPhaseRecorder, exportWorkerTrace, type WorkerOtlp } from "./trace.js";
 import { runRepoTests, type Exec } from "./tests.js";
-import { clip } from "./text.js";
+import { clip, tail } from "./text.js";
 import { cleanupWorkspace, harvestWorkspace, prepareWorkspace, type Workspace } from "./workspace.js";
 
 export interface RunDeps {
@@ -70,6 +70,42 @@ export function narrowEnv(env: Record<string, string>, envNames: string[] | null
   if (envNames === null) return env;
   const keep = new Set([...BASE_ENV_KEYS, ...envNames]);
   return Object.fromEntries(Object.entries(env).filter(([k]) => keep.has(k)));
+}
+
+/**
+ * The completion cut to what the board's RunCompleteSchema takes, field by field. An engine's error
+ * carries its last stderr line, and one over the limit made the board refuse the whole report.
+ */
+export function fitCompletion(c: RunCompleteInput): RunCompleteInput {
+  const fit = (text: string | undefined, max: number) =>
+    text === undefined ? undefined : clip(text.trim(), max);
+  return {
+    ...c,
+    ...(c.summary !== undefined ? { summary: fit(c.summary, 4000) } : {}),
+    ...(c.error !== undefined ? { error: fit(c.error, 4000) } : {}),
+    ...(c.model !== undefined ? { model: fit(c.model, 120) } : {}),
+    ...(c.blocker
+      ? {
+          blocker: {
+            ...c.blocker,
+            ...(c.blocker.what !== undefined ? { what: fit(c.blocker.what, 1000) } : {}),
+            ...(c.blocker.why !== undefined ? { why: fit(c.blocker.why, 1000) } : {}),
+            ...(c.blocker.waitingOn?.name !== undefined
+              ? { waitingOn: { ...c.blocker.waitingOn, name: clip(c.blocker.waitingOn.name, 120) } }
+              : {}),
+          },
+        }
+      : {}),
+    ...(c.checks
+      ? {
+          checks: c.checks.slice(0, 10).map((k) => ({
+            ...k,
+            title: clip(k.title.trim(), 200),
+            ...(k.detail !== undefined ? { detail: tail(k.detail, 20_000, "…") } : {}),
+          })),
+        }
+      : {}),
+  };
 }
 
 /** Base process env plus the allowlisted names. Values never leave the child. */
@@ -319,6 +355,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
     deps.shutdown.removeEventListener("abort", onShutdown);
   }
   await flush();
+  completion = fitCompletion(completion);
   try {
     await deps.board.complete(token, runId, completion);
     deps.log.info(`run ${runId}: ${completion.status}`);
