@@ -36,10 +36,34 @@ export async function createTestDb(): Promise<TestDb> {
     async drop() {
       const client = new pg.Client({ connectionString: ADMIN_URL });
       await client.connect();
-      await client.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-      await client.end();
+      try {
+        await sessionsGone(client, name);
+        await client.query(`DROP DATABASE IF EXISTS ${name}`);
+      } finally {
+        await client.end();
+      }
     },
   };
+}
+
+/**
+ * Wait until no client is left on the database. A board's close() asks each of its connections to end, but
+ * pool.end() resolves before the server has let them go: dropping the database WITH (FORCE) in that gap
+ * killed them mid-close, and the board's pool raised the kill as an uncaught error. A session still here
+ * after the wait was never closed, and the drop names it rather than forcing it out.
+ */
+async function sessionsGone(admin: pg.Client, name: string, timeoutMs = 10_000): Promise<void> {
+  for (const until = Date.now() + timeoutMs; ;) {
+    const left = await admin.query<{ application_name: string; state: string | null; query: string }>(
+      `SELECT application_name, state, left(query, 120) AS query FROM pg_stat_activity
+       WHERE datname = $1 AND backend_type = 'client backend'`,
+      [name],
+    );
+    if (!left.rowCount) return;
+    if (Date.now() > until)
+      throw new Error(`${left.rowCount} sessions still open on ${name}: ${JSON.stringify(left.rows)}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
 }
 
 export function testConfig(databaseUrl: string, overrides: Partial<BoardConfig> = {}): BoardConfig {
