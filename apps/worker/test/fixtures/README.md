@@ -7,7 +7,7 @@ The rest are the engine recordings below.
 
 # Claude Code stream fixtures
 
-Both files are real recordings from Claude Code with
+All three files are real recordings from Claude Code with
 `claude -p --output-format stream-json --verbose`, with `session_id` stripped, `cwd` normalised and the
 Windows user name in paths replaced with `user`.
 
@@ -17,11 +17,16 @@ Windows user name in paths replaced with `user`.
   Shows what the parser must tolerate: `thinking` blocks with opaque signatures, `system` subtypes
   (`thinking_tokens`, `task_summary`, `post_turn_summary`), `rate_limit_event`, tool results, and a
   `result` whose usage carries about 37k cache-written tokens for the CLI's own system prompt.
+- `claude-code-model-error.ndjson`: recorded by 2026-09-30 (CLI 2.1.285, the version the worker image pins)
+  with the model written the way people say it, `claude-opus-5.5`, which the CLI refuses.
+  `system/init` naming that model, one synthetic `assistant` text block with the CLI's message, and a
+  `result` with `is_error: true`: what a teammate with a mistyped model gets.
 
 Re-record after `claude login` with:
 
 ```bash
 node apps/worker/scripts/record-claude-fixture.mjs [model]
+node apps/worker/scripts/record-claude-fixture.mjs --unknown-model claude-opus-5.5
 ```
 
 Check the file for anything that looks like a secret before committing it.

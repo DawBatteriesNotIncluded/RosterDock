@@ -2,8 +2,8 @@
 // connection. Definitions only: what the connector is, how it is reached, an
 // example env var NAME for its credential (never a value), and which of its
 // tools are known to read or write so a fresh connection starts classified
-// before discovery. Ported from agent-board connector-catalog.ts without the
-// governance ladder and the file store; entries live in code.
+// before discovery. Carried over from the v1 prototype without its governance
+// ladder and file store; entries live in code.
 
 export interface CatalogEntry {
   id: string;

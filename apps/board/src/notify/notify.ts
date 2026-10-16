@@ -2,7 +2,7 @@
 // goal that turned amber or asks questions, a pull request to merge, a failed
 // send, a budget alert, one of Peter's drafts) are pushed to a webhook as one
 // short sentence each, so the owner can come to the board from Slack or mail
-// instead of watching it. Ported from agent-board notify.ts without the file
+// instead of watching it. Carried over from the v1 prototype without its file
 // store: the event stream is the source and the dedupe key is the event seq.
 //
 // The target is a URL that may carry a token (Slack-style), so it is

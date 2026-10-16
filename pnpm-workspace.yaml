@@ -2,6 +2,17 @@ packages:
   - apps/*
   - packages/*
 
+# Dependencies whose install scripts run: esbuild fetches its platform binary. Every other script is skipped.
+onlyBuiltDependencies:
+  - esbuild
+
+# Transitive packages held past their advisories where no parent has released a bump yet. Every parent's range
+# already admits the fixed version; drop a line once the lockfile resolves it without one.
+overrides:
+  "source-map-js@<1.2.2": ^1.2.2
+  "fast-uri@>=4.0.0 <4.1.5": ^4.1.5
+  "brace-expansion@>=4.0.0 <5.0.12": ^5.0.12
+
 catalog:
   # runtime
   fastify: ^5.12.5

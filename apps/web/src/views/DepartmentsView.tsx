@@ -159,7 +159,6 @@ export function DepartmentsView(p: DepartmentsViewProps) {
             )}
             <span className="hint">
               Policy only narrows: a department policy tightens its members' toolboxes, never widens them.
-              Toolboxes arrive in M5.
             </span>
           </div>
         </div>

@@ -140,7 +140,7 @@ describe("cost report", () => {
       cacheReadTokens: 2_000_000,
     });
     // A price a person set (the seated Peter's model) is theirs and stays.
-    await api.put(`${base}/prices`, { model: "claude-opus-5", currency: "USD", inputPerMillion: 1 });
+    await api.put(`${base}/prices`, { model: "claude-opus-5-5", currency: "USD", inputPerMillion: 1 });
 
     const filled = await api.post(`${base}/prices/list`, {});
     expect(filled.status).toBe(200);
@@ -154,7 +154,7 @@ describe("cost report", () => {
       cacheReadPerMillion: 20,
       cacheWritePerMillion: 250,
     });
-    expect(prices.find((x) => x.model === "claude-opus-5")).toMatchObject({ inputPerMillion: 1 });
+    expect(prices.find((x) => x.model === "claude-opus-5-5")).toMatchObject({ inputPerMillion: 1 });
     // The run done before there were prices is priced now: $2 in, $10 out, $0.20 a million cache reads.
     expect((await api.get(`${base}/costs?window=week`)).body.totals.costMinorUnits).toBe(200 + 100 + 40);
     // A second fill has nothing to add.

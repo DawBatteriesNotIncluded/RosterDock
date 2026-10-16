@@ -179,6 +179,10 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.board.githubSecret.name }}
                   key: {{ .Values.board.githubSecret.key }}
+            {{- if .Values.board.githubApi }}
+            - name: ROSTERDOCK_GITHUB_API
+              value: {{ .Values.board.githubApi | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.board.gitlabSecret.name }}
             - name: ROSTERDOCK_GITLAB_TOKEN
@@ -232,6 +236,13 @@ spec:
                   name: {{ $.Values.board.plannerSecret.name }}
                   key: {{ . }}
                   optional: true
+            {{- end }}
+            {{- if not .Values.board.fetchSources }}
+            - name: ROSTERDOCK_FETCH_SOURCES
+              value: "0"
+            {{- end }}
+            {{- with .Values.board.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- if .Values.board.connectionsSecret.name }}
           envFrom:
@@ -365,7 +376,9 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.board.autoscaling.targetCPUUtilizationPercentage }}
 {{- end }}
-{{- if .Values.board.podDisruptionBudget.enabled }}
+{{- /* Over a single board, minAvailable 1 refuses every eviction and a node drain hangs: no budget then. */}}
+{{- $manyBoards := and (not .Values.board.persistence.enabled) (or .Values.board.autoscaling.enabled (gt (int .Values.board.replicas) 1)) }}
+{{- if and .Values.board.podDisruptionBudget.enabled $manyBoards }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

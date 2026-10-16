@@ -102,7 +102,8 @@ What they cannot reach:
   first person to create a company on an empty board owns it and nobody creates another; with the dev login
   on, anyone may, since the dev login lets anyone sign in as anyone. A company's owner pays for what its
   teammates run on your workers and keys, so keep the list to the people you would give that to.
-- Sessions are random tokens stored as sha256, in an httpOnly, SameSite=Lax, Secure cookie.
+- Sessions are random tokens stored as sha256, in an httpOnly, SameSite=Lax, Secure cookie. One lasts 30 days
+  from sign-in (`ROSTERDOCK_SESSION_TTL_SECONDS`, chart `board.extraEnv`).
 - Teammates authenticate with run-scoped tokens minted at claim time, valid for one run, stored as sha256,
   dead when the run ends. The worker fleet presents a shared claim token (`ROSTERDOCK_WORKER_TOKEN`) compared
   in constant time.
@@ -151,10 +152,11 @@ What they cannot reach:
   Secret in the namespace: keep RosterDock in a namespace of its own, as the install guide does. Outside a
   cluster the same store is a directory of files (`ROSTERDOCK_SECRET_STORE=file:<dir>`); without either, no
   connection authorises by OAuth.
-- When a research review opens, the board fetches the public http(s) links the documents cite so the
-  reviewer can read them. Literal addresses, localhost and internal-looking names are refused on every
-  hop, a source gets five seconds and half a megabyte, and only text is kept; what a page says reaches
-  the reviewer as quoted material. `ROSTERDOCK_FETCH_SOURCES=0` keeps the board off the web.
+- When a research review opens, the board fetches the public http(s) links the documents cite so the reviewer
+  can read them. Literal addresses, localhost and internal-looking names are refused on every hop, a source
+  gets five seconds and half a megabyte, and only text is kept; what a page says reaches the reviewer as
+  quoted material. `ROSTERDOCK_FETCH_SOURCES=0` (chart `board.fetchSources: false`) keeps the board off the
+  web.
 
 ## What you own
 

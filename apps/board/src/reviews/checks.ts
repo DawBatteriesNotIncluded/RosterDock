@@ -1,6 +1,6 @@
 // Review checks. Pure functions over the parsed diff, the run's artifacts and
-// the task: no database. The evidence idea comes from agent-board
-// `src/gtm/evidence.ts` (a verdict must be substantive and parseable); here the
+// the task: no database. The evidence idea comes from the v1 prototype (a
+// verdict must be substantive and parseable); here the
 // evidence is the diff itself, the declared outputs, the repository's tests and
 // the reviewer's scores against the task's weighted criteria.
 

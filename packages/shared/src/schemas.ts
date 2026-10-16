@@ -20,6 +20,13 @@ export const modelId = z
   .max(120)
   .transform((m) => (m.startsWith("claude-") ? m.replace(/(\d)\.(?=\d)/g, "$1-") : m));
 
+/**
+ * The model a teammate gets when nothing names one, and the one Peter plans on: the current Sonnet and Opus.
+ * The built-in templates name the same two.
+ */
+export const DEFAULT_MODEL = "claude-sonnet-5-5";
+export const DEFAULT_MANAGER_MODEL = "claude-opus-5-5";
+
 // Cancelled closes a task that will not be done (a person dropped it, or its goal was stopped). It is never Done.
 export const TASK_STATUSES = ["todo", "doing", "blocked", "review", "done", "cancelled"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];

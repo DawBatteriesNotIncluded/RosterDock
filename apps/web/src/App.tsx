@@ -23,7 +23,7 @@ import { OfficeView } from "./views/OfficeView.tsx";
 import { ReviewsView } from "./views/ReviewsView.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
 import { useLiveRuns } from "./views/WorkingNow.tsx";
-import { DepartmentsView, type CellState } from "./views/DepartmentsView.tsx";
+import { DepartmentsView, nextCellState, type CellState } from "./views/DepartmentsView.tsx";
 import { LoginView } from "./views/Login.tsx";
 import { TeammatesView } from "./views/TeammatesView.tsx";
 
@@ -369,12 +369,13 @@ export function App() {
         const d = data.departments.find((x) => x.id === departmentId);
         const t = data.teammates.find((x) => x.id === teammateId);
         if (!d || !t) return;
-        if (from === "none")
+        const to = nextCellState(from);
+        if (to === "member")
           await run(
             () => client.setDepartmentMember(cid, departmentId, teammateId, false),
             `${t.name} added to ${d.name}`,
           );
-        else if (from === "member")
+        else if (to === "lead")
           await run(
             () => client.setDepartmentMember(cid, departmentId, teammateId, true),
             `${t.name} now leads ${d.name}`,

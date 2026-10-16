@@ -1,15 +1,17 @@
 // Headless smoke: every view renders to HTML with sample data and shows the
 // things the prototype shows. No DOM, no network.
+import { EVENT_TYPES } from "@rosterdock/shared";
 import { renderToString } from "react-dom/server";
 import type { CompanyData } from "../src/api/types.ts";
 import { describe, expect, it } from "vitest";
 import { Shell } from "../src/components/Shell.tsx";
 import { Avatar, elapsedLabel, Thinking } from "../src/components/ui.tsx";
-import { describeEvent, relativeTime, teammateStatus } from "../src/lib/format.ts";
+import { describeEvent, engineChoices, relativeTime, teammateStatus } from "../src/lib/format.ts";
 import {
   CreateDepartmentModal,
   CreateTaskModal,
   DesignCompanyModal,
+  HireTeammateModal,
   NewGoalModal,
 } from "../src/modals/index.tsx";
 import { GoalResultPanel, goalProgress, goalTone, publishedVerdict } from "../src/views/GoalsPanel.tsx";
@@ -389,6 +391,48 @@ describe("views render with sample data", () => {
     expect(html).toContain("Effort");
     for (const [, label] of EFFORT_CHOICES) expect(html).toContain(label);
     expect(EFFORT_CHOICES.map(([v]) => v)).toEqual(["", "low", "medium", "high", "xhigh", "max"]);
+  });
+
+  it("offers only the engines a worker can run; a teammate already on OpenCode sees it as not available", () => {
+    expect(engineChoices("claude_code").map(([id]) => id)).toEqual(["claude_code", "codex", "stub"]);
+    expect(engineChoices("opencode").at(-1)).toEqual(["opencode", "OpenCode (not available)"]);
+    // A template on OpenCode hires onto Claude Code.
+    const hire = render(
+      <HireTeammateModal
+        templates={[
+          {
+            id: "t-cody-3",
+            companyId: null,
+            name: "Cody 3",
+            role: "HubSpot analyst",
+            personaMd: "You analyse HubSpot data.",
+            playbooks: [],
+            engine: "opencode",
+            model: "claude-sonnet-5-5",
+            avatar: "C",
+          },
+        ]}
+        onClose={noop}
+        onCreate={asyncNoop}
+      />,
+    );
+    expect(hire).not.toContain("OpenCode");
+    expect(hire).toContain('<option value="claude_code" selected="">Claude Code</option>');
+    const onOpenCode = { ...fixture.teammates[1]!, engine: "opencode" };
+    const editor = render(
+      <TeammatesView
+        data={{
+          ...fixture,
+          teammates: fixture.teammates.map((t) => (t.id === onOpenCode.id ? onOpenCode : t)),
+        }}
+        selectedId={onOpenCode.id}
+        onSelect={noop}
+        onHire={noop}
+        onSave={asyncNoop}
+        loadInbox={async () => ({ since: null, unread: 0, items: [] })}
+      />,
+    );
+    expect(editor).toContain("OpenCode (not available)");
   });
 
   it("Approvals view lists pending cards first with the exact action, and decided ones with their outcome", () => {
@@ -1205,6 +1249,25 @@ describe("pure helpers", () => {
       describeEvent(ev("goal.escalated", peter, { title: "Digest", reason: "#3 failed 3 times" }), fixture)
         .text,
     ).toBe("Peter needs you on Digest: #3 failed 3 times");
+    // A teammate's decision reads as one, with how sure it is.
+    expect(
+      describeEvent(
+        ev(
+          "decision.logged",
+          { kind: "teammate", id: fixture.teammates[1]!.id },
+          {
+            number: 12,
+            decision: "Read the Gong calls from the v2 API",
+            confidence: 0.8,
+          },
+        ),
+        fixture,
+      ).text,
+    ).toBe("Cody decided on #12: Read the Gong calls from the v2 API (80% sure)");
+    // Every event type has its own sentence: none falls through to its raw name.
+    for (const type of EVENT_TYPES) {
+      expect(describeEvent(ev(type, peter, {}), fixture).text, type).not.toContain(type);
+    }
     expect(describeEvent(ev("task.replanned", peter, { number: 3, replans: 1 }), fixture).text).toBe(
       "Peter re-planned #3 after a failed run (attempt 2)",
     );

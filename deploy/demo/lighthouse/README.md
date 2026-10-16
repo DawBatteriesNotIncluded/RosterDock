@@ -134,9 +134,10 @@ lead plans it. Run 1 first: 2 and 3 build on what it publishes.
 
 ## What it costs
 
-Goal 1, run on this company with the brains above, took 23.85M tokens over seven tasks, US$22.72 at the
-API's list prices, reviews and restarts included; most of the tokens are cache reads. The Cirrus demo's
-goals took 7.1M to 12.4M tokens (US$6.77 to US$11.91) each. A task with its reviews averaged 1.4M to 3.4M
-tokens across those goals, so the five goals here come to roughly US$35 to US$115 at list prices, more when a
-reviewer sends work back for several rounds. Set a company budget in Settings before you start. On a Claude
-subscription (the CLI's own sign-in) the same runs count against its usage limits instead of a bill.
+Goal 1, run on this company with the brains above, took 23.85M tokens over seven tasks, US$22.72 at the API's
+list prices, reviews and restarts included; most of the tokens are cache reads. The Cirrus demo's goals took
+7.1M to 12.4M tokens (US$6.77 to US$11.91) each. A task with its reviews averaged 1.4M to 3.4M tokens across
+those goals, so the five goals here come to roughly US$35 to US$115 at list prices, more when a reviewer sends
+work back for several rounds. The Haiku teammates ran on Haiku 4.5 for those figures; on Haiku 5.5 their share
+costs less. Set a company budget in Settings before you start. On a Claude subscription (the CLI's own
+sign-in) the same runs count against its usage limits instead of a bill.

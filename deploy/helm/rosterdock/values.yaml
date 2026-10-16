@@ -74,6 +74,8 @@ board:
   githubSecret:
     name: ""
     key: ROSTERDOCK_GITHUB_TOKEN
+  # The API root for GitHub Enterprise Server (ROSTERDOCK_GITHUB_API). Empty: https://api.github.com.
+  githubApi: ""
   # The same for GitLab projects: a token with the api scope, by NAME from a Secret, and the API root when
   # self-hosted (its host is the one repository URLs must carry). Empty: GitLab repositories propose nothing.
   gitlabSecret:
@@ -100,6 +102,16 @@ board:
       key: ROSTERDOCK_OIDC_CLIENT_SECRET
   # The URL people reach the board at, for sign-in redirects. Empty: from the ingress host, else the request.
   publicUrl: ""
+  # When a research review opens, the board fetches the public http(s) sources its documents cite and hands
+  # the reviewer what they say (ROSTERDOCK_FETCH_SOURCES). false keeps the board off the web.
+  fetchSources: true
+  # More environment for the board container, as Kubernetes env entries, for the settings with no value of
+  # their own above (docs/operator.md, Environment reference): ROSTERDOCK_DB_POOL_MAX,
+  # ROSTERDOCK_RUN_STALE_AFTER_MS, ROSTERDOCK_SESSION_TTL_SECONDS and the like. A credential belongs in a
+  # Secret, named with valueFrom, never as a value here.
+  extraEnv: []
+  #  - name: ROSTERDOCK_DB_POOL_MAX
+  #    value: "20"
   # OAuth on connections: a connection may authorise against its MCP server's authorization server instead
   # of naming an env var, and the board keeps the tokens it obtains in Secrets of its own
   # (rosterdock-connection-<id>) in the release namespace. That takes the pod's service account token and a
@@ -127,7 +139,8 @@ board:
     minReplicas: 2
     maxReplicas: 6
     targetCPUUtilizationPercentage: 70
-  # Keep at least this many boards up through node drains; only rendered when replicas or autoscaling allow it.
+  # Keep at least this many boards up through node drains. Rendered only over more than one board (replicas
+  # above 1, or autoscaling, and no persistence): over one, it would refuse every eviction and block drains.
   podDisruptionBudget:
     enabled: false
     minAvailable: 1

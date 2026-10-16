@@ -65,7 +65,7 @@ describe("Peter as architect", () => {
     const finn = (await api.get(`${base}/teammates`)).body.find((t: any) => t.name === "Finn");
     expect(finn.personaMd).toMatch(/finance analyst/);
     expect(finn.engine).toBe("claude_code");
-    expect(finn.model).toBe("claude-opus-5");
+    expect(finn.model).toBe("claude-opus-5-5");
     // Toolboxes are recommendations on the draft, not grants: the teammate carries no tool.
     expect(JSON.stringify(finn)).not.toContain("xero");
     const events = (await api.get(`${base}/events`)).body.map((e: any) => e.type);

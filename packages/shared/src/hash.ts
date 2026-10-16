@@ -1,5 +1,5 @@
 // Hash-bound action verification. Pure functions only.
-// Ported from agent-board `src/gtm/hash.ts`.
+// Carried over from the v1 prototype.
 //
 // An approved external write is only executable while the payload it was
 // approved against is byte-identical (sha256) and the target tool/server and

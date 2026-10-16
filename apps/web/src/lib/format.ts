@@ -82,12 +82,28 @@ export const POLICY_LABEL: Record<string, string> = {
   ask: "Every write asks",
 };
 
+/** The model a hire starts on when its template names none: DEFAULT_MODEL in @rosterdock/shared, which the web
+ * takes types from only. */
+export const DEFAULT_MODEL = "claude-sonnet-5-5";
+
 export const ENGINE_LABEL: Record<string, string> = {
   claude_code: "Claude Code",
   codex: "Codex",
   opencode: "OpenCode",
   stub: "Stub (no model)",
 };
+
+/** Engines a person can pick. OpenCode has no worker yet (docs/backlog.md): its label stays for display only. */
+export const PICKABLE_ENGINES = ["claude_code", "codex", "stub"];
+
+/** An engine picker's choices: the pickable engines, and a teammate's own when it runs on another. */
+export function engineChoices(current: string): [string, string][] {
+  const ids = PICKABLE_ENGINES.includes(current) ? PICKABLE_ENGINES : [...PICKABLE_ENGINES, current];
+  return ids.map((id) => [
+    id,
+    PICKABLE_ENGINES.includes(id) ? (ENGINE_LABEL[id] ?? id) : `${ENGINE_LABEL[id] ?? id} (not available)`,
+  ]);
+}
 
 /** What a teammate is doing right now, derived from the board. */
 export function teammateStatus(
@@ -260,6 +276,11 @@ export function describeEvent(
       const mentions = (p(ev).mentions as { name: string }[] | undefined) ?? [];
       const routed = mentions.length ? ` and mentioned ${mentions.map((m) => m.name).join(", ")}` : "";
       return { text: `${who} wrote on ${n}${routed}`, go: { view: "board", taskId } };
+    }
+    case "decision.logged": {
+      const sure =
+        typeof p(ev).confidence === "number" ? ` (${Math.round(p(ev).confidence * 100)}% sure)` : "";
+      return { text: `${who} decided on ${n}: ${p(ev).decision}${sure}`, go: { view: "board", taskId } };
     }
     case "task.chased":
       return {

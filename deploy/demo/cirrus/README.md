@@ -143,9 +143,9 @@ With goals 1 to 4 run beforehand and their writes left waiting in Approvals:
 
 ## What it costs
 
-Measured on this company with the brains above, at the API's list prices, reviews and restarts included
-(most of the tokens are cache reads): goal 1 took 12.4M tokens over five tasks (US$11.91), goal 2 10.0M over
-six (US$8.40) and goal 3 7.1M over five (US$6.77). Expect US$7 to US$12 a goal, more when a reviewer sends
-work back for several rounds; the Lighthouse demo's research goal took US$22.72. Set a company budget in
-Settings before you start. On a Claude subscription (the CLI's own sign-in) the same runs count against its
-usage limits instead of a bill.
+Measured on this company with the brains above, at the API's list prices, reviews and restarts included (most
+of the tokens are cache reads): goal 1 took 12.4M tokens over five tasks (US$11.91), goal 2 10.0M over six
+(US$8.40) and goal 3 7.1M over five (US$6.77). Expect US$7 to US$12 a goal, more when a reviewer sends work
+back for several rounds; the Lighthouse demo's research goal took US$22.72. Sage and Reporter ran on Haiku 4.5
+for those figures; on Haiku 5.5 their share costs less. Set a company budget in Settings before you start. On
+a Claude subscription (the CLI's own sign-in) the same runs count against its usage limits instead of a bill.

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { CompanyData, Inbox, Teammate } from "../api/types.ts";
 import { Avatar, Button, Dot, Empty, Field, Tip, Topbar } from "../components/ui.tsx";
 import { cn } from "../lib/cn.ts";
-import { driftLine, ENGINE_LABEL, relativeTime, standingDrift, teammateStatus } from "../lib/format.ts";
+import { driftLine, engineChoices, relativeTime, standingDrift, teammateStatus } from "../lib/format.ts";
 import { ConnectionGrant } from "./ToolboxEditor.tsx";
 
 export interface TeammatesViewProps {
@@ -172,7 +172,7 @@ function Editor({
       <div className="grid2">
         <Field label="Engine">
           <select value={form.engine} onChange={(e) => setForm({ ...form, engine: e.target.value })}>
-            {Object.entries(ENGINE_LABEL).map(([k, l]) => (
+            {engineChoices(form.engine).map(([k, l]) => (
               <option key={k} value={k}>
                 {l}
               </option>
@@ -255,12 +255,6 @@ function Editor({
     </div>
   );
 }
-
-export const TOOL_MODE_HINT: Record<ToolMode, string> = {
-  off: "Not in the toolbox.",
-  read: "Reads run; writes are refused.",
-  ask: "Reads run; every write waits for you in Approvals.",
-};
 
 function toolboxMap(t: Teammate): Record<string, ToolMode> {
   return Object.fromEntries(t.toolbox.map((e) => [e.connection, e.mode]));

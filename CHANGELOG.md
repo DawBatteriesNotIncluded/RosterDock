@@ -20,7 +20,12 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
 - A shared kanban, messages and an inbox between teammates, and hunk-level reviews with checks. An approved
   review, never a teammate, marks work done, and may open a pull request (GitHub) or a merge request (GitLab).
 - Writes to live systems as propose, approve, execute, bound to the exact payload by its sha256.
+- Connections to MCP servers over HTTP or stdio, and to OpenAPI services, with OAuth where the server offers
+  it; each company keeps its own credentials as write-only secrets under Settings.
+- Needs-you notifications to a webhook (Slack's works as is) or by email.
 - Costs, budgets and drift alerts per company; Prometheus metrics, OpenTelemetry traces and JSON logs.
+- Companies, departments and teammates exported and imported as files, and style packs: published rule
+  files every teammate's brief carries, pinned by commit and sha256.
 - Sign-in through OpenID Connect, and the roles owner, admin, reviewer, viewer and teammate.
 - The Helm chart: board, web and worker against your Postgres and S3-compatible bucket, every credential by
   Secret name, network policies, KEDA scaling and worker pools.
@@ -33,8 +38,12 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
 
 ### Changed
 
-Against the images built from the tree before this release:
+Against the images built from the pre-release tree (then called Pharo, not public):
 
+- A company reaches only its own secrets and the names the operator shares, and four things are closed by
+  default: the board's environment (`board.sharedEnvNames` lists what companies may name), stdio commands
+  (`board.stdioCommands`), who creates companies (`board.companyCreators`), and a public sign-in provider
+  with no `board.oidc.allowedDomains`. `docs/operator.md` (Upgrades and backups) says what to set.
 - The worker image leaves Claude Code out: its licence (Anthropic's Commercial Terms) does not allow a public
   image to pass it on. The chart's `worker.image` points the workers at one you build with it on top of the
   published image (`docs/install.md`, Engines on the worker), and a run on Claude Code that reaches a worker
@@ -44,6 +53,10 @@ Against the images built from the tree before this release:
   Codex 0.157.1 in a board built with `WITH_MODEL_CLIS=1`.
 - The chart is installed from `oci://ghcr.io/dawbatteriesnotincluded/charts/rosterdock` with `--version`, and
   `examples/production.yaml` no longer pins `image.tag`: the chart's version picks the images.
+- The built-in teammate templates, and the model a hire or Peter falls back on, are the current ones: Opus 5.5
+  for Peter, Verifier, Archy and Finn, Sonnet 5.5 for the rest. Opus 5.5 also costs less than the Opus 5 they
+  named. The demo templates' Haiku teammates run on Haiku 5.5, and Settings fills its list price. A teammate
+  already hired keeps its model.
 - The web image carries its fonts, Schibsted Grotesk and IBM Plex Mono (SIL Open Font License), where the
   page loaded them from Google Fonts: an install without internet access shows them, and no page load sends
   a visitor's address to Google.
@@ -75,6 +88,11 @@ install built from that tree changes each of these:
 - Handing Peter a goal could fail with an internal error, and leave it half planned, when Peter's loop started
   the plan's first task while the rest were still being filed: filing a task and starting the task it waits on
   took their locks in opposite orders, and Postgres broke the deadlock by cancelling the filing.
+
+- A teammate hired from the built-in 'Cody 3' template, or put on OpenCode in its editor, failed every run:
+  no worker runs OpenCode yet. The template runs on Claude Code, and the pickers no longer offer OpenCode.
+- Activity and the Company page showed a teammate's logged decision by its raw event name, and a task a
+  person marked blocked explained itself as waiting on a teammate's answer.
 
 ### Security
 

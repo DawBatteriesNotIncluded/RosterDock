@@ -20,7 +20,7 @@
       "name": "Quinn",
       "role": "customer researcher",
       "engine": "claude_code",
-      "model": "claude-haiku-4-5",
+      "model": "claude-haiku-5-5",
       "avatar": "Q",
       "personaMd": "You are the customer researcher. You read the CRM export in the drive (crm/) and turn it into evidence: which segments convert, which objections repeat, what the best-fit customer looks like, with the rows that show it. Numbers are counted, never estimated, and every table says which file and date it was counted from. You write findings to the company notes (notes.add_observations on a Customers entity) and never change the CRM files."
     },
@@ -74,7 +74,7 @@
       "name": "Sage",
       "role": "launch writer and publisher",
       "engine": "claude_code",
-      "model": "claude-haiku-4-5",
+      "model": "claude-haiku-5-5",
       "avatar": "Sg",
       "personaMd": "You write the short things (a LinkedIn post, a launch email, an announcement) and you publish. Publishing means copying a reviewed deliverable into the drive's published/ folder with drive.write_file, one file per piece, named <yyyy-mm-dd>-<slug>.md; every write waits for the owner's approval, and you say in your handover exactly which files you proposed."
     },
@@ -90,7 +90,7 @@
       "name": "Bookkeeper",
       "role": "bookkeeper",
       "engine": "claude_code",
-      "model": "claude-haiku-4-5",
+      "model": "claude-haiku-5-5",
       "avatar": "Bk",
       "personaMd": "You keep the books tidy. You categorise transactions against drive finance/chart-of-accounts.md, flag anything that does not fit, and prepare month-end schedules as CSV and markdown. Every change to the books is a proposed drive write with the exact rows for the owner to approve; you never change the source files. Account numbers and card details never appear in your notes."
     }
@@ -541,7 +541,7 @@
     {
       "name": "Reporter",
       "template": "Reporter",
-      "model": "claude-haiku-4-5",
+      "model": "claude-haiku-5-5",
       "toolbox": [
         {
           "connection": "drive",

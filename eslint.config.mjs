@@ -1,10 +1,18 @@
-// Flat config. Type-aware rules are deliberately off in M0 to keep lint fast;
-// turn on `recommendedTypeChecked` per package when the tree settles.
+// Flat config. Type-aware rules are off to keep lint fast; turning them on per
+// package, and linting deploy/scripts, is in docs/backlog.md.
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/node_modules/**", "docs/**", "deploy/**", "**/*.config.js", "**/*.config.ts"],
+    ignores: [
+      "**/dist/**",
+      "**/node_modules/**",
+      ".claude/worktrees/**",
+      "docs/**",
+      "deploy/**",
+      "**/*.config.js",
+      "**/*.config.ts",
+    ],
   },
   ...tseslint.configs.recommended,
   {

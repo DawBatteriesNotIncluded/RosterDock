@@ -51,8 +51,6 @@ export interface AnthropicModelOptions {
   timeoutMs?: number;
 }
 
-export const DEFAULT_PETER_MODEL = "claude-opus-5";
-
 /** No key configured: nothing is called, every caller uses its heuristic. */
 export const noModel: PeterModel = {
   available: false,

@@ -500,12 +500,18 @@ function Drawer({
                     size="sm"
                     variant="danger"
                     onClick={() =>
+                      // A person's own reason, not a teammate's question. With none, the board says who.
                       void onMove(t.id, {
                         status: "blocked",
-                        blocker: {
-                          code: "waiting_on_teammate",
-                          what: blockReason.trim() || "Blocked. Tell the team why in the conversation.",
-                        },
+                        ...(blockReason.trim()
+                          ? {
+                              blocker: {
+                                code: "unknown",
+                                what: blockReason.trim(),
+                                why: "A person marked it blocked; no run stopped it.",
+                              },
+                            }
+                          : {}),
                       })
                     }
                   >
