@@ -63,3 +63,6 @@ their parsers' fixtures were recorded with; moving one means recording the fixtu
   Private vulnerability reporting, Enable. Then check that `/security/advisories/new` opens.
 - **Who may release.** Anyone who can push a `v*` tag publishes. A tag ruleset on `v*` (Settings, Rules)
   can keep creating release tags to the maintainers and forbid moving or deleting one.
+- **The pre-release sentences.** When 0.1.0 ships, delete the sentence in `README.md`'s Status that says
+  nothing is published, and the two sentences directly under "Where the images and the chart come from" in
+  `docs/install.md`.
