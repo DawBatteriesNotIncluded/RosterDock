@@ -77,7 +77,7 @@ describe("invocation", () => {
       "--verbose",
       "--strict-mcp-config",
       "--setting-sources",
-      "project",
+      "",
       "--no-session-persistence",
       "--permission-mode",
       "acceptEdits",
@@ -216,6 +216,8 @@ const prompt = Buffer.concat(chunks).toString("utf8");
 const args = process.argv.slice(2);
 const must = ["-p", "--output-format", "stream-json", "--strict-mcp-config", "--no-session-persistence", "--allowedTools", "--mcp-config", "--model", "claude-sonnet-5"];
 const tools = args[args.indexOf("--allowedTools") + 1];
+// No settings file is read, the cloned repository's included.
+if (args[args.indexOf("--setting-sources") + 1] !== "") { process.stderr.write("stub: settings loaded"); process.exit(7); }
 const cfg = await readFile(args[args.indexOf("--mcp-config") + 1], "utf8");
 if (!tools.includes("mcp__rosterdock") || !cfg.includes("Bearer run-token") || !cfg.includes("http://board.test/api/mcp")) { process.stderr.write("stub: mcp not wired"); process.exit(8); }
 if (must.some((a) => !args.includes(a)) || !prompt.includes("# Fixture task") || process.env.DISABLE_NON_ESSENTIAL_MODEL_CALLS !== "1" || process.env.LEAKED_SECRET) {

@@ -2,7 +2,9 @@
 // and moved to stream-json so the board shows what the teammate is doing
 // while it runs. The run pack is the entire prompt; nothing from the
 // operator's global Claude setup leaks in (--strict-mcp-config with no
-// servers, project-only settings, no session persistence).
+// servers, no session persistence), and no settings file is read: not the
+// operator's, and not the cloned repository's .claude/settings.json, which
+// could otherwise allow tools or run hooks beyond the run's allowlist.
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -125,8 +127,9 @@ export function buildArgs(
     "stream-json",
     "--verbose",
     "--strict-mcp-config",
+    // No user, project or local settings files (an empty list loads none).
     "--setting-sources",
-    "project",
+    "",
     "--no-session-persistence",
     "--permission-mode",
     opts.permissionMode ?? "acceptEdits",

@@ -135,6 +135,9 @@ What they cannot reach:
   widens it: a tool the worker does not allow is left out of the run, and the run log says which. Codex
   has no per-tool list: it runs in the worker's Codex sandbox (`ROSTERDOCK_CODEX_SANDBOX`) whatever the
   department lists.
+- Claude Code starts with no settings file (`--setting-sources` empty): not the operator's, and not the
+  cloned repository's `.claude/settings.json`, so a repository cannot allow itself a tool or add a hook.
+  Codex starts with `--ignore-user-config`.
 - After the engine, the worker runs the repository's own `test` script in the workspace
   (`ROSTERDOCK_RUN_REPO_TESTS`, on by default), once the diff is captured. That script is the
   repository's code and the run may have rewritten it, so it gets PATH, HOME, the temp directory, the

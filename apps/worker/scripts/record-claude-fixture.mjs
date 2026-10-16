@@ -40,7 +40,7 @@ const args = [
   "--verbose",
   "--strict-mcp-config",
   "--setting-sources",
-  "project",
+  "",
   "--no-session-persistence",
   "--permission-mode",
   "acceptEdits",
