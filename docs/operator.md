@@ -74,7 +74,11 @@ var name in Settings) and a row in the Approvals or Company page:
   (`stub`, `claude_code` and `codex` ship).
 - **"runs on opencode, which is not available"**: OpenCode has no worker yet, so the board starts no run on it
   and the pickers no longer offer it. Pick another engine in the teammate's editor.
-- **Stop a run.** The run panel's Stop: a queued run stops at once; a running one at its next heartbeat.
+- **Failed with "git clone failed"**: the project's repository URL or branch, or the worker's git token
+  (`worker.gitSecret`). A clone that moves under 1 KB a second for a minute gives up, and the run's time
+  limit counts from the start of the clone.
+- **Stop a run.** The run panel's Stop: a queued run stops at once; a running one at its next heartbeat,
+  a clone in progress included.
 
 ## Changing the company from files
 

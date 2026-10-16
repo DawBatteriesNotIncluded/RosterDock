@@ -1,5 +1,6 @@
 // executeRun against an in-memory board. No network, no model, no Postgres.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -266,6 +267,58 @@ describe("sandbox preset", () => {
     expect(outcome.status).toBe("failed");
     expect(slow.completion?.blocker?.code).toBe("timeout");
     expect(slow.completion?.error).toMatch(/time limit/);
+  });
+});
+
+/** A git host that accepts the connection and never answers: a clone against it stalls. Loopback only. */
+async function silentHost(): Promise<{ url: string; close(): Promise<void> }> {
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on("error", () => {});
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as net.AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/stalled.git`,
+    close: async () => {
+      for (const s of sockets) s.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+describe("a stalled clone", () => {
+  it("ends on Stop instead of holding the worker", async () => {
+    const host = await silentHost();
+    try {
+      const board = fakeBoard(PACK(), [], { repoUrl: host.url, stopAfterHeartbeats: 2 });
+      const started = Date.now();
+      const outcome = await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board));
+      expect(outcome.status).toBe("stopped");
+      expect(Date.now() - started).toBeLessThan(4000);
+    } finally {
+      await host.close();
+    }
+  });
+
+  it("counts against the run's time limit", async () => {
+    const host = await silentHost();
+    try {
+      const board = fakeBoard(PACK(), [], {
+        repoUrl: host.url,
+        sandbox: { allowedTools: null, envNames: null, timeoutSeconds: 1 },
+      });
+      const outcome = await executeRun(
+        { runId: "run-1", jobId: "job-1" },
+        deps(board, { heartbeatMs: 10_000 }),
+      );
+      expect(outcome.status).toBe("failed");
+      expect(board.completion?.blocker?.code).toBe("timeout");
+      expect(board.completion?.error).toMatch(/time limit/);
+    } finally {
+      await host.close();
+    }
   });
 });
 

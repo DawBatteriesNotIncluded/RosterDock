@@ -197,6 +197,18 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
   let completion: RunCompleteInput;
   const startedAt = Date.now();
   const phases = createPhaseRecorder();
+  const sandbox = spec.sandbox ?? { allowedTools: null, envNames: null, timeoutSeconds: 3600 };
+  const timeLimit = (summary?: string): RunCompleteInput => ({
+    status: "failed",
+    error: `The run hit its ${sandbox.timeoutSeconds} s time limit.`,
+    summary,
+    usage,
+    durationMs: Date.now() - startedAt,
+    blocker: {
+      code: "timeout",
+      what: `The run hit its ${Math.round(sandbox.timeoutSeconds / 60)} minute time limit.`,
+    },
+  });
   try {
     const engine = deps.engines[run.engine];
     if (!engine) {
@@ -206,26 +218,29 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
         blocker: { code: "adapter_unavailable" },
       };
     } else {
-      emit({
-        type: "step",
-        payload: { text: spec.project.repoUrl ? "cloning the repository" : "preparing the workspace" },
-      });
-      phases.begin("workspace", { "rosterdock.repo": !!spec.project.repoUrl });
-      ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitToken);
-      phases.end();
-      emit({ type: "step", payload: { text: `running ${engine.id}` } });
-      phases.begin(`engine ${engine.id}`, { "rosterdock.engine": engine.id, "rosterdock.model": run.model });
-      const sandbox = spec.sandbox ?? { allowedTools: null, envNames: null, timeoutSeconds: 3600 };
+      // The time limit runs from here: a clone that stalls counts against it like the engine.
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
         emit({
           type: "stderr",
-          payload: { text: `time limit of ${sandbox.timeoutSeconds} s reached; stopping the engine` },
+          payload: { text: `time limit of ${sandbox.timeoutSeconds} s reached; stopping the run` },
         });
         abort.abort();
       }, sandbox.timeoutSeconds * 1000);
       let result;
       try {
+        emit({
+          type: "step",
+          payload: { text: spec.project.repoUrl ? "cloning the repository" : "preparing the workspace" },
+        });
+        phases.begin("workspace", { "rosterdock.repo": !!spec.project.repoUrl });
+        ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitToken, abort.signal);
+        phases.end();
+        emit({ type: "step", payload: { text: `running ${engine.id}` } });
+        phases.begin(`engine ${engine.id}`, {
+          "rosterdock.engine": engine.id,
+          "rosterdock.model": run.model,
+        });
         result = await engine.run({
           workdir: ws.dir,
           pack: claimed.pack,
@@ -285,17 +300,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       }
       const durationMs = Date.now() - startedAt;
       if (timedOut) {
-        completion = {
-          status: "failed",
-          error: `The run hit its ${sandbox.timeoutSeconds} s time limit.`,
-          summary: harvest.handover ?? undefined,
-          usage,
-          durationMs,
-          blocker: {
-            code: "timeout",
-            what: `The run hit its ${Math.round(sandbox.timeoutSeconds / 60)} minute time limit.`,
-          },
-        };
+        completion = timeLimit(harvest.handover ?? undefined);
       } else if (abort.signal.aborted) {
         completion = {
           status: "stopped",
@@ -342,12 +347,14 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
     }
   } catch (err) {
     phases.end(clip((err as Error).message, 500));
-    completion = {
-      status: abort.signal.aborted ? "stopped" : "failed",
-      error: clip((err as Error).message, 4000),
-      usage,
-      durationMs: Date.now() - startedAt,
-    };
+    completion = timedOut
+      ? timeLimit()
+      : {
+          status: abort.signal.aborted ? "stopped" : "failed",
+          error: clip((err as Error).message, 4000),
+          usage,
+          durationMs: Date.now() - startedAt,
+        };
   } finally {
     phases.end();
     clearInterval(heartbeatTimer);

@@ -55,18 +55,26 @@ export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<str
 /** Every command: no fsmonitor and no hooks, whatever the repository's config says. */
 const GIT_SAFE_ARGS = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${os.devNull}`];
 
-/** Run git with gitEnvironment; `extraEnv` is for the worker's own tests (an author for a commit). */
+/**
+ * Run git with gitEnvironment; `extraEnv` is for the worker's own tests (an author for a commit). An abort
+ * kills git and the helpers it started (the network side of a clone is a process of its own).
+ */
 export function git(
   args: string[],
   cwd: string,
   extraEnv: Record<string, string | undefined> = {},
+  signal?: AbortSignal,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
+    if (signal?.aborted) return resolve({ code: null, stdout: "", stderr: "stopped" });
+    // Its own process group where there are groups, so a stop reaches the helpers too.
+    const group = process.platform !== "win32";
     const child = spawn("git", [...GIT_SAFE_ARGS, ...args], {
       cwd,
       env: { ...gitEnvironment(), ...extraEnv },
       shell: false,
       windowsHide: true,
+      detached: group,
     });
     let stdout = "";
     let stderr = "";
@@ -75,8 +83,25 @@ export function git(
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (c: string) => (stdout += c));
     child.stderr.on("data", (c: string) => (stderr += c));
-    child.on("error", (err) => resolve({ code: null, stdout, stderr: `${stderr}\n${err.message}` }));
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    let settled = false;
+    const done = (r: { code: number | null; stdout: string; stderr: string }) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      resolve(r);
+    };
+    const onAbort = () => {
+      try {
+        if (group && child.pid) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        // gone
+      }
+      done({ code: null, stdout, stderr: `${stderr}\nstopped` });
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.on("error", (err) => done({ code: null, stdout, stderr: `${stderr}\n${err.message}` }));
+    child.on("close", (code) => done({ code, stdout, stderr }));
   });
 }
 
@@ -98,11 +123,16 @@ export function redactGit(text: string): string {
   return text.replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, "$1***@");
 }
 
+/** A clone that moves less than this many bytes a second for this many seconds gives up. */
+export const CLONE_LOW_SPEED = { bytesPerSecond: 1000, seconds: 60 };
+
+/** The run's directory, with the repository cloned into it. `signal` (Stop, the time limit, shutdown) ends the clone. */
 export async function prepareWorkspace(
   workRoot: string,
   runId: string,
   project: { repoUrl: string | null; defaultBranch: string },
   gitToken: string | null,
+  signal?: AbortSignal,
 ): Promise<Workspace> {
   const dir = path.join(workRoot, runId);
   await rm(dir, { recursive: true, force: true });
@@ -110,6 +140,10 @@ export async function prepareWorkspace(
   if (!project.repoUrl) return { dir, repo: false };
   const res = await git(
     [
+      "-c",
+      `http.lowSpeedLimit=${CLONE_LOW_SPEED.bytesPerSecond}`,
+      "-c",
+      `http.lowSpeedTime=${CLONE_LOW_SPEED.seconds}`,
       "clone",
       "--depth",
       "1",
@@ -120,7 +154,10 @@ export async function prepareWorkspace(
       ".",
     ],
     dir,
+    {},
+    signal,
   );
+  if (signal?.aborted) throw new Error("the clone was stopped before it finished");
   if (res.code !== 0) {
     throw new Error(
       `git clone failed: ${redactGit(res.stderr).trim().split("\n").at(-1) ?? "unknown error"}`,
