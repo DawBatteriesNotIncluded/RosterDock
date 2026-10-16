@@ -94,6 +94,21 @@ describe("runRepoTests", () => {
     expect(output.endsWith(detail.slice(1))).toBe(true);
   });
 
+  it("cuts a long log beside an emoji without leaving half of it, which the board's jsonb refuses", async () => {
+    const ws = await repo("emoji-fail", { "package.json": PKG, "node_modules/.keep": "" });
+    const recordedFail = await readFile(path.join(fixtures, "npm-test-fail.txt"), "utf8");
+    // The closing line puts the cut the tail makes between the two halves of an emoji.
+    const output = `${recordedFail}${"✅ ok 😀\n".repeat(4000)}done\n`;
+    const exec: Exec = async () => ({ code: 1, output, timedOut: false });
+    const check = await runRepoTests(ws, { exec, env, timeoutMs: 1000 });
+    const detail = check?.detail ?? "";
+    expect(detail.isWellFormed()).toBe(true);
+    expect(detail.startsWith("…")).toBe(true);
+    expect(detail.length).toBeLessThanOrEqual(MAX_TEST_OUTPUT_CHARS);
+    expect(output.endsWith(detail.slice(1))).toBe(true);
+    expect(WorkerCheckSchema.safeParse(check).success).toBe(true);
+  });
+
   it("a failed install or a timeout is reported, never thrown", async () => {
     const ws = await repo("install-fails", { "package.json": PKG, "yarn.lock": "" });
     const { exec } = recorded({ "yarn install --frozen-lockfile --ignore-scripts": { code: 1 } });

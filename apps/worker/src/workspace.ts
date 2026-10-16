@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { renderBinaryFileDiff, renderNewFileDiff, type RunArtifactInput } from "@rosterdock/shared";
+import { clip } from "./text.js";
 
 export const HANDOVER_FILE = "handover-summary.md";
 export const BLOCKED_FILE = "blocked.md";
@@ -149,8 +150,9 @@ export async function harvestWorkspace(
     filesWritten: [],
     baseSha: null,
   };
-  out.handover = (await readText(path.join(ws.dir, HANDOVER_FILE), maxBytes))?.trim().slice(0, 4000) || null;
-  out.blocked = (await readText(path.join(ws.dir, BLOCKED_FILE), maxBytes))?.trim().slice(0, 1000) || null;
+  out.handover =
+    clip((await readText(path.join(ws.dir, HANDOVER_FILE), maxBytes))?.trim() ?? "", 4000) || null;
+  out.blocked = clip((await readText(path.join(ws.dir, BLOCKED_FILE), maxBytes))?.trim() ?? "", 1000) || null;
 
   let candidates: string[];
   if (declaredOutputs.length) {

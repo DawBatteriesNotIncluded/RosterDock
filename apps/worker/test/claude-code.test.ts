@@ -54,6 +54,16 @@ describe("stream-json parsing", () => {
     expect(parsed.events.map((e) => e.type)).toEqual(["engine", "assistant", "result"]);
   });
 
+  it("cuts long assistant text without splitting an emoji", () => {
+    const text = `x${"😀".repeat(1500)}`;
+    const parsed = parseStream(
+      `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } })}\n`,
+    );
+    const out = String(parsed.events[0]?.payload?.text);
+    expect(out.length).toBeLessThanOrEqual(2000);
+    expect(out.isWellFormed()).toBe(true);
+  });
+
   it("keeps non-JSON lines as stdout events", () => {
     const parsed = parseStream("not json\n");
     expect(parsed.events).toEqual([{ type: "stdout", payload: { text: "not json" } }]);

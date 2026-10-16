@@ -10,6 +10,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { WorkerCheckInput } from "@rosterdock/shared";
+import { tail } from "./text.js";
 import type { Workspace } from "./workspace.js";
 
 export interface ExecResult {
@@ -110,8 +111,8 @@ const INSTALL_ARGS: Record<"pnpm" | "yarn" | "npm", string[]> = {
 };
 
 /** The end of the output, the leading … included, within the board's MAX_TEST_OUTPUT_CHARS. */
-function tail(output: string): string {
-  return output.length > MAX_TEST_OUTPUT_CHARS ? `…${output.slice(-(MAX_TEST_OUTPUT_CHARS - 1))}` : output;
+function tailOf(output: string): string {
+  return tail(output, MAX_TEST_OUTPUT_CHARS, "…");
 }
 
 /**
@@ -149,7 +150,7 @@ export async function runRepoTests(
         title: install.timedOut
           ? `Tests not run: ${pm} install timed out`
           : `Tests not run: ${pm} install failed (exit ${install.code ?? "?"})`,
-        detail: tail(install.output),
+        detail: tailOf(install.output),
       };
     }
   }
@@ -159,13 +160,13 @@ export async function runRepoTests(
       kind: "tests",
       ok: false,
       title: `${pm} test timed out after ${Math.round(opts.timeoutMs / 1000)} s`,
-      detail: tail(res.output),
+      detail: tailOf(res.output),
     };
   }
   return {
     kind: "tests",
     ok: res.code === 0,
     title: res.code === 0 ? `${pm} test passed` : `${pm} test failed (exit ${res.code ?? "?"})`,
-    detail: tail(res.output),
+    detail: tailOf(res.output),
   };
 }

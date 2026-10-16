@@ -14,6 +14,7 @@ import path from "node:path";
 import type { RunEventInput, RunUsage } from "@rosterdock/shared";
 import { HEADER, startFailure } from "./claude-code.js";
 import type { EngineAdapter, EngineContext, EngineResult } from "./types.js";
+import { clip, tail } from "../text.js";
 
 export interface CodexOptions {
   bin: string;
@@ -119,7 +120,8 @@ interface CodexMessage {
   message?: string;
 }
 
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+/** At most n characters and the ellipsis. */
+const clipped = (s: string, n: number) => clip(s, n + 1, "…");
 
 /** The error message Codex wraps: often a JSON envelope from the API; the human line inside is what to show. */
 export function errorText(raw: string | undefined): string {
@@ -139,25 +141,28 @@ function itemEvent(item: CodexItem, phase: "started" | "completed"): RunEventInp
   switch (item.type) {
     case "agent_message":
       return phase === "completed" && item.text?.trim()
-        ? { type: "assistant", payload: { text: clip(item.text.trim(), 2000) } }
+        ? { type: "assistant", payload: { text: clipped(item.text.trim(), 2000) } }
         : null;
     case "command_execution":
-      return { type: "tool", payload: { name: "shell", input: clip(item.command ?? "", 200) } };
+      return { type: "tool", payload: { name: "shell", input: clipped(item.command ?? "", 200) } };
     case "file_change":
       return {
         type: "tool",
         payload: {
           name: "apply_patch",
-          input: clip((item.changes ?? []).map((c) => `${c.kind ?? "edit"} ${c.path ?? ""}`).join(", "), 200),
+          input: clipped(
+            (item.changes ?? []).map((c) => `${c.kind ?? "edit"} ${c.path ?? ""}`).join(", "),
+            200,
+          ),
         },
       };
     case "mcp_tool_call":
       return { type: "tool", payload: { name: `${item.server ?? "mcp"}.${item.tool ?? "tool"}`, input: "" } };
     case "web_search":
-      return { type: "tool", payload: { name: "web_search", input: clip(item.query ?? "", 200) } };
+      return { type: "tool", payload: { name: "web_search", input: clipped(item.query ?? "", 200) } };
     case "error":
       return phase === "completed"
-        ? { type: "stderr", payload: { text: clip(item.message ?? "error", 500) } }
+        ? { type: "stderr", payload: { text: clipped(item.message ?? "error", 500) } }
         : null;
     default:
       return null;
@@ -170,7 +175,7 @@ export function parseCodexLine(line: string, acc: ParsedCodexStream): void {
   try {
     msg = JSON.parse(line) as CodexMessage;
   } catch {
-    acc.events.push({ type: "stdout", payload: { text: line.slice(0, 500) } });
+    acc.events.push({ type: "stdout", payload: { text: clip(line, 500) } });
     return;
   }
   switch (msg.type) {
@@ -215,7 +220,7 @@ export function parseCodexLine(line: string, acc: ParsedCodexStream): void {
     case "error":
       acc.isError = true;
       acc.errorMessage = errorText(msg.message);
-      acc.events.push({ type: "stderr", payload: { text: clip(acc.errorMessage, 500) } });
+      acc.events.push({ type: "stderr", payload: { text: clipped(acc.errorMessage, 500) } });
       return;
     default:
       return;
@@ -297,9 +302,9 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
       });
       child.stderr?.on("data", (chunk: Buffer) => {
         const text = chunk.toString("utf8");
-        stderrTail = (stderrTail + text).slice(-4000);
+        stderrTail = tail(stderrTail + text, 4000);
         for (const line of text.split("\n"))
-          if (line.trim()) ctx.emit({ type: "stderr", payload: { text: line.slice(0, 500) } });
+          if (line.trim()) ctx.emit({ type: "stderr", payload: { text: clip(line, 500) } });
       });
       child.stdin?.on("error", () => {});
       child.stdin?.end(`${HEADER}\n\n${ctx.pack}`, "utf8");
@@ -349,7 +354,7 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
           : exit.signal
             ? `Codex was killed by ${exit.signal}`
             : acc.isError
-              ? `Codex reported an error: ${clip(acc.errorMessage ?? "unknown", 300)}`
+              ? `Codex reported an error: ${clipped(acc.errorMessage ?? "unknown", 300)}`
               : `Codex exited with code ${exit.code}${stderrTail ? `: ${stderrTail.trim().split("\n").at(-1)}` : ""}`,
       };
     },

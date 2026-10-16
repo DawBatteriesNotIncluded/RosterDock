@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import type { RunEventInput, RunUsage } from "@rosterdock/shared";
 import type { EngineAdapter, EngineContext, EngineResult } from "./types.js";
+import { clip, tail } from "../text.js";
 
 export const HEADER =
   "You are executing one governed run inside a disposable sandbox: the CURRENT WORKING DIRECTORY. The run pack below is your full contract. Create every expected output named in the pack as a file in the current working directory (exact flat filenames, no subdirectories). Do not read or write anything outside this directory. Do not attempt network writes or production changes. Stop when the outputs and the handover are written.";
@@ -154,9 +155,8 @@ export interface ParsedStream {
 function summariseInput(name: string, input: unknown): string {
   const obj = (input ?? {}) as Record<string, unknown>;
   const pick = obj.file_path ?? obj.path ?? obj.command ?? obj.pattern ?? obj.query ?? obj.url;
-  if (typeof pick === "string") return pick.slice(0, 200);
-  const text = JSON.stringify(obj);
-  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+  if (typeof pick === "string") return clip(pick, 200);
+  return clip(JSON.stringify(obj), 201, "…");
 }
 
 /** One stream-json line to zero or more run events. Exported for fixture tests. */
@@ -178,7 +178,7 @@ export function parseStreamLine(line: string, acc: ParsedStream): void {
   try {
     msg = JSON.parse(line) as StreamMessage;
   } catch {
-    acc.events.push({ type: "stdout", payload: { text: line.slice(0, 500) } });
+    acc.events.push({ type: "stdout", payload: { text: clip(line, 500) } });
     return;
   }
   switch (msg.type) {
@@ -198,7 +198,7 @@ export function parseStreamLine(line: string, acc: ParsedStream): void {
       const content = msg.message?.content ?? [];
       for (const block of content) {
         if (block.type === "text" && block.text?.trim()) {
-          acc.events.push({ type: "assistant", payload: { text: block.text.trim().slice(0, 2000) } });
+          acc.events.push({ type: "assistant", payload: { text: clip(block.text.trim(), 2000) } });
         } else if (block.type === "tool_use") {
           acc.events.push({
             type: "tool",
@@ -275,8 +275,8 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
         ctx.emit({
           type: "stderr",
           payload: {
-            text: `The department's sandbox names tools this worker does not allow, so the run goes without them: ${dropped.join(", ")}`.slice(
-              0,
+            text: clip(
+              `The department's sandbox names tools this worker does not allow, so the run goes without them: ${dropped.join(", ")}`,
               500,
             ),
           },
@@ -342,9 +342,9 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
       });
       child.stderr?.on("data", (chunk: Buffer) => {
         const text = chunk.toString("utf8");
-        stderrTail = (stderrTail + text).slice(-4000);
+        stderrTail = tail(stderrTail + text, 4000);
         for (const line of text.split("\n"))
-          if (line.trim()) ctx.emit({ type: "stderr", payload: { text: line.slice(0, 500) } });
+          if (line.trim()) ctx.emit({ type: "stderr", payload: { text: clip(line, 500) } });
       });
       child.stdin?.on("error", () => {});
       child.stdin?.end(`${HEADER}\n\n${ctx.pack}`, "utf8");
@@ -401,7 +401,7 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
             : acc.isError
               ? // Its own words: an error result's subtype can still be "success" (an unknown model).
                 acc.resultText
-                ? `Claude Code: ${acc.resultText.split("\n")[0]!.slice(0, 300)}`
+                ? `Claude Code: ${clip(acc.resultText.split("\n")[0]!, 300)}`
                 : `Claude Code reported ${acc.subtype ?? "an error"}`
               : `Claude Code exited with code ${exit.code}${stderrTail ? `: ${stderrTail.trim().split("\n").at(-1)}` : ""}`,
       };

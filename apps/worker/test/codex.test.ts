@@ -61,6 +61,17 @@ describe("codex JSONL parsing", () => {
       { type: "stdout", payload: { text: "not json" } },
     ]);
   });
+
+  it("cuts a long agent message without splitting an emoji", () => {
+    const text = `x${"😀".repeat(1500)}`;
+    const parsed = parseCodexStream(
+      `${JSON.stringify({ type: "item.completed", item: { id: "i", type: "agent_message", text } })}\n`,
+    );
+    const out = String(parsed.events[0]?.payload?.text);
+    expect(out.isWellFormed()).toBe(true);
+    expect(out.endsWith("…")).toBe(true);
+    expect(parsed.resultText).toBe(text);
+  });
 });
 
 describe("invocation", () => {

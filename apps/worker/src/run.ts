@@ -7,6 +7,7 @@ import type { EngineAdapter } from "./engines/types.js";
 import { createResourceSampler, type ResourceSampler } from "./resources.js";
 import { createPhaseRecorder, exportWorkerTrace, type WorkerOtlp } from "./trace.js";
 import { runRepoTests, type Exec } from "./tests.js";
+import { clip } from "./text.js";
 import { cleanupWorkspace, harvestWorkspace, prepareWorkspace, type Workspace } from "./workspace.js";
 
 export interface RunDeps {
@@ -130,7 +131,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
     buffer.push({ ...ev, at: ev.at ?? new Date().toISOString() });
     if (ev.type === "tool" || ev.type === "step")
       step =
-        `${ev.type === "tool" ? String(ev.payload?.name ?? "tool") + " " : ""}${String(ev.payload?.input ?? ev.payload?.text ?? "").slice(0, 120)}`.trim();
+        `${ev.type === "tool" ? String(ev.payload?.name ?? "tool") + " " : ""}${clip(String(ev.payload?.input ?? ev.payload?.text ?? ""), 120)}`.trim();
     if (buffer.length >= 20) void flush();
   };
   const flushTimer = setInterval(() => void flush(), 1000);
@@ -275,7 +276,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
           durationMs,
           blocker: {
             code: mention ? "waiting_on_teammate" : "unknown",
-            what: harvest.blocked.slice(0, 1000),
+            what: clip(harvest.blocked, 1000),
             ...(mention
               ? { waitingOn: { kind: "teammate", id: mention.toLowerCase(), name: mention.toLowerCase() } }
               : {}),
@@ -295,7 +296,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
           : "";
         completion = {
           status: "completed",
-          summary: `${harvest.handover ?? result.resultText ?? "Finished."}${missing}`.slice(0, 4000),
+          summary: clip(`${harvest.handover ?? result.resultText ?? "Finished."}${missing}`, 4000),
           usage,
           durationMs,
           ...(harvest.baseSha ? { baseSha: harvest.baseSha } : {}),
@@ -304,10 +305,10 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       }
     }
   } catch (err) {
-    phases.end((err as Error).message.slice(0, 500));
+    phases.end(clip((err as Error).message, 500));
     completion = {
       status: abort.signal.aborted ? "stopped" : "failed",
-      error: (err as Error).message.slice(0, 4000),
+      error: clip((err as Error).message, 4000),
       usage,
       durationMs: Date.now() - startedAt,
     };
