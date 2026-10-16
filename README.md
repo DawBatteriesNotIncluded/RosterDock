@@ -1,91 +1,44 @@
 # RosterDock
 
-RosterDock is a self-hosted platform for running a company of AI teammates. You set up departments staffed by
-teammates, each with a brain (Claude Code or Codex and a model), a persona and a toolbox of governed
-connections. Peter, the project-manager teammate, turns a goal into tasks, assigns them by role and load,
-chases what is stuck and re-plans what fails. Teammates work in parallel on a shared kanban, message and
-delegate to each other, and review each other's work hunk by hunk. People gate two things only: merges to
-protected branches and writes to live external systems. It runs on your own Kubernetes cluster from a Helm
-chart, or on one machine for development.
+AI teammates on your own Kubernetes cluster: a manager who plans, reviews that decide, a person approving
+every live write.
 
-It is for teams that want AI agents doing real work (research, code, content, operations) as a team with a
-manager, reviews, budgets and an audit trail, on infrastructure they control, with a person deciding
-everything that leaves it.
+[![CI](https://github.com/DawBatteriesNotIncluded/RosterDock/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DawBatteriesNotIncluded/RosterDock/actions/workflows/ci.yml)
+[![Licence: Apache 2.0](https://img.shields.io/badge/licence-Apache_2.0-6b675f)](LICENSE)
 
-![The board of the Lighthouse demo company: AI teammates' tasks to do, running, blocked on a teammate, in review and done](docs/images/board.png)
+RosterDock is a self-hosted platform for departments of AI teammates, each a brain, a persona and a governed
+toolbox, working a shared kanban. It is for teams that want agents doing real work with a manager, reviews
+and an audit trail, on infrastructure they control.
 
-_The Lighthouse demo company on the dev stack, every teammate on the stub engine._
+- Only an approved review marks work Done, and a person can veto any review.
+- A write to a live system runs only after a person approves its exact payload, bound by its sha256.
+- Your cluster and your Postgres, with every credential referenced by name.
+- Peter, the project-manager teammate, plans, chases and re-plans for Claude Code and Codex teammates in one
+  company.
+
+[Quick start](#quick-start-free-on-one-machine) · [Install on Kubernetes](docs/install.md) ·
+[Security](docs/security.md) · [Demo companies](#demo-companies) · [Contributing](CONTRIBUTING.md)
+
+![The board of the Lighthouse demo company, with teammates' tasks in columns](docs/images/board.png)
+
+_Lighthouse, an invented demo company, on the stub engine: tasks to do, running, waiting on a teammate, in
+review and done._
 
 ## Status
 
-Alpha, version 0.x. The board, the workers, Peter, reviews, approvals and the chart work end to end, and the
-test suite runs offline, but expect breaking changes between versions and rough edges. Pin a version, and read
-its entry in [`CHANGELOG.md`](CHANGELOG.md) before upgrading.
+Alpha, with breaking changes to come ([`CHANGELOG.md`](CHANGELOG.md)). Version 0.1.0 is being prepared and
+nothing is published (no tag, release, images or chart), so RosterDock runs from a checkout.
 
-## What it does
+Good to know:
 
-- **Teammates** are first-class actors: authors, assignees and reviewers with the same role checks as people.
-  A toolbox grants each one connections (MCP servers, OpenAPI services) in a mode (`read`, `ask` or `off`);
-  department and project client policies only ever narrow it.
-- **Peter** plans every goal: with a model when one is available (and then he may ask questions first), by
-  role when not. He re-plans a failed task with a note and turns the goal amber when it needs you.
-- **Reviews**: every finished task opens a review with checks (secret scan, declared outputs, the
-  repository's tests, cited sources, weighted criteria), decided by a reviewer teammate or a person. Only an
-  approved review marks a task Done, and a person can veto it. On a GitHub or GitLab project the approval
-  opens a pull or merge request; merging stays with you.
-- **Approvals**: a write to a live system is proposed with the exact payload and its sha256, and runs only
-  after a person approves that payload.
-- **One event stream** per company behind the activity feed, the office view and the costs; budgets per
-  company, department, project and teammate; roles (owner, admin, reviewer, viewer); sign-in through OpenID
-  Connect.
-
-## How it fits together
-
-```text
-browser ──▶ web ──/api──▶ board ──────▶ connections (MCP, OpenAPI), git hosts, webhooks
-                          ▲   │
-            claim runs,   │   │ state, events
-            events, files │   ▼
-                       workers ──────▶ Postgres (every row, the events, the run queue)
-                          │
-                          ▼
-                      model API
-```
-
-- **board** (`apps/board`): the API, which owns all state and the event stream. Node 22, Fastify,
-  Postgres. It runs Peter's loop, the review checks, the tool broker and approvals, and the notifications,
-  and applies migrations on boot. It alone calls connections, opens pull requests and sends notifications.
-- **web** (`apps/web`): the React app, served by nginx, which proxies `/api` to the board.
-- **workers** (`apps/worker`): each claims a run from the queue, prepares a workspace (a clone of the
-  project's repository, if it has one), runs the teammate's engine headless and streams events and files
-  back. They run model output, so on a cluster their network policy lets them reach the board, Postgres and
-  public HTTPS (the model API, the git host), and nothing private.
-- **Postgres** holds everything: rows, events, sessions and the queue. An S3 bucket is optional, for
-  artifacts over 512 KB.
-
-## Prerequisites
-
-- Node.js 22.12 or later and pnpm 10 (`corepack enable` picks the pinned version)
-- Docker, for Postgres in development and for the test suite
-- For a cluster: Kubernetes 1.27 or later and Helm 3.8 or later (see [`docs/install.md`](docs/install.md))
-
-Each teammate runs on an engine, and only real engines need anything:
-
-| Engine          | What the worker needs                                                                                         |
-| --------------- | ------------------------------------------------------------------------------------------------------------- |
-| Stub (no model) | Nothing. It writes the task's declared outputs and a handover; no model, no tokens, no cost.                  |
-| Claude Code     | The `claude` CLI, signed in (`claude auth login`), or `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` for it |
-| Codex           | The `codex` CLI, signed in (`codex login`), or `OPENAI_API_KEY` for it                                        |
-
-Peter needs nothing either: without a model he plans by role (research, requirements, build). With
-`ANTHROPIC_API_KEY` on the board, or a signed-in `claude` or `codex` CLI where the board runs, he plans with a
-model; each company chooses in Settings > Peter. On a cluster, the published worker image carries Codex but
-not Claude Code, whose licence keeps it out of a public image; the install guide shows how to add it in an
-image of your own ([Engines on the worker](docs/install.md#engines-on-the-worker)).
+- Self-hosted only; engines are Claude Code, Codex and the stub.
+- Claude Code on a cluster needs a worker image you build.
+- A real install needs Kubernetes 1.27 or later, Postgres 16 and an OpenID Connect provider.
 
 ## Quick start: free, on one machine
 
-The stub engine and Peter without a model: nothing calls a model and nothing costs anything.
+Requirements: Node.js 22.12 or later, pnpm 10 (`corepack enable`) and Docker. On the stub engine, with
+Peter without a model, nothing calls a model and nothing costs anything.
 
 ```bash
 git clone https://github.com/DawBatteriesNotIncluded/RosterDock.git
@@ -117,36 +70,88 @@ Then, in the browser:
 4. **Company > New goal**: "Send a weekly digest of Gong calls with next steps to #sales every Friday."
    Peter splits it into tasks, the worker runs the research task, and it lands in **Reviews**.
 
-To use real models, sign in to a CLI from the table above and switch a teammate's engine. What a goal costs
-then depends on the models and the review rounds; the demo guides list measured figures
-([Lighthouse](deploy/demo/lighthouse/README.md), [Cirrus](deploy/demo/cirrus/README.md)), and a company
-budget in Settings caps it.
+For real models, sign in to a CLI ([Engines](#engines)) and switch a teammate's engine; a company budget in
+Settings caps the cost.
 
-### The whole stack in Docker
+### Docker only
 
-`docker compose up --build -d` builds and starts Postgres, MinIO, the board and the web on
-http://localhost:8080, with every port published on 127.0.0.1 only, since the stack runs with the dev login
-on. It starts no worker: add `--profile worker` to build and start one with Claude Code (it hands
-`ANTHROPIC_API_KEY` from your environment to Claude Code teammates; stub teammates need nothing).
+`docker compose --profile worker up --build -d` starts Postgres, MinIO, the board, the web and a worker on
+http://localhost:8080; follow the same steps. Stub teammates need nothing; the worker is built with Claude
+Code and hands Claude Code teammates `ANTHROPIC_API_KEY` from your environment. `docker compose down -v`
+deletes the data.
 
-## On Kubernetes
+## What it does
 
-Each release publishes the three images and the chart to GHCR, and [`CHANGELOG.md`](CHANGELOG.md) says what
-it changed.
+- **Teammates** are authors, assignees and reviewers with the same role checks as people; they message and
+  delegate.
+- **Toolboxes** grant any MCP server or OpenAPI service in a mode (`read`, `ask` or `off`); department and
+  project client policies only narrow them.
+- **Peter** plans with a model if there is one (perhaps asking questions first), by role if not.
+- **Reviews** go hunk by hunk, with checks (secret scan, declared outputs, the repository's tests, cited
+  sources, weighted criteria). On GitHub or GitLab an approval opens a pull or merge request; you merge.
+- **One event stream** per company feeds activity, the office view and costs; budgets are in tokens; roles
+  are owner, admin, reviewer and viewer; sign-in is OpenID Connect.
 
-- [`docs/install.md`](docs/install.md): a fresh cluster to a working board, with a first demo
-- [`docs/operator.md`](docs/operator.md): what to watch and what to do once it runs
-- [`docs/security.md`](docs/security.md): what the platform guarantees and what it needs from you
+## How it fits together
 
-Two demo companies show it doing real work: [Lighthouse](deploy/demo/lighthouse/README.md) launches a product,
-and [Cirrus](deploy/demo/cirrus/README.md), a telecoms company, recovers from a bad week.
+```text
+browser ──▶ web ──/api──▶ board ──────▶ connections (MCP, OpenAPI), git hosts, webhooks
+                          ▲   │
+            claim runs,   │   │ state, events
+            events, files │   ▼
+                       workers ──────▶ Postgres (every row, the events, the run queue)
+                          │
+                          ▼
+                      model API
+```
+
+- **board** (`apps/board`): owns state and events, runs Peter, reviews and approvals; alone calls connections.
+- **web** (`apps/web`): the React app; nginx proxies `/api` to the board.
+- **workers** (`apps/worker`): run engines headless, reaching only the board, Postgres and public HTTPS.
+- **Postgres** holds everything; an S3 bucket is optional, for artifacts over 512 KB.
+
+More in the [operator guide](docs/operator.md).
+
+## Engines
+
+Only real engines need anything:
+
+| Engine          | What the worker needs                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------- |
+| Stub (no model) | Nothing. It writes the task's declared outputs and a handover; no model, no tokens, no cost.                  |
+| Claude Code     | The `claude` CLI, signed in (`claude auth login`), or `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` for it |
+| Codex           | The `codex` CLI, signed in (`codex login`), or `OPENAI_API_KEY` for it                                        |
+
+Peter needs nothing either: without a model he plans by role (research, requirements, build). With
+`ANTHROPIC_API_KEY` on the board, or a signed-in `claude` or `codex` CLI where the board runs, he plans
+with a model; each company chooses in Settings > Peter.
+
+The worker image built from `apps/worker/Dockerfile` carries Codex; Claude Code's licence keeps it out of
+public images ([Engines on the worker](docs/install.md#engines-on-the-worker)).
+
+## On Kubernetes today
+
+Run `deploy/scripts/local-cluster.sh` (a kind cluster that stays) or `deploy/scripts/smoke.sh` (a throwaway
+install), or build the images and install `deploy/helm/rosterdock` with `image.registry`. Guides:
+[install](docs/install.md), [operator](docs/operator.md), [security](docs/security.md) and the
+[docs index](docs/README.md).
+
+## Demo companies
+
+[Lighthouse](deploy/demo/lighthouse/README.md) launches a product, and [Cirrus](deploy/demo/cirrus/README.md),
+a telecoms company, recovers from a bad week. Both are invented; their guides set them up and give costs.
+
+## How this repository is worked
+
+A RosterDock company on the maintainer's board (Engineering, Issues & PRs, Docs, Release & Security, and
+Peter) takes tasks here. A reviewer teammate reviews each change it makes, the board opens the pull request
+and a person merges ([#7](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/7),
+[#8](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/8)). Most of the history is the maintainer's.
 
 ## Contributing
 
-[`CONTRIBUTING.md`](CONTRIBUTING.md) has the setup and the rules for a change. The plan is
-[`docs/plan.html`](docs/plan.html) and the visual spec [`docs/prototype.html`](docs/prototype.html). Report a
-security problem privately, as [`SECURITY.md`](SECURITY.md) says, and see the
-[code of conduct](CODE_OF_CONDUCT.md).
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the setup and the rules. Report a security problem privately, as
+[`SECURITY.md`](SECURITY.md) says, and see the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Licence
 
