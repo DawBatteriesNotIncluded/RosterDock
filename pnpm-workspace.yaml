@@ -2,6 +2,10 @@ packages:
   - apps/*
   - packages/*
 
+# Dependencies whose install scripts run: esbuild fetches its platform binary. Every other script is skipped.
+onlyBuiltDependencies:
+  - esbuild
+
 catalog:
   # runtime
   fastify: ^5.12.5

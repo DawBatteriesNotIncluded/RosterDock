@@ -3,8 +3,6 @@
 Things noticed while building that are outside the current milestone. Move a line into the plan when it is
 scheduled; delete it when it ships.
 
-- pnpm 10.32 ignores `pnpm.onlyBuiltDependencies` in the root `package.json` and says so on every command; the
-  setting belongs in `pnpm-workspace.yaml` now.
 - OpenCode, the plan's third engine, has a row in `engines` (disabled) and no worker adapter. The hire form and
   the teammate editor do not offer it, and the built-in 'Cody 3' template moved to Claude Code. Shipping it
   means an adapter in `apps/worker/src/engines/` tested against recorded OpenCode output, and enabling the row.
@@ -21,3 +19,5 @@ scheduled; delete it when it ships.
   plans for it have nowhere to push. Let a goal name a project or a repository.
 - Costs' "If billed the other way" shows US$0.00 for a teammate on a seat with no price set; say the seat is
   unpriced instead.
+- Lint is not type-aware (`recommendedTypeChecked` is off, for speed), and `deploy/**` is ignored, so
+  `deploy/scripts/*.mjs` is never linted. Turn the first on per package and lint the scripts.

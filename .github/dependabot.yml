@@ -1,6 +1,7 @@
 # Weekly pull requests for the pinned actions, the pnpm workspace and the images' base images. A release
 # waits a week before it is proposed, so one that is pulled or found bad never reaches a pull request here;
-# security updates do not wait. Minor and patch updates come grouped, majors one by one.
+# security updates and nginx's rolling tags do not wait. Minor and patch updates come grouped, majors one by
+# one; Node stays on 22, its typings included.
 #
 # The model CLIs installed in the Dockerfiles (Claude Code, Codex) are not covered: their pins move with
 # the recorded stream fixtures the parsers are tested against, by hand.
@@ -25,6 +26,11 @@ updates:
     groups:
       npm:
         update-types: [minor, patch]
+    ignore:
+      # The typings follow the runtime: Node 22 (see the docker ignore below). Typings for a later major let
+      # code use APIs node:22 does not have.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directories:
@@ -35,6 +41,9 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+      # nginx's maintained tags (1.30-alpine) are rebuilt every few days, so they never age past the cooldown
+      # and only abandoned ones were proposed.
+      exclude: [nginx]
     ignore:
       # Node 22 is the runtime package.json's engines and CI name; moving off it is a decision, not a bump.
       - dependency-name: node
