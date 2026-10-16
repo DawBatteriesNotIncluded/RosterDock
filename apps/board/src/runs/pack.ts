@@ -1,7 +1,7 @@
 // The run pack: everything a teammate is told for one run, rendered to
 // markdown and hashed so the audit trail can pin exactly what the worker was
-// told. Pure: no database, no clock. Adapted from agent-board runtime-pack.ts
-// with the Tool Broker and lane concepts removed (tools return in M5).
+// told. Pure: no database, no clock. Adapted from the v1 prototype's runtime
+// pack without its lanes; its tools came back in M5 as the company's connections.
 
 import { payloadSha256, type Criterion, type ReviewStatus } from "@rosterdock/shared";
 

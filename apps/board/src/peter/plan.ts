@@ -4,8 +4,8 @@
 // and an assignee chosen by role and load. The model produces the plan when
 // Peter has one; the heuristic produces it otherwise, and whenever the model's
 // plan does not validate. Both are pure functions of the goal and the roster.
-// The intake shape is the v1 planner's task pack (agent-board planner.ts),
-// with lanes replaced by teammates and departments.
+// The intake shape is the v1 prototype planner's task pack, with lanes
+// replaced by teammates and departments.
 
 import { z } from "zod";
 

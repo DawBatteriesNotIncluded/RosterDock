@@ -2,7 +2,7 @@
 // emission sites stay one-liners. Prose is names-only: callers must never
 // interpolate secret values into overrides.
 //
-// Ported from agent-board `src/gtm/blockers.ts`. The governance ladder codes
+// Carried over from the v1 prototype. The governance ladder codes
 // (kill_switch, governance_level) are gone with the ladder. `waiting_on_teammate`
 // is new: the Blocked column's three reasons are dependency, waiting on a
 // teammate, and waiting on an approval.

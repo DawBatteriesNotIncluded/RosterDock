@@ -1,7 +1,7 @@
 // The one event stream. Types shared by the board (which appends to the
 // `events` table) and the web (which projects Activity, Office and Map from
-// it), plus the pure fan-out and replay-then-live helpers ported from
-// agent-board `src/audit.ts` and its SSE route.
+// it), plus the pure fan-out and replay-then-live helpers carried over from
+// the v1 prototype's audit log and its SSE route.
 
 import type { ActorRef } from "./roles.js";
 

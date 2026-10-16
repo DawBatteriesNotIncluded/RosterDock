@@ -5,8 +5,8 @@
 // always a write, request and response sizes and time are capped, the
 // credential is an env var NAME resolved at call time (from `deps.env`: a
 // company's secrets over the names the board shares), and answers come back
-// with secret-shaped keys redacted. Ported from agent-board openapi-runtime.ts
-// without the governance ladder; the broker decides, this module calls.
+// with secret-shaped keys redacted. Carried over from the v1 prototype without
+// its governance ladder; the broker decides, this module calls.
 
 import type { ConnectionToolInput, OpenApiManifestInput, OpenApiOperationInput } from "@rosterdock/shared";
 import YAML from "yaml";
