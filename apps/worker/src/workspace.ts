@@ -34,8 +34,11 @@ export function git(
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (c: Buffer) => (stdout += c.toString("utf8")));
-    child.stderr.on("data", (c: Buffer) => (stderr += c.toString("utf8")));
+    // Decoded as a stream: a character split across two pipe chunks stays whole (the diff is the review).
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (c: string) => (stdout += c));
+    child.stderr.on("data", (c: string) => (stderr += c));
     child.on("error", (err) => resolve({ code: null, stdout, stderr: `${stderr}\n${err.message}` }));
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });

@@ -163,6 +163,23 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
+  it("reads git output as a stream, so a character on a pipe boundary arrives whole", async () => {
+    // Over half a megabyte of multibyte text: the pipe hands it over in chunks that split characters.
+    const content = "a — ✅ 😀 ü\n".repeat(30_000);
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-utf8",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "big.txt"), content, "utf8");
+    expect((await git(["add", "big.txt"], ws.dir)).code).toBe(0);
+    const out = await git(["show", ":big.txt"], ws.dir);
+    expect(out.stdout.includes("\ufffd")).toBe(false);
+    expect(out.stdout).toBe(content);
+    await cleanupWorkspace(ws);
+  });
+
   it("fails clearly on a bad repository without leaking a token", async () => {
     await expect(
       prepareWorkspace(

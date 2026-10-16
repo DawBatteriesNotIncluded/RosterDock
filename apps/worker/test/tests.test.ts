@@ -5,7 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WorkerCheckSchema } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { detectPackageManager, MAX_TEST_OUTPUT_CHARS, runRepoTests, type Exec } from "../src/tests.js";
+import {
+  detectPackageManager,
+  execCommand,
+  MAX_TEST_OUTPUT_CHARS,
+  runRepoTests,
+  type Exec,
+} from "../src/tests.js";
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 let root: string;
@@ -147,6 +153,18 @@ describe("runRepoTests", () => {
     expect(calls).toHaveLength(2);
     for (const call of calls)
       expect(call.env).toEqual({ PATH: "/usr/bin", HOME: "/home/node", TMPDIR: "/tmp", CI: "1" });
+  });
+
+  it("reads a command's output as a stream, so a character on a pipe boundary arrives whole", async () => {
+    // This Node stands in for the package manager: no npm runs here.
+    const res = await execCommand(
+      process.execPath,
+      ["-e", 'process.stdout.write("— ✅ 😀 ".repeat(20000))'],
+      { cwd: root, env: { PATH: process.env.PATH ?? "" }, timeoutMs: 10_000 },
+    );
+    expect(res.code).toBe(0);
+    expect(res.output.includes("\ufffd")).toBe(false);
+    expect(res.output.endsWith("— ✅ 😀 ")).toBe(true);
   });
 
   it("detects the package manager from the lockfile", async () => {

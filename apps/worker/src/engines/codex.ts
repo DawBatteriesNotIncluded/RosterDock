@@ -290,8 +290,11 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
         for (const ev of acc.events.slice(before)) ctx.emit(ev);
         if (acc.events[acc.events.length - 1]?.type === "result" && !acc.isError) ctx.onUsage(acc.usage);
       };
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdoutBuf += chunk.toString("utf8");
+      // Decoded as a stream, so a character split across two pipe chunks stays whole.
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
+      child.stdout?.on("data", (chunk: string) => {
+        stdoutBuf += chunk;
         let nl = stdoutBuf.indexOf("\n");
         while (nl >= 0) {
           const line = stdoutBuf.slice(0, nl);
@@ -300,8 +303,7 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
           nl = stdoutBuf.indexOf("\n");
         }
       });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        const text = chunk.toString("utf8");
+      child.stderr?.on("data", (text: string) => {
         stderrTail = tail(stderrTail + text, 4000);
         for (const line of text.split("\n"))
           if (line.trim()) ctx.emit({ type: "stderr", payload: { text: clip(line, 500) } });

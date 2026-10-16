@@ -70,9 +70,12 @@ export const execCommand: Exec = (command, args, opts) =>
     });
     let output = "";
     let timedOut = false;
-    const keep = (chunk: Buffer) => {
-      output = (output + chunk.toString("utf8")).slice(-MAX_TEST_OUTPUT_CHARS * 2);
+    const keep = (chunk: string) => {
+      output = (output + chunk).slice(-MAX_TEST_OUTPUT_CHARS * 2);
     };
+    // Decoded as a stream, so a character split across two pipe chunks stays whole.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", keep);
     child.stderr.on("data", keep);
     const timer = setTimeout(() => {
