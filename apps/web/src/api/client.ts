@@ -20,6 +20,8 @@ import type {
   UpdateTaskInput,
   UpdateTeammateInput,
 } from "@rosterdock/shared";
+// The event types alone, not the package's index: that carries zod and node:crypto into the bundle.
+import { EVENT_TYPES } from "@rosterdock/shared/events";
 import type {
   Approval,
   Artifact,
@@ -371,79 +373,9 @@ export const httpClient: Client = {
         // ignore malformed frames
       }
     };
-    // Events are sent with `event: <type>`, so listen on every known type via a
-    // catch-all: EventSource only dispatches named events to named listeners.
-    const types = [
-      "company",
-      "membership",
-      "department",
-      "teammate",
-      "project",
-      "task",
-      "message",
-      "user",
-      "run",
-      "artifact",
-      "budget",
-      "decision",
-      "review",
-      "pr",
-      "goal",
-      "draft",
-      "approval",
-      "connection",
-      "tool",
-      "notify",
-    ];
-    const names = [
-      "created",
-      "updated",
-      "deleted",
-      "granted",
-      "revoked",
-      "member_added",
-      "member_removed",
-      "lead_changed",
-      "token_minted",
-      "moved",
-      "assigned",
-      "blocked",
-      "unblocked",
-      "dependency_added",
-      "dependency_removed",
-      "posted",
-      "logged_in",
-      "chased",
-      "done",
-      "queued",
-      "started",
-      "interrupted",
-      "completed",
-      "failed",
-      "stopped",
-      "stop_requested",
-      "alert",
-      "logged",
-      "opened",
-      "commented",
-      "scored",
-      "changes_requested",
-      "approved",
-      "vetoed",
-      "proposed",
-      "questions",
-      "answered",
-      "planned",
-      "escalated",
-      "replanned",
-      "accepted",
-      "rejected",
-      "executed",
-      "called",
-      "sent",
-    ];
-    for (const t of types)
-      for (const n of names) source.addEventListener(`${t}.${n}`, handler as EventListener);
+    // Events are sent with `event: <type>`, and EventSource hands a named event only to a listener of
+    // that name, so listen on every type the board can append.
+    for (const type of EVENT_TYPES) source.addEventListener(type, handler as EventListener);
     source.addEventListener("message", handler as EventListener);
     return () => source.close();
   },

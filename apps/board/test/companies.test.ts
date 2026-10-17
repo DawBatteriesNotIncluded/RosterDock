@@ -65,6 +65,38 @@ describe("companies and memberships", () => {
   it("keeps at least one owner", async () => {
     const { api, owner, base } = await seedCompany(board, "c4@example.com");
     expect((await api.del(`${base}/members/${owner.userId}`)).status).toBe(409);
+    // Nor can the last owner demote themselves.
+    const demoted = await api.post(`${base}/members`, { email: "c4@example.com", role: "admin" });
+    expect(demoted.status).toBe(409);
+    expect(demoted.body.error).toMatch(/at least one owner/);
+    const members = await api.get(`${base}/members`);
+    expect(members.body.find((m: any) => m.userId === owner.userId).role).toBe("owner");
+  });
+
+  it("only an owner changes or removes an owner, and only while another owner stays", async () => {
+    const { api, owner, base } = await seedCompany(board, "c9@example.com");
+    const second = await api.post(`${base}/members`, { email: "c9-second@example.com", role: "owner" });
+    expect(second.status).toBe(201);
+    expect((await api.post(`${base}/members`, { email: "c9-admin@example.com", role: "admin" })).status).toBe(
+      201,
+    );
+    const roleOf = async (userId: string) =>
+      (await api.get(`${base}/members`)).body.find((m: any) => m.userId === userId).role;
+
+    // An admin can neither demote nor remove an owner.
+    const admin = board.api((await board.login("c9-admin@example.com")).token);
+    const refused = await admin.post(`${base}/members`, { email: "c9@example.com", role: "viewer" });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toMatch(/only an owner/);
+    expect((await admin.del(`${base}/members/${owner.userId}`)).status).toBe(403);
+    expect(await roleOf(owner.userId)).toBe("owner");
+
+    // An owner demotes another owner while a second one stays; then the one left is the last.
+    const demoted = await api.post(`${base}/members`, { email: "c9-second@example.com", role: "admin" });
+    expect(demoted.status).toBe(201);
+    expect(await roleOf(second.body.userId)).toBe("admin");
+    expect((await api.post(`${base}/members`, { email: "c9@example.com", role: "admin" })).status).toBe(409);
+    expect(await roleOf(owner.userId)).toBe("owner");
   });
 
   it("teammates act as themselves: same guard, teammate role, no company creation", async () => {

@@ -34,7 +34,8 @@ model output on their cluster.
   company already has.
 - **One event stream, per company.** Every mutation appends an event in the same transaction, with the
   actor (a person or a teammate). Activity, the Office, notifications, metrics and traces are projections
-  of it. Every row carries `company_id`; every company route goes through one role guard.
+  of it. Every row carries `company_id`; every company route goes through one role guard, and every board
+  tool a teammate calls over MCP is checked against the same role matrix.
 
 ## Companies on one board
 
@@ -110,6 +111,8 @@ What they cannot reach:
 - Roles: owner, admin, reviewer, viewer, teammate. Owners and admins manage the company, connections,
   toolboxes, templates and approvals; reviewers decide reviews; viewers read; teammates act only through
   the board's tools with their run token.
+- Only an owner grants owner, or changes or removes an owner, and a company always keeps one: neither an
+  admin nor the last owner can leave it with none.
 - The dev login (`ROSTERDOCK_DEV_LOGIN=1`) signs anyone in as anyone. Never in production; the chart warns.
   `docker-compose.yml`, which runs with it on, publishes its ports (the web, the board, Postgres, MinIO) on
   127.0.0.1 only, so another machine on your network reaches none of them.
@@ -133,7 +136,9 @@ What they cannot reach:
   sandbox; the department's sandbox also sets the engine's tool allowlist and a time limit.
 - The engine reaches no external MCP server. Every tool call goes to the board (`board_tool_call`),
   where the broker decides: run a read, propose a write, or refuse.
-- A run's diff is scanned for secret-shaped values before review; a hit fails the check.
+- A run's diff is scanned for secret-shaped values before review, anywhere in an added line (a key after
+  `NAME=`, in a string, behind `Bearer`), and for values given to secret-named keys, quoted or as
+  `NAME=value`; a hit fails the check.
 
 ## The board
 
