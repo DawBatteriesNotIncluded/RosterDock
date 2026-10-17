@@ -163,6 +163,12 @@ What they cannot reach:
 - A run's diff is scanned for secret-shaped values before review, anywhere in an added line (a key after
   `NAME=`, in a string, behind `Bearer`), and for values given to secret-named keys, quoted or as
   `NAME=value`; a hit fails the check.
+- A run delivers files, never links. The worker reads a declared output, a changed file, the handover and
+  `blocked.md` only as a regular file inside the run's directory, reached without a symbolic link. A link
+  (`report.md -> /proc/self/environ`, a linked directory on the way) or a path out of the directory is
+  never opened, so the worker's own environment never becomes an artifact; a completed run's summary
+  names what was refused. In a repository, the diff carries such a link as the path it points at, as git
+  stores it.
 
 ## The board
 

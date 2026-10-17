@@ -7,7 +7,8 @@
 // run wrote into it would otherwise run with the worker's credentials.
 
 import { spawn } from "node:child_process";
-import { lstat, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { constants, type Stats } from "node:fs";
+import { lstat, mkdir, open, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -214,6 +215,8 @@ export interface Harvest {
   handover: string | null;
   blocked: string | null;
   missingOutputs: string[];
+  /** Files never read: a symbolic link on the way, or a path out of the workspace. */
+  refusedOutputs: string[];
   filesWritten: string[];
   /** HEAD of the clone the diff was taken against; null without a repository. */
   baseSha: string | null;
@@ -241,33 +244,88 @@ export function fitDiff(diffText: string, maxBytes: number): { text: string; omi
   return { text: kept.join(""), omitted };
 }
 
-async function readText(file: string, maxBytes: number): Promise<string | null> {
+/**
+ * A file the run left, by its path in the workspace, read only as a regular file reached without a symbolic
+ * link and inside the workspace. A run that leaves `report.md -> /proc/self/environ`, or a linked directory on
+ * the way, would otherwise hand the worker's own environment (the database URL, its token, the model keys) to
+ * the company as an artifact. Such a path goes into `refused` and is never opened. Null: not there, not a
+ * regular file, or over the cap.
+ */
+async function readInWorkspace(
+  root: string,
+  rel: string,
+  maxBytes: number,
+  refused: string[],
+): Promise<Buffer | null> {
+  const inner = path.relative(root, path.join(root, rel));
+  if (!inner) return null;
+  if (inner === ".." || inner.startsWith(`..${path.sep}`) || path.isAbsolute(inner)) {
+    refused.push(rel);
+    return null;
+  }
   try {
-    const s = await stat(file);
-    if (!s.isFile() || s.size > maxBytes) return null;
-    const buf = await readFile(file);
-    if (buf.includes(0)) return null; // binary
-    return buf.toString("utf8");
-  } catch {
+    // lstat every step, the file included: a link anywhere on the way is refused.
+    let at = root;
+    let last: Stats | null = null;
+    for (const part of inner.split(path.sep)) {
+      at = path.join(at, part);
+      last = await lstat(at);
+      if (last.isSymbolicLink()) {
+        refused.push(rel);
+        return null;
+      }
+    }
+    if (!last?.isFile() || last.size > maxBytes) return null;
+    const [realRoot, real] = await Promise.all([realpath(root), realpath(at)]);
+    const within = path.relative(realRoot, real);
+    if (!within || within === ".." || within.startsWith(`..${path.sep}`) || path.isAbsolute(within)) {
+      refused.push(rel);
+      return null;
+    }
+    // No link at the last step even if one appeared since, a pipe swapped in never blocks the read, and
+    // the file opened must be the one checked above.
+    const handle = await open(at, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const s = await handle.stat();
+      if (s.dev !== last.dev || s.ino !== last.ino) {
+        refused.push(rel);
+        return null;
+      }
+      const buf = await handle.readFile();
+      return buf.length > maxBytes ? null : buf;
+    } finally {
+      await handle.close();
+    }
+  } catch (err) {
+    // A link that appeared at the last step since the lstat.
+    if ((err as NodeJS.ErrnoException).code === "ELOOP") refused.push(rel);
     return null;
   }
 }
 
+async function readText(
+  root: string,
+  rel: string,
+  maxBytes: number,
+  refused: string[],
+): Promise<string | null> {
+  const buf = await readInWorkspace(root, rel, maxBytes, refused);
+  if (!buf || buf.includes(0)) return null; // binary
+  return buf.toString("utf8");
+}
+
 /** A file as an artifact: text as it is, anything with a NUL byte as base64. Null over the cap or unreadable. */
 async function readArtifact(
-  file: string,
+  root: string,
+  rel: string,
   maxBytes: number,
+  refused: string[],
 ): Promise<{ content: string; encoding: "utf8" | "base64" } | null> {
-  try {
-    const s = await stat(file);
-    if (!s.isFile() || s.size > maxBytes) return null;
-    const buf = await readFile(file);
-    return buf.includes(0)
-      ? { content: buf.toString("base64"), encoding: "base64" }
-      : { content: buf.toString("utf8"), encoding: "utf8" };
-  } catch {
-    return null;
-  }
+  const buf = await readInWorkspace(root, rel, maxBytes, refused);
+  if (!buf) return null;
+  return buf.includes(0)
+    ? { content: buf.toString("base64"), encoding: "base64" }
+    : { content: buf.toString("utf8"), encoding: "utf8" };
 }
 
 /** Declared outputs (or, if none were declared, new and changed files), the handover, blocked note and diff. */
@@ -282,14 +340,15 @@ export async function harvestWorkspace(
     handover: null,
     blocked: null,
     missingOutputs: [],
+    refusedOutputs: [],
     filesWritten: [],
     baseSha: null,
     diffOmitted: [],
   };
   if (ws.repo) await restoreGitDir(ws);
-  out.handover =
-    clip((await readText(path.join(ws.dir, HANDOVER_FILE), maxBytes))?.trim() ?? "", 4000) || null;
-  out.blocked = clip((await readText(path.join(ws.dir, BLOCKED_FILE), maxBytes))?.trim() ?? "", 1000) || null;
+  const refused = out.refusedOutputs;
+  out.handover = clip((await readText(ws.dir, HANDOVER_FILE, maxBytes, refused))?.trim() ?? "", 4000) || null;
+  out.blocked = clip((await readText(ws.dir, BLOCKED_FILE, maxBytes, refused))?.trim() ?? "", 1000) || null;
 
   let candidates: string[];
   if (declaredOutputs.length) {
@@ -309,9 +368,9 @@ export async function harvestWorkspace(
       .slice(0, MAX_UNDECLARED_FILES);
   }
   for (const rel of candidates) {
-    const read = await readArtifact(path.join(ws.dir, rel), maxBytes);
+    const read = await readArtifact(ws.dir, rel, maxBytes, refused);
     if (read === null) {
-      if (declaredOutputs.includes(rel)) out.missingOutputs.push(rel);
+      if (declaredOutputs.includes(rel) && !refused.includes(rel)) out.missingOutputs.push(rel);
       continue;
     }
     out.filesWritten.push(rel);

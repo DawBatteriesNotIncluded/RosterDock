@@ -1,6 +1,6 @@
 // Workspace against a local bare repository: no network.
 import { existsSync } from "node:fs";
-import { lstat, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { applyFilePatch, parseUnifiedDiff, renderNewFileDiff } from "@rosterdock/shared";
@@ -12,6 +12,7 @@ import {
   gitEnvironment,
   harvestWorkspace,
   prepareWorkspace,
+  type Harvest,
   redactGit,
   withToken,
 } from "../src/workspace.js";
@@ -329,5 +330,85 @@ describe("workspace", () => {
     expect(redactGit("fatal: https://x-access-token:abc@github.com/o/r.git not found")).toBe(
       "fatal: https://***@github.com/o/r.git not found",
     );
+  });
+});
+
+describe("the harvest never reads through a link", () => {
+  // A file the worker can read and the company must not: outside every run's directory, like /proc/self/environ.
+  const SECRET = "ROSTERDOCK_WORKER_TOKEN=hunter2";
+  let outside: string;
+  beforeAll(async () => {
+    outside = path.join(root, "outside");
+    await mkdir(outside, { recursive: true });
+    await writeFile(path.join(outside, "environ"), `${SECRET}\n`, "utf8");
+  });
+
+  const leaks = (h: Harvest) =>
+    [h.handover, h.blocked, ...h.artifacts.map((a) => Buffer.from(a.content, a.encoding).toString("utf8"))]
+      .join("\n")
+      .includes("hunter2");
+
+  it("refuses declared outputs that are links, inside or outside the workspace, or reached through one", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-links",
+      { repoUrl: null, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "notes.md"), "notes\n", "utf8");
+    await mkdir(path.join(ws.dir, "docs"));
+    await writeFile(path.join(ws.dir, "docs", "a.md"), "a\n", "utf8");
+    await symlink(path.join(outside, "environ"), path.join(ws.dir, "report.md")); // a file outside
+    await symlink("notes.md", path.join(ws.dir, "alias.md")); // a file inside
+    await symlink(outside, path.join(ws.dir, "linked")); // a directory outside
+    await symlink("docs", path.join(ws.dir, "docs-link")); // a directory inside
+    await symlink(path.join(outside, "environ"), path.join(ws.dir, "handover-summary.md"));
+    const declared = [
+      "notes.md",
+      "report.md",
+      "alias.md",
+      "linked/environ",
+      "docs-link/a.md",
+      "../../outside/environ",
+    ];
+    const h = await harvestWorkspace(ws, declared);
+    expect(h.filesWritten).toEqual(["notes.md"]);
+    expect(h.refusedOutputs).toEqual([
+      "handover-summary.md",
+      "report.md",
+      "alias.md",
+      "linked/environ",
+      "docs-link/a.md",
+      "../../outside/environ",
+    ]);
+    expect(h.missingOutputs).toEqual([]);
+    expect(h.handover).toBeNull();
+    expect(h.artifacts.map((a) => a.path)).toEqual(["notes.md", "changes.diff"]);
+    expect(leaks(h)).toBe(false);
+    await cleanupWorkspace(ws);
+    // Removing the workspace removes the links, never what they point at.
+    expect(existsSync(path.join(outside, "environ"))).toBe(true);
+  });
+
+  it("without declared outputs, refuses the links a run left in a repository; the diff holds only their targets", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-repo-links",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "new.md"), "new\n", "utf8");
+    await symlink(path.join(outside, "environ"), path.join(ws.dir, "leak.txt"));
+    await symlink(outside, path.join(ws.dir, "linked"));
+    await symlink(path.join(outside, "environ"), path.join(ws.dir, "blocked.md"));
+    const h = await harvestWorkspace(ws, []);
+    expect(h.filesWritten).toEqual(["new.md"]);
+    expect([...h.refusedOutputs].sort()).toEqual(["blocked.md", "leak.txt", "linked"]);
+    expect(h.missingOutputs).toEqual([]);
+    expect(h.blocked).toBeNull();
+    const diff = h.artifacts.find((a) => a.kind === "diff")!.content;
+    expect(diff).toContain("new file mode 120000");
+    expect(leaks(h)).toBe(false);
+    await cleanupWorkspace(ws);
   });
 });
