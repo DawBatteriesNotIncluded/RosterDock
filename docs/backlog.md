@@ -15,6 +15,17 @@ scheduled; delete it when it ships.
 - An HTTP or OpenAPI connection, its OAuth discovery and a notification webhook reach any address the board pod
   can, cluster-internal ones included; only `networkPolicy.board.egressTo` narrows them. Refuse private and
   link-local addresses unless the operator lists them.
+- The worker fleet is shared by every company on a board, and code a company controls (the repository's
+  `test` script, an engine's shell) can read the worker's environment, the board's `DATABASE_URL` included
+  (`docs/security.md`, Companies on one board). Give the worker a database role of its own that reaches
+  only the pg-boss schema (`pgboss`); run the tests as another user, so `/proc` does not show them the
+  worker's environment; give every run a fresh HOME and TMPDIR; and kill the engine's and the tests'
+  process groups when they end, so nothing a run starts outlives it.
+- With `worker.podMetrics.enabled` or `board.oauth.enabled`, the network policies open ports 443 and 6443 to
+  any address, for the API server, in every worker pool too. Take the API server's address instead (the
+  `kubernetes` Service's endpoints, or a value the operator sets).
+- A teammate token an owner or admin mints lasts up to 30 days and no route revokes it. Add a list and a
+  revoke in Settings, as events.
 - A goal opens a new project with no repository (`apps/board/src/peter/goals.ts`), so the build tasks Peter
   plans for it have nowhere to push. Let a goal name a project or a repository.
 - Costs' "If billed the other way" shows US$0.00 for a teammate on a seat with no price set; say the seat is

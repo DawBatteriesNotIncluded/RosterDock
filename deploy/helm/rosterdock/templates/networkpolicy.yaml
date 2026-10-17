@@ -107,6 +107,7 @@ spec:
         {{- end }}
     {{- if .Values.board.oauth.enabled }}
     # The API server, for the board's own Secrets (its service is 443; the endpoints behind it often 6443).
+    # No destination: any address on these ports, private ranges included, whatever egressTo lists.
     - ports:
         - port: 443
         - port: 6443
@@ -118,7 +119,7 @@ spec:
 {{- end }}
 {{- range $pool := $pools }}
 ---
-# Worker pods run model output. Nothing reaches them; they reach the board, Postgres (the queue), storage
+# Worker pods run model output. Nothing reaches them; they reach the board, Postgres (the queue)
 # and, for the default fleet, public HTTPS only: the model API and the git host. A pool reaches what its
 # own egress lists, and nothing else: an empty list is a fleet that reaches only the board and Postgres.
 apiVersion: networking.k8s.io/v1
@@ -175,6 +176,7 @@ spec:
         - port: {{ $pg.port }}
     {{- if $.Values.worker.podMetrics.enabled }}
     # The API server, for the pod's own metrics (its service is 443; the endpoints behind it often 6443).
+    # No destination: any address on these ports, private ranges included, in every pool.
     - ports:
         - port: 443
         - port: 6443
