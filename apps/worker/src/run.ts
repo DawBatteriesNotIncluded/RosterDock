@@ -358,9 +358,13 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
           durationMs,
         };
       } else {
-        const missing = harvest.missingOutputs.length
-          ? ` Missing declared outputs: ${harvest.missingOutputs.join(", ")}.`
-          : "";
+        const missing =
+          (harvest.missingOutputs.length
+            ? ` Missing declared outputs: ${harvest.missingOutputs.join(", ")}.`
+            : "") +
+          (harvest.refusedOutputs.length
+            ? ` Refused outputs (a link, or a path outside the workspace): ${harvest.refusedOutputs.join(", ")}.`
+            : "");
         completion = {
           status: "completed",
           summary: clip(`${harvest.handover ?? result.resultText ?? "Finished."}${missing}${omitted}`, 4000),

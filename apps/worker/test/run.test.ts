@@ -1,5 +1,5 @@
 // executeRun against an in-memory board. No network, no model, no Postgres.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -166,6 +166,28 @@ describe("executeRun", () => {
     await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board));
     expect(board.completion?.status).toBe("completed");
     expect(board.completion?.summary).toMatch(/Missing declared outputs: missing.md/);
+  });
+
+  it("reports a declared output left as a link in the summary, and never reads what it points at", async () => {
+    const secret = path.join(workRoot, "environ");
+    await writeFile(secret, "ROSTERDOCK_WORKER_TOKEN=hunter2\n", "utf8");
+    const linking: EngineAdapter = {
+      id: "stub",
+      async run(ctx) {
+        const result = await stubEngine.run(ctx);
+        await symlink(secret, path.join(ctx.workdir, "report.md"));
+        return result;
+      },
+    };
+    const board = fakeBoard(PACK(), ["vms-architecture.md", "notes.md", "report.md"]);
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board, { engines: { stub: linking } }));
+    expect(board.completion?.status).toBe("completed");
+    expect(board.completion?.summary).toMatch(
+      /Refused outputs \(a link, or a path outside the workspace\): report.md\./,
+    );
+    expect(board.completion?.summary).not.toMatch(/Missing declared outputs/);
+    expect(board.artifacts.map((a) => a.path)).not.toContain("report.md");
+    expect(JSON.stringify(board.artifacts)).not.toContain("hunter2");
   });
 
   it("fails when the engine fails, keeping whatever was written", async () => {
