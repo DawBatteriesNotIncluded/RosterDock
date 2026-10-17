@@ -124,6 +124,12 @@ export interface RunSpec {
     diffTruncated: boolean;
   } | null;
   /**
+   * The author sent back with changes requested on a repository task: the round's diff, which the worker
+   * applies to its fresh clone so the teammate edits that work instead of writing it again, and the
+   * sha256 the review recorded for it (the worker applies nothing else). Older specs have none.
+   */
+  rework?: { round: number; diffSha256: string; baseSha: string | null; diff: string } | null;
+  /**
    * Writes to live systems this task proposed through the broker: what waits
    * for a person, what was executed (with the answer), what failed or was
    * rejected (with the note). A teammate restarted after a decision reads it here.
@@ -304,6 +310,14 @@ export function renderRunPack(spec: RunSpec): string {
     if (r.comments.length) {
       push("", "Comments:");
       renderComments(push, r.comments, r.round);
+    }
+    if (spec.rework) {
+      const branch = spec.project.defaultBranch;
+      push(
+        "",
+        `Your working directory starts from round ${spec.rework.round}: its changes are applied to a fresh clone of ${branch}, uncommitted, so \`git status\` and \`git diff\` show them. Edit that work to address the comments; do not start over. Your diff is still taken against ${branch}, so it carries the whole change, round ${spec.rework.round}'s part included.`,
+        `If ${branch} moved and round ${spec.rework.round}'s changes no longer apply, the worker starts you from the clean clone instead and says so at the end of this brief: then make the change again on the current ${branch}.`,
+      );
     }
     push("");
   }

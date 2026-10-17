@@ -76,6 +76,14 @@ own issue or pull request 12.
 - **Stuck queued.** No worker is taking the queue: check the worker pods, their `DATABASE_URL` and
   `ROSTERDOCK_WORKER_TOKEN` (must equal the board's), and, for a pooled department, that a fleet with
   `ROSTERDOCK_WORKER_POOL=<pool>` exists. `rosterdock_runs_live{status="queued"}` shows it.
+- **"Round N's changes did not carry over to this run"** on a task. An author sent back with changes
+  requested on a repository starts from that round: the worker applies the review's `changes.diff`, checked
+  against the sha256 the review recorded, to its fresh clone, and the next round's diff is still taken
+  against the base branch, so the review's hunks and the pull request hold the whole change. When the base
+  branch moved and the round no longer applies, or it holds a binary file (the review's diff carries no
+  bytes for one) or a symbolic link (never carried over), the run starts from the clean clone instead; the
+  run log, its handover and that message name the files, and the teammate makes the change again on the
+  current branch.
 - **Failed at once with "Claude Code is not installed on this worker"**: the published worker image leaves
   Claude Code out. Build the image with it and set `worker.image` (`docs/install.md`, Engines on the
   worker), or move the teammate to Codex.

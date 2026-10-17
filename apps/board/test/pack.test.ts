@@ -121,6 +121,40 @@ describe("run pack", () => {
     expect(review).not.toContain("## Research\n");
   });
 
+  it("tells an author sent back on a repository to edit the round's work, which the worker applies", () => {
+    const sentBack: RunSpec = {
+      ...spec,
+      project: { ...spec.project, repoUrl: "https://github.com/acme/rosterdock.git" },
+      review: {
+        id: "r",
+        round: 2,
+        status: "changes_requested",
+        authorName: "Wren",
+        reviewerName: "Edie",
+        summary: "Three fixes to the outline.",
+        files: [{ path: "README.md", status: "modified", additions: 40, deletions: 12 }],
+        comments: [],
+        checks: [],
+        diff: null,
+        diffTruncated: false,
+      },
+      rework: {
+        round: 2,
+        diffSha256: "a".repeat(64),
+        baseSha: null,
+        diff: "diff --git a/README.md b/README.md\n",
+      },
+    };
+    const md = renderRunPack(sentBack);
+    expect(md).toContain("## Changes requested (review round 2)");
+    expect(md).toContain(
+      "Your working directory starts from round 2: its changes are applied to a fresh clone of main, uncommitted, so `git status` and `git diff` show them. Edit that work to address the comments; do not start over.",
+    );
+    expect(md).toContain("If main moved and round 2's changes no longer apply");
+    expect(md).not.toContain("diff --git");
+    expect(renderRunPack({ ...sentBack, rework: null })).not.toContain("Your working directory starts from");
+  });
+
   it("hashes deterministically and changes with the spec", () => {
     expect(runSpecHash(spec)).toBe(runSpecHash({ ...spec }));
     expect(runSpecHash(spec)).not.toBe(runSpecHash({ ...spec, note: "hurry" }));

@@ -18,6 +18,7 @@ import {
   type SandboxPreset,
 } from "@rosterdock/shared";
 import type pg from "pg";
+import { describeActor } from "../actors.js";
 import { mintApiToken } from "../auth/tokens.js";
 import type { Db, Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
@@ -523,6 +524,17 @@ export async function enqueue(
   return jobId;
 }
 
+/** The diff a review round opened from: its run's `diff` artifact, whole, from the row or the store. */
+async function roundDiff(db: Queryable, store: ObjectStore | null, runId: string): Promise<string | null> {
+  const row = (
+    await db.query<{ content: string | null; object_key: string | null }>(
+      "SELECT content, object_key FROM artifacts WHERE run_id = $1 AND kind = 'diff' LIMIT 1",
+      [runId],
+    )
+  ).rows[0];
+  return artifactText(store, row ?? null);
+}
+
 export async function buildRunSpec(
   db: Queryable,
   run: RunRow,
@@ -653,18 +665,7 @@ export async function buildRunSpec(
       listComments(db, reviewRow.id),
       listChecks(db, reviewRow),
     ]);
-    const diffText =
-      run.kind === "review"
-        ? ((await artifactText(
-            store,
-            (
-              await db.query<{ content: string | null; object_key: string | null }>(
-                "SELECT content, object_key FROM artifacts WHERE run_id = $1 AND kind = 'diff' LIMIT 1",
-                [reviewRow.run_id],
-              )
-            ).rows[0] ?? null,
-          )) ?? "")
-        : null;
+    const diffText = run.kind === "review" ? ((await roundDiff(db, store, reviewRow.run_id)) ?? "") : null;
     review = {
       id: reviewRow.id,
       round: reviewRow.round,
@@ -695,6 +696,18 @@ export async function buildRunSpec(
       diff: diffText === null ? null : diffText.slice(0, MAX_PACK_DIFF_CHARS),
       diffTruncated: diffText !== null && diffText.length > MAX_PACK_DIFF_CHARS,
     };
+  }
+  // Rework on a repository: the round sent back travels whole, for the worker to apply to its clone.
+  let rework: RunSpec["rework"] = null;
+  if (run.kind === "task" && reviewRow?.status === "changes_requested" && project.repo_url) {
+    const diff = await roundDiff(db, store, reviewRow.run_id);
+    if (diff?.trim())
+      rework = {
+        round: reviewRow.round,
+        diffSha256: reviewRow.diff_sha256,
+        baseSha: reviewRow.base_sha,
+        diff,
+      };
   }
   return {
     version: 1,
@@ -736,6 +749,7 @@ export async function buildRunSpec(
       : null,
     checkpoint: run.attempt > 1 ? run.checkpoint : null,
     review,
+    rework,
     approvals,
     tools: (
       await effectiveToolbox(db, {
@@ -1082,6 +1096,43 @@ function blockerFromInput(input: BlockerInput | undefined, fallback: BlockerReco
 }
 
 /**
+ * A rework run whose round did not carry over (the base branch moved) says so on the task's
+ * conversation, as the run's teammate, so the reviewer reads the next round as the change made again.
+ */
+async function postReworkFallback(
+  ctx: MutationContext,
+  run: RunRow,
+  task: { number: number; title: string },
+  rework: NonNullable<RunCompleteInput["rework"]>,
+): Promise<void> {
+  const branch =
+    (
+      await ctx.client.query<{ default_branch: string }>(
+        "SELECT p.default_branch FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1",
+        [run.task_id],
+      )
+    ).rows[0]?.default_branch ?? "the base branch";
+  const body = `Round ${rework.round}'s changes did not carry over to this run${rework.reason ? `: ${rework.reason}` : ""}. It started from a fresh copy of ${branch} and makes the change again instead of editing round ${rework.round}.`;
+  const author: ActorRef = { kind: "teammate", id: run.teammate_id };
+  const inserted = await ctx.client.query<{ id: string }>(
+    "INSERT INTO messages (company_id, task_id, author_kind, author_id, body, mentions, run_id) VALUES ($1, $2, $3, $4, $5, '[]', $6) RETURNING id",
+    [run.company_id, run.task_id, author.kind, author.id, body, run.id],
+  );
+  await ctx.emit(
+    "message.posted",
+    { kind: "task", id: run.task_id },
+    {
+      messageId: inserted.rows[0]!.id,
+      number: task.number,
+      title: task.title,
+      authorName: (await describeActor(ctx.client, run.company_id, author))?.name ?? null,
+      preview: body.slice(0, 140),
+      mentions: [],
+    },
+  );
+}
+
+/**
  * Finish a run and move the task: completed goes to review, failed and
  * blocked go to Blocked with a reason, stopped goes back to To do.
  */
@@ -1271,6 +1322,8 @@ export async function completeRun(
       type: "run.finished",
       payload: { status, totalTokens: total },
     });
+    if (run.kind === "task" && input.rework && !input.rework.applied)
+      await postReworkFallback(ctx, run, task, input.rework);
     if (task.status !== nextTask) {
       await ctx.emit(
         "task.moved",

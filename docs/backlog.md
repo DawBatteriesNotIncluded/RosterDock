@@ -32,3 +32,6 @@ scheduled; delete it when it ships.
   unpriced instead.
 - Lint is not type-aware (`recommendedTypeChecked` is off, for speed), and `deploy/**` is ignored, so
   `deploy/scripts/*.mjs` is never linted. Turn the first on per package and lint the scripts.
+- A rework run starts from the round sent back only on a repository (`apps/worker/src/rework.ts`). Without
+  one it starts empty, though the round's documents are new-file diffs in its `changes.diff`; and a round with
+  a binary file never carries over, since the diff has no bytes for it (the run's artifacts do).

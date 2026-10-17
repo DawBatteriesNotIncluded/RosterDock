@@ -219,6 +219,10 @@ their own, each with its own database and workers.
   never opened, so the worker's own environment never becomes an artifact; a completed run's summary
   names what was refused. In a repository, the diff carries such a link as the path it points at, as git
   stores it.
+- A run sent back with changes requested starts from that round only as its diff, checked against the
+  sha256 the review recorded and applied with `git apply`, which writes nothing outside the clone, into
+  `.git` or through a link. A round that would leave a link in the clone is undone, and the run starts
+  from the clean clone instead.
 
 ## The board
 
