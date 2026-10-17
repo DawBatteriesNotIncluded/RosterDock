@@ -318,7 +318,8 @@ that dies with the pod.
 The board keeps artifacts up to 512 KB inline in Postgres. Larger ones, up to 8 MB, go to the S3-compatible
 bucket in `storage.*` (endpoint, bucket, region, path style; the key pair by Secret name), under
 `companies/<id>/runs/<id>/<sha256>`; the board signs each request itself (Signature Version 4). Without a
-bucket the board refuses an artifact over 512 KB and the worker cuts its diff there. Make the bucket in
+bucket the board refuses an artifact over 512 KB, and the worker keeps its diff within the limit in whole
+files: a file that does not fit is left out of the review and named in the run's summary. Make the bucket in
 advance on AWS (the board creates a missing bucket only where the key may, as on MinIO), give the key pair
 that bucket alone, and add a lifecycle rule if you delete companies: rows cascade, objects stay.
 

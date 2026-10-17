@@ -5,7 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WorkerCheckSchema } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { detectPackageManager, MAX_TEST_OUTPUT_CHARS, runRepoTests, type Exec } from "../src/tests.js";
+import {
+  detectPackageManager,
+  execCommand,
+  MAX_TEST_OUTPUT_CHARS,
+  runRepoTests,
+  type Exec,
+} from "../src/tests.js";
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 let root: string;
@@ -29,9 +35,9 @@ async function repo(name: string, files: Record<string, string>) {
 function recorded(
   outputs: Record<string, { code: number; file?: string; repeat?: number; timedOut?: boolean }>,
 ) {
-  const calls: { command: string; args: string[] }[] = [];
-  const exec: Exec = async (command, args) => {
-    calls.push({ command, args });
+  const calls: { command: string; args: string[]; env: Record<string, string> }[] = [];
+  const exec: Exec = async (command, args, opts) => {
+    calls.push({ command, args, env: opts.env });
     const key = `${command} ${args.join(" ")}`;
     const hit = outputs[key];
     if (!hit) throw new Error(`unexpected command ${key}`);
@@ -94,6 +100,21 @@ describe("runRepoTests", () => {
     expect(output.endsWith(detail.slice(1))).toBe(true);
   });
 
+  it("cuts a long log beside an emoji without leaving half of it, which the board's jsonb refuses", async () => {
+    const ws = await repo("emoji-fail", { "package.json": PKG, "node_modules/.keep": "" });
+    const recordedFail = await readFile(path.join(fixtures, "npm-test-fail.txt"), "utf8");
+    // The closing line puts the cut the tail makes between the two halves of an emoji.
+    const output = `${recordedFail}${"✅ ok 😀\n".repeat(4000)}done\n`;
+    const exec: Exec = async () => ({ code: 1, output, timedOut: false });
+    const check = await runRepoTests(ws, { exec, env, timeoutMs: 1000 });
+    const detail = check?.detail ?? "";
+    expect(detail.isWellFormed()).toBe(true);
+    expect(detail.startsWith("…")).toBe(true);
+    expect(detail.length).toBeLessThanOrEqual(MAX_TEST_OUTPUT_CHARS);
+    expect(output.endsWith(detail.slice(1))).toBe(true);
+    expect(WorkerCheckSchema.safeParse(check).success).toBe(true);
+  });
+
   it("a failed install or a timeout is reported, never thrown", async () => {
     const ws = await repo("install-fails", { "package.json": PKG, "yarn.lock": "" });
     const { exec } = recorded({ "yarn install --frozen-lockfile --ignore-scripts": { code: 1 } });
@@ -107,6 +128,43 @@ describe("runRepoTests", () => {
       ok: false,
       title: "npm test timed out after 5 s",
     });
+  });
+
+  it("runs the repository's scripts with a bare environment: no model keys, no board or git credentials", async () => {
+    const ws = await repo("bare-env", { "package.json": PKG, "pnpm-lock.yaml": "" });
+    const { exec, calls } = recorded({
+      "pnpm install --frozen-lockfile --ignore-scripts": { code: 0 },
+      "pnpm test": { code: 0, file: "npm-test-pass.txt" },
+    });
+    const engineEnv = {
+      PATH: "/usr/bin",
+      HOME: "/home/node",
+      TMPDIR: "/tmp",
+      USER: "node",
+      ANTHROPIC_API_KEY: "model-key",
+      CLAUDE_CODE_OAUTH_TOKEN: "oauth-token",
+      OPENAI_API_KEY: "model-key",
+      CODEX_API_KEY: "model-key",
+      DATABASE_URL: "postgres://board",
+      ROSTERDOCK_WORKER_TOKEN: "fleet-token",
+      ROSTERDOCK_GIT_TOKEN: "git-token",
+    };
+    await runRepoTests(ws, { exec, env: engineEnv, timeoutMs: 1000 });
+    expect(calls).toHaveLength(2);
+    for (const call of calls)
+      expect(call.env).toEqual({ PATH: "/usr/bin", HOME: "/home/node", TMPDIR: "/tmp", CI: "1" });
+  });
+
+  it("reads a command's output as a stream, so a character on a pipe boundary arrives whole", async () => {
+    // This Node stands in for the package manager: no npm runs here.
+    const res = await execCommand(
+      process.execPath,
+      ["-e", 'process.stdout.write("— ✅ 😀 ".repeat(20000))'],
+      { cwd: root, env: { PATH: process.env.PATH ?? "" }, timeoutMs: 10_000 },
+    );
+    expect(res.code).toBe(0);
+    expect(res.output.includes("\ufffd")).toBe(false);
+    expect(res.output.endsWith("— ✅ 😀 ")).toBe(true);
   });
 
   it("detects the package manager from the lockfile", async () => {

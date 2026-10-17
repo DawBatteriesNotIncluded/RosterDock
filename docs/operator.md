@@ -36,7 +36,10 @@ board, Postgres and, by default, public HTTPS for the model API and the git host
   call, and the worker's workspace, engine, harvest and tests spans. A slow run is one trace to open.
 - **Logs.** JSON lines from both the board and the worker. Search by `runId`, by `req.id`, by `worker`.
 - **Costs.** The Costs page per company: this week or month by department, project, teammate and model,
-  the monthly report by chargeback tag, and the CSVs for finance. Budgets alert at 80% and 100%.
+  the monthly report by chargeback tag, and the CSVs for finance. Budgets alert at 80% and 100%. A Claude
+  Code run that is stopped or hits its time limit counts what its messages reported (the output of the
+  last one may be short); Codex reports tokens only at the end, so a stopped Codex run counts none, and
+  its run log says so.
 - **Drift.** A teammate whose runs suddenly cost or take far more than their own usual, or whose work is
   sent back far more often, raises one alert per day: in Activity, in the notifications, on their page.
   Nothing stops; open their recent runs and reviews and decide. What counts as "far more" is the
@@ -63,7 +66,8 @@ var name in Settings) and a row in the Approvals or Company page:
 - **Interrupted.** A worker stopped heartbeating (the pod died, the node drained). The reaper marks the
   run interrupted after `ROSTERDOCK_RUN_STALE_AFTER_MS` (60 s) and pg-boss retries the job; a retry that finds
   the run reaped resumes from the checkpoint. After five retries the task lands in Blocked with the
-  reason, and Peter re-plans it.
+  reason, and Peter re-plans it. A worker that is shut down (a drain, a rollout) stops its engine, stores
+  what the run wrote and its checkpoint, and leaves the run to that retry; it never reports it stopped.
 - **Stuck queued.** No worker is taking the queue: check the worker pods, their `DATABASE_URL` and
   `ROSTERDOCK_WORKER_TOKEN` (must equal the board's), and, for a pooled department, that a fleet with
   `ROSTERDOCK_WORKER_POOL=<pool>` exists. `rosterdock_runs_live{status="queued"}` shows it.
@@ -74,7 +78,14 @@ var name in Settings) and a row in the Approvals or Company page:
   (`stub`, `claude_code` and `codex` ship).
 - **"runs on opencode, which is not available"**: OpenCode has no worker yet, so the board starts no run on it
   and the pickers no longer offer it. Pick another engine in the teammate's editor.
-- **Stop a run.** The run panel's Stop: a queued run stops at once; a running one at its next heartbeat.
+- **Failed with "git clone failed"**: the project's repository URL or branch, or the worker's git token
+  (`worker.gitSecret`). A clone that moves under 1 KB a second for a minute gives up, and the run's time
+  limit counts from the start of the clone.
+- **The board was down when a run finished.** The worker retries the report for about five minutes,
+  heartbeating meanwhile, then leaves the run to pg-boss's retry, which runs it again. A report the board
+  refuses outright is replaced by a failed run that says why.
+- **Stop a run.** The run panel's Stop: a queued run stops at once; a running one at its next heartbeat,
+  a clone in progress included.
 
 ## Changing the company from files
 
@@ -145,7 +156,9 @@ setting with no value of its own from `board.extraEnv`. The ones an operator cha
 | `ROSTERDOCK_FETCH_SOURCES`                   | `0` keeps the board off the web: a research reviewer gets no fetched sources (chart `board.fetchSources: false`).                                                                                                                                                                                                                                                      |
 | `OTEL_EXPORTER_OTLP_*`                       | Traces.                                                                                                                                                                                                                                                                                                                                                                |
 | Worker: `ROSTERDOCK_WORKER_POOL`             | Which queue this fleet consumes.                                                                                                                                                                                                                                                                                                                                       |
+| Worker: `ROSTERDOCK_HEARTBEAT_MS`            | How often a running run tells the board it is alive (15000). Keep it well under `ROSTERDOCK_RUN_STALE_AFTER_MS`, or the board takes the run over (chart `worker.extraEnv`).                                                                                                                                                                                            |
 | Worker: `ROSTERDOCK_ENGINE_PASS_ENV`         | Env var NAMES handed to the engine process.                                                                                                                                                                                                                                                                                                                            |
-| Worker: `ROSTERDOCK_RUN_REPO_TESTS`          | Run the repository's tests after the harvest (a review check).                                                                                                                                                                                                                                                                                                         |
+| Worker: `ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`    | The most a Claude Code teammate may use (chart `worker.claudeAllowedTools`, per pool too). A department's sandbox only narrows it: Lighthouse's Research names WebSearch and WebFetch, which run only on a fleet that lists them.                                                                                                                                      |
+| Worker: `ROSTERDOCK_RUN_REPO_TESTS`          | Run the repository's tests after the harvest (a review check). The test script gets PATH, HOME, the temp directory, the locale and `CI=1`: no model key, board token or git token, so a private registry install fails there. `0` turns it off (chart `worker.extraEnv`; `docs/security.md`).                                                                          |
 | Worker: `ROSTERDOCK_POD_METRICS`             | Read the pod's CPU and memory from the metrics API instead of the cgroup (the chart sets it with `worker.podMetrics.enabled`, with the token and the Role it needs).                                                                                                                                                                                                   |
-| Worker: `ROSTERDOCK_LOG_FORMAT`              | `json` (default in a cluster) or `text`.                                                                                                                                                                                                                                                                                                                               |
+| Worker: `ROSTERDOCK_LOG_FORMAT`              | `json` (default in a cluster) or `text` (chart `worker.extraEnv`).                                                                                                                                                                                                                                                                                                     |

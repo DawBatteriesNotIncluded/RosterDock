@@ -119,8 +119,15 @@ What they cannot reach:
 
 ## Workers run model output
 
-- Each run gets a fresh directory on an ephemeral volume that dies with the pod; nothing persists
-  between runs but what the board stores (artifacts, checkpoints, usage).
+- Each run gets a fresh directory on an ephemeral volume that dies with the pod; the next run sees
+  nothing of it, and only what the board stores (artifacts, checkpoints, usage) outlives the run. The
+  pod's home and temp directories last as long as the pod, so runs the pod takes in turn share them.
+- git in the worker gets PATH, the temp directory and the locale, none of the worker's credentials, and
+  reads no system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL` empty), so a
+  `~/.gitconfig` an earlier run left behind changes nothing. It runs no hook and no fsmonitor, and the
+  diff runs no textconv. Before the worker reads a run's changes back, it puts the clone's `.git/config`
+  back as the clone wrote it, so a filter the run added never runs; a run that replaced `.git` gets no
+  review of its changes.
 - An artifact over 512 KB goes to the object store as bytes the board has already scanned for raw
   secrets, under a key of the company, the run and its hash; the board signs each request itself with a
   key pair it reads by name, and the worker never holds that pair.
@@ -133,7 +140,24 @@ What they cannot reach:
   API, the git host), with every private range excluded; nothing reaches it. A pool (`worker.pools`)
   narrows further, down to the board and Postgres only, and a department's sandbox chooses the pool.
 - The engine sees only the env var names the worker was told to pass, narrowed again by the department's
-  sandbox; the department's sandbox also sets the engine's tool allowlist and a time limit.
+  sandbox, which also sets a time limit. A department's tool list narrows the worker's Claude Code
+  allowlist (`ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`, chart `worker.claudeAllowedTools`, per pool too) and never
+  widens it: a tool the worker does not allow is left out of the run, and the run log says which. The
+  narrowed list is the whole of Claude Code's built-in tools for the run (`--tools`), not only the ones it
+  may use without asking, so a list without Bash leaves the engine no shell, read-only commands
+  included; the rules on it (`Read(./**)`) are what it may do with them without asking. Codex
+  has no per-tool list: it runs in the worker's Codex sandbox (`ROSTERDOCK_CODEX_SANDBOX`) whatever the
+  department lists.
+- Claude Code starts with no settings file (`--setting-sources` empty): not the operator's, and not the
+  cloned repository's `.claude/settings.json`, so a repository cannot allow itself a tool or add a hook.
+  Codex starts with `--ignore-user-config`.
+- After the engine, the worker runs the repository's own `test` script in the workspace
+  (`ROSTERDOCK_RUN_REPO_TESTS`, on by default), once the diff is captured. That script is the
+  repository's code and the run may have rewritten it, so it gets PATH, HOME, the temp directory, the
+  locale and `CI=1`, and no model key, board token or git token. It still runs as the worker's user in
+  the worker's pod, so it reaches what that user reaches, the worker process's own environment under
+  `/proc` included, and its output becomes the review's tests check as written. Turn the step off on a
+  fleet that runs repositories you would not run yourself.
 - The engine reaches no external MCP server. Every tool call goes to the board (`board_tool_call`),
   where the broker decides: run a read, propose a write, or refuse.
 - A run's diff is scanned for secret-shaped values before review, anywhere in an added line (a key after

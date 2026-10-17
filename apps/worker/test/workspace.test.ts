@@ -1,12 +1,15 @@
 // Workspace against a local bare repository: no network.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { lstat, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { parseUnifiedDiff } from "@rosterdock/shared";
+import { applyFilePatch, parseUnifiedDiff, renderNewFileDiff } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   cleanupWorkspace,
+  fitDiff,
   git,
+  gitEnvironment,
   harvestWorkspace,
   prepareWorkspace,
   redactGit,
@@ -22,7 +25,7 @@ beforeAll(async () => {
   bare = path.join(root, "origin.git");
   await (await import("node:fs/promises")).mkdir(src, { recursive: true });
   const env = {
-    ...process.env,
+    // An identity only: never the caller's environment, which under a rebase or a hook points at this repository.
     GIT_AUTHOR_NAME: "t",
     GIT_AUTHOR_EMAIL: "t@example.com",
     GIT_COMMITTER_NAME: "t",
@@ -130,6 +133,40 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
+  it("keeps the diff within the board's limit in bytes and in whole files, naming what it leaves out", () => {
+    // 3,000 é is 3,000 characters and 6,000 bytes: over a 4,000-byte limit, though not by characters.
+    const diff = [
+      renderNewFileDiff("a.md", "first\n"),
+      renderNewFileDiff("accents.md", `${"é".repeat(3000)}\n`),
+      renderNewFileDiff("c.md", "last\n"),
+    ].join("");
+    const fitted = fitDiff(diff, 4000);
+    expect(fitted.omitted).toEqual(["accents.md"]);
+    expect(Buffer.byteLength(fitted.text, "utf8")).toBeLessThanOrEqual(4000);
+    const files = parseUnifiedDiff(fitted.text);
+    expect(files.map((f) => f.path)).toEqual(["a.md", "c.md"]);
+    // What is left applies whole.
+    expect(files.map((f) => applyFilePatch(null, f))).toEqual(["first\n", "last\n"]);
+    expect(fitDiff(diff, 1_000_000)).toEqual({ text: diff, omitted: [] });
+  });
+
+  it("leaves a changed file that does not fit out of a repository's diff instead of cutting it", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-fit",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    await writeFile(path.join(ws.dir, "long.md"), "a long line of notes\n".repeat(200), "utf8");
+    const h = await harvestWorkspace(ws, ["README.md"], { maxArtifactBytes: 2000 });
+    expect(h.diffOmitted).toEqual(["long.md"]);
+    const files = parseUnifiedDiff(h.artifacts.find((a) => a.kind === "diff")!.content);
+    expect(files.map((f) => f.path)).toEqual(["README.md"]);
+    expect(applyFilePatch("# demo\n", files[0]!)).toBe("# demo\n\nchanged\n");
+    await cleanupWorkspace(ws);
+  });
+
   it("harvests a binary file as base64 and puts a binary stanza in the diff", async () => {
     const ws = await prepareWorkspace(
       path.join(root, "work"),
@@ -160,6 +197,115 @@ describe("workspace", () => {
       ["logo.bin", true, "added"],
       ["notes.md", false, "added"],
     ]);
+    await cleanupWorkspace(ws);
+  });
+
+  it("reads git output as a stream, so a character on a pipe boundary arrives whole", async () => {
+    // Over half a megabyte of multibyte text: the pipe hands it over in chunks that split characters.
+    const content = "a — ✅ 😀 ü\n".repeat(30_000);
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-utf8",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "big.txt"), content, "utf8");
+    expect((await git(["add", "big.txt"], ws.dir)).code).toBe(0);
+    const out = await git(["show", ":big.txt"], ws.dir);
+    expect(out.stdout.includes("\ufffd")).toBe(false);
+    expect(out.stdout).toBe(content);
+    await cleanupWorkspace(ws);
+  });
+
+  it("runs git with none of the worker's credentials and no system or global config", () => {
+    const env = gitEnvironment({
+      PATH: "/usr/bin",
+      HOME: "/home/node",
+      LANG: "C.UTF-8",
+      DATABASE_URL: "postgres://board",
+      ROSTERDOCK_WORKER_TOKEN: "fleet-token",
+      ROSTERDOCK_GIT_TOKEN: "git-token",
+      ANTHROPIC_API_KEY: "model-key",
+      OTEL_EXPORTER_OTLP_HEADERS: "x-key=v",
+    });
+    expect(env).toEqual({
+      PATH: "/usr/bin",
+      LANG: "C.UTF-8",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: os.devNull,
+    });
+  });
+
+  it("never lets an inherited GIT_DIR, work tree, index or -c config point git at another repository", async () => {
+    // What `git rebase -x` or a hook hands its commands: the outer repository's location and config.
+    const outer = {
+      GIT_DIR: path.join(bare),
+      GIT_WORK_TREE: root,
+      GIT_INDEX_FILE: path.join(root, "outer-index"),
+      GIT_CONFIG_PARAMETERS: "'core.bare'='true'",
+    };
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-outer-env",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    const where = await git(
+      ["rev-parse", "--absolute-git-dir", "--show-toplevel", "--is-bare-repository"],
+      ws.dir,
+      outer,
+    );
+    expect(where.stdout.trim().split("\n")).toEqual([
+      path.join(await realpath(ws.dir), ".git"),
+      await realpath(ws.dir),
+      "false",
+    ]);
+    expect(existsSync(path.join(root, "outer-index"))).toBe(false);
+    await cleanupWorkspace(ws);
+  });
+
+  it("runs nothing the run wrote into .git when it reads the changes back", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-gitconfig",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    const marker = (name: string) => path.join(root, `${name}-ran`);
+    // What a run with write access could leave: its own config (behind a symlink, even) with a filter,
+    // a textconv and an fsmonitor, and an attribute that points every Markdown file at them.
+    const evil = path.join(root, "evil-config");
+    const evilConfig =
+      (await readFile(path.join(ws.dir, ".git", "config"), "utf8")) +
+      `[core]\n\tfsmonitor = "touch '${marker("fsmonitor")}'; false"\n` +
+      `[filter "evil"]\n\tclean = "touch '${marker("filter")}'; cat"\n` +
+      `[diff "evil"]\n\ttextconv = "touch '${marker("textconv")}'; cat"\n`;
+    await writeFile(evil, evilConfig, "utf8");
+    await rm(path.join(ws.dir, ".git", "config"));
+    await symlink(evil, path.join(ws.dir, ".git", "config"));
+    await writeFile(path.join(ws.dir, ".gitattributes"), "*.md filter=evil diff=evil\n", "utf8");
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    const h = await harvestWorkspace(ws, []);
+    expect(h.artifacts.find((a) => a.kind === "diff")?.content).toContain("+changed");
+    for (const name of ["fsmonitor", "filter", "textconv"])
+      expect(existsSync(marker(name)), name).toBe(false);
+    // The config is the clone's again, a plain file, and what the symlink pointed at is untouched.
+    expect((await lstat(path.join(ws.dir, ".git", "config"))).isSymbolicLink()).toBe(false);
+    expect(await readFile(evil, "utf8")).toBe(evilConfig);
+    await cleanupWorkspace(ws);
+  });
+
+  it("refuses to read back a checkout whose .git the run replaced", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-gitfile",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await rm(path.join(ws.dir, ".git"), { recursive: true, force: true });
+    await writeFile(path.join(ws.dir, ".git"), `gitdir: ${path.join(root, "elsewhere")}\n`, "utf8");
+    await expect(harvestWorkspace(ws, [])).rejects.toThrow(/replaced the repository's .git/);
     await cleanupWorkspace(ws);
   });
 

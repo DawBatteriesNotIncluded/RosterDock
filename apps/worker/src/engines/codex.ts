@@ -3,9 +3,10 @@
 // board shows what the teammate is doing while it runs. The run pack is the
 // entire prompt; nothing from the operator's own Codex setup leaks in
 // (--ignore-user-config, --ephemeral, approvals off, the sandbox from the
-// worker's config). Codex's final message is written as the handover, so the
-// board always has one. The board MCP server is passed as config, the run
-// token by env var NAME (never on the command line).
+// worker's config; a department's tool list does not apply). Codex's final
+// message is written as the handover, so the board always has one. The board
+// MCP server is passed as config, the run token by env var NAME (never on the
+// command line).
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -13,6 +14,7 @@ import path from "node:path";
 import type { RunEventInput, RunUsage } from "@rosterdock/shared";
 import { HEADER, startFailure } from "./claude-code.js";
 import type { EngineAdapter, EngineContext, EngineResult } from "./types.js";
+import { clip, tail } from "../text.js";
 
 export interface CodexOptions {
   bin: string;
@@ -118,7 +120,8 @@ interface CodexMessage {
   message?: string;
 }
 
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+/** At most n characters and the ellipsis. */
+const clipped = (s: string, n: number) => clip(s, n + 1, "…");
 
 /** The error message Codex wraps: often a JSON envelope from the API; the human line inside is what to show. */
 export function errorText(raw: string | undefined): string {
@@ -138,25 +141,28 @@ function itemEvent(item: CodexItem, phase: "started" | "completed"): RunEventInp
   switch (item.type) {
     case "agent_message":
       return phase === "completed" && item.text?.trim()
-        ? { type: "assistant", payload: { text: clip(item.text.trim(), 2000) } }
+        ? { type: "assistant", payload: { text: clipped(item.text.trim(), 2000) } }
         : null;
     case "command_execution":
-      return { type: "tool", payload: { name: "shell", input: clip(item.command ?? "", 200) } };
+      return { type: "tool", payload: { name: "shell", input: clipped(item.command ?? "", 200) } };
     case "file_change":
       return {
         type: "tool",
         payload: {
           name: "apply_patch",
-          input: clip((item.changes ?? []).map((c) => `${c.kind ?? "edit"} ${c.path ?? ""}`).join(", "), 200),
+          input: clipped(
+            (item.changes ?? []).map((c) => `${c.kind ?? "edit"} ${c.path ?? ""}`).join(", "),
+            200,
+          ),
         },
       };
     case "mcp_tool_call":
       return { type: "tool", payload: { name: `${item.server ?? "mcp"}.${item.tool ?? "tool"}`, input: "" } };
     case "web_search":
-      return { type: "tool", payload: { name: "web_search", input: clip(item.query ?? "", 200) } };
+      return { type: "tool", payload: { name: "web_search", input: clipped(item.query ?? "", 200) } };
     case "error":
       return phase === "completed"
-        ? { type: "stderr", payload: { text: clip(item.message ?? "error", 500) } }
+        ? { type: "stderr", payload: { text: clipped(item.message ?? "error", 500) } }
         : null;
     default:
       return null;
@@ -169,7 +175,7 @@ export function parseCodexLine(line: string, acc: ParsedCodexStream): void {
   try {
     msg = JSON.parse(line) as CodexMessage;
   } catch {
-    acc.events.push({ type: "stdout", payload: { text: line.slice(0, 500) } });
+    acc.events.push({ type: "stdout", payload: { text: clip(line, 500) } });
     return;
   }
   switch (msg.type) {
@@ -214,7 +220,7 @@ export function parseCodexLine(line: string, acc: ParsedCodexStream): void {
     case "error":
       acc.isError = true;
       acc.errorMessage = errorText(msg.message);
-      acc.events.push({ type: "stderr", payload: { text: clip(acc.errorMessage, 500) } });
+      acc.events.push({ type: "stderr", payload: { text: clipped(acc.errorMessage, 500) } });
       return;
     default:
       return;
@@ -234,6 +240,14 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
       const resolved = resolveCodexBin(opts.bin);
       const args = [...resolved.prefix, ...buildArgs(opts, ctx.model, ctx.mcp, ctx.workdir, ctx.effort)];
       const acc = emptyCodexStream();
+      // Codex has no per-tool allowlist to narrow; its sandbox mode is the worker's.
+      if (ctx.allowedTools?.length)
+        ctx.emit({
+          type: "stderr",
+          payload: {
+            text: `The department's tool list applies to Claude Code teammates; Codex runs in this worker's ${opts.sandbox} sandbox.`,
+          },
+        });
       let child: ReturnType<typeof spawn>;
       try {
         child = spawn(resolved.bin, args, {
@@ -276,8 +290,11 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
         for (const ev of acc.events.slice(before)) ctx.emit(ev);
         if (acc.events[acc.events.length - 1]?.type === "result" && !acc.isError) ctx.onUsage(acc.usage);
       };
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdoutBuf += chunk.toString("utf8");
+      // Decoded as a stream, so a character split across two pipe chunks stays whole.
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
+      child.stdout?.on("data", (chunk: string) => {
+        stdoutBuf += chunk;
         let nl = stdoutBuf.indexOf("\n");
         while (nl >= 0) {
           const line = stdoutBuf.slice(0, nl);
@@ -286,11 +303,10 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
           nl = stdoutBuf.indexOf("\n");
         }
       });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        const text = chunk.toString("utf8");
-        stderrTail = (stderrTail + text).slice(-4000);
+      child.stderr?.on("data", (text: string) => {
+        stderrTail = tail(stderrTail + text, 4000);
         for (const line of text.split("\n"))
-          if (line.trim()) ctx.emit({ type: "stderr", payload: { text: line.slice(0, 500) } });
+          if (line.trim()) ctx.emit({ type: "stderr", payload: { text: clip(line, 500) } });
       });
       child.stdin?.on("error", () => {});
       child.stdin?.end(`${HEADER}\n\n${ctx.pack}`, "utf8");
@@ -321,7 +337,15 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
           resultText: null,
           error: startFailure("Codex", opts.bin, exit.error),
         };
-      if (ctx.signal.aborted)
+      if (ctx.signal.aborted) {
+        // Codex reports tokens only when its turn completes; a stopped turn reported none.
+        if (!Object.keys(acc.usage).length)
+          ctx.emit({
+            type: "stderr",
+            payload: {
+              text: "Codex stopped before it reported its token use, so this run's tokens are not counted.",
+            },
+          });
         return {
           ok: false,
           exitCode: exit.code,
@@ -329,6 +353,7 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
           resultText: acc.resultText,
           error: "stopped",
         };
+      }
       const ok = exit.code === 0 && !acc.isError;
       return {
         ok,
@@ -340,7 +365,7 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
           : exit.signal
             ? `Codex was killed by ${exit.signal}`
             : acc.isError
-              ? `Codex reported an error: ${clip(acc.errorMessage ?? "unknown", 300)}`
+              ? `Codex reported an error: ${clipped(acc.errorMessage ?? "unknown", 300)}`
               : `Codex exited with code ${exit.code}${stderrTail ? `: ${stderrTail.trim().split("\n").at(-1)}` : ""}`,
       };
     },

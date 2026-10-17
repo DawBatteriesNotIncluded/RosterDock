@@ -56,19 +56,28 @@ export interface BoardClient {
   complete(token: string, runId: string, input: RunCompleteInput): Promise<void>;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * The completion is the run's result: it is retried for about five minutes (backoff to 30 s), long
+ * enough for a board restart or a rollout, before the worker gives up on it.
+ */
+export const COMPLETE_RETRIES = { retries: 15, maxDelayMs: 30_000 };
 
 export function createBoardClient(
   boardUrl: string,
   workerToken: string,
   fetchImpl: typeof fetch = fetch,
+  opts: { sleep?: (ms: number) => Promise<void> } = {},
 ): BoardClient {
+  const sleep = opts.sleep ?? wait;
   async function call<T>(
     method: string,
     path: string,
     body: unknown,
     headers: Record<string, string>,
     retries = 4,
+    maxDelayMs = 10_000,
   ): Promise<T> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -90,7 +99,7 @@ export function createBoardClient(
         if (err instanceof BoardError && err.status < 500) throw err;
         lastError = err;
       }
-      if (attempt < retries) await sleep(Math.min(10_000, 500 * 2 ** attempt));
+      if (attempt < retries) await sleep(Math.min(maxDelayMs, 500 * 2 ** attempt));
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
@@ -116,7 +125,14 @@ export function createBoardClient(
       await call("POST", `/api/worker/runs/${runId}/artifacts`, input, bearer(token), 3);
     },
     complete: async (token, runId, input) => {
-      await call("POST", `/api/worker/runs/${runId}/complete`, input, bearer(token), 5);
+      await call(
+        "POST",
+        `/api/worker/runs/${runId}/complete`,
+        input,
+        bearer(token),
+        COMPLETE_RETRIES.retries,
+        COMPLETE_RETRIES.maxDelayMs,
+      );
     },
   };
 }

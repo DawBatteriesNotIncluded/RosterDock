@@ -9,6 +9,7 @@
 
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { clip } from "../text.js";
 import type { EngineAdapter, EngineContext, EngineResult } from "./types.js";
 
 const HANDOVER = "handover-summary.md";
@@ -142,13 +143,13 @@ export const stubEngine: EngineAdapter = {
         });
         ctx.emit({
           type: "tool_result",
-          payload: { name: "board_tool_call", isError: outcome.isError, text: outcome.text.slice(0, 2000) },
+          payload: { name: "board_tool_call", isError: outcome.isError, text: clip(outcome.text, 2000) },
         });
         toolLine = outcome.isError
-          ? `The board refused ${tool.connection} · ${tool.tool}: ${outcome.text.slice(0, 300)}`
+          ? `The board refused ${tool.connection} · ${tool.tool}: ${clip(outcome.text, 300)}`
           : outcome.text.includes('"proposed"')
             ? `Proposed ${tool.connection} · ${tool.tool} for approval; waiting on a person.`
-            : `Called ${tool.connection} · ${tool.tool}; answer: ${outcome.text.slice(0, 300)}`;
+            : `Called ${tool.connection} · ${tool.tool}; answer: ${clip(outcome.text, 300)}`;
       } catch (err) {
         toolLine = `Could not reach the board for ${tool.connection} · ${tool.tool}: ${(err as Error).message}`;
         ctx.emit({ type: "stderr", payload: { text: toolLine } });

@@ -34,6 +34,27 @@ export interface WorkerConfig {
   podMetrics: boolean;
 }
 
+/**
+ * A whole-number setting: its default when unset, and a clear refusal of anything else. Number("15s") is
+ * NaN, which setInterval would run every millisecond.
+ */
+function wholeNumber(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: number,
+  min: number,
+  max = Infinity,
+): number {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max)
+    throw new Error(
+      `${name} must be a whole number from ${min}${max === Infinity ? " up" : ` to ${max}`}, not "${raw}"`,
+    );
+  return n;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -48,7 +69,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     workerToken,
     workerId: env.ROSTERDOCK_WORKER_ID?.trim() || `worker-${os.hostname()}-${process.pid}`,
     workRoot: env.ROSTERDOCK_WORK_ROOT?.trim() || path.join(os.tmpdir(), "rosterdock-runs"),
-    heartbeatMs: Number(env.ROSTERDOCK_HEARTBEAT_MS ?? 15_000),
+    heartbeatMs: wholeNumber(env, "ROSTERDOCK_HEARTBEAT_MS", 15_000, 1000),
     claudeBin: env.ROSTERDOCK_CLAUDE_BIN?.trim() || "claude",
     claudeAllowedTools:
       env.ROSTERDOCK_CLAUDE_ALLOWED_TOOLS?.trim() ||
@@ -64,11 +85,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
       .filter(Boolean),
     gitToken: env.ROSTERDOCK_GIT_TOKEN?.trim() || null,
     runRepoTests: env.ROSTERDOCK_RUN_REPO_TESTS !== "0" && env.ROSTERDOCK_RUN_REPO_TESTS !== "false",
-    testTimeoutMs: Number(env.ROSTERDOCK_TEST_TIMEOUT_MS ?? 10 * 60_000),
-    startAttempts: Number(env.ROSTERDOCK_START_ATTEMPTS ?? 60),
-    metricsPort: Number(env.ROSTERDOCK_WORKER_METRICS_PORT ?? 0) || 0,
+    testTimeoutMs: wholeNumber(env, "ROSTERDOCK_TEST_TIMEOUT_MS", 10 * 60_000, 1000),
+    startAttempts: wholeNumber(env, "ROSTERDOCK_START_ATTEMPTS", 60, 1),
+    metricsPort: wholeNumber(env, "ROSTERDOCK_WORKER_METRICS_PORT", 0, 0, 65_535),
     podMetrics: env.ROSTERDOCK_POD_METRICS === "1" || env.ROSTERDOCK_POD_METRICS === "true",
-    startRetryMs: Number(env.ROSTERDOCK_START_RETRY_MS ?? 5_000),
+    startRetryMs: wholeNumber(env, "ROSTERDOCK_START_RETRY_MS", 5_000, 0),
     otlp: (() => {
       const endpoint = otlpTracesEndpoint(env);
       return endpoint

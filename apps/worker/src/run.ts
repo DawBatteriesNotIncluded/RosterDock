@@ -7,6 +7,7 @@ import type { EngineAdapter } from "./engines/types.js";
 import { createResourceSampler, type ResourceSampler } from "./resources.js";
 import { createPhaseRecorder, exportWorkerTrace, type WorkerOtlp } from "./trace.js";
 import { runRepoTests, type Exec } from "./tests.js";
+import { clip, tail } from "./text.js";
 import { cleanupWorkspace, harvestWorkspace, prepareWorkspace, type Workspace } from "./workspace.js";
 
 export interface RunDeps {
@@ -38,6 +39,21 @@ export interface RunOutcome {
 }
 
 const TERMINAL = ["completed", "failed", "stopped", "blocked"];
+
+/** The abort reason when the worker itself is going away (SIGTERM: a drain, a rollout). */
+const SHUTDOWN = "worker shutdown";
+
+/**
+ * The worker shut down while the run's engine (or clone) was still going. Nothing is reported: the
+ * handler throws this, the queue retries the job, and the retry takes the run over from the checkpoint
+ * once the board sees it gone quiet, as operator.md describes for an interrupted run.
+ */
+export class RunInterrupted extends Error {
+  constructor(runId: string) {
+    super(`run ${runId}: interrupted by the worker shutting down; the queue retries it`);
+    this.name = "RunInterrupted";
+  }
+}
 
 const BASE_ENV_KEYS = [
   "PATH",
@@ -71,6 +87,42 @@ export function narrowEnv(env: Record<string, string>, envNames: string[] | null
   return Object.fromEntries(Object.entries(env).filter(([k]) => keep.has(k)));
 }
 
+/**
+ * The completion cut to what the board's RunCompleteSchema takes, field by field. An engine's error
+ * carries its last stderr line, and one over the limit made the board refuse the whole report.
+ */
+export function fitCompletion(c: RunCompleteInput): RunCompleteInput {
+  const fit = (text: string | undefined, max: number) =>
+    text === undefined ? undefined : clip(text.trim(), max);
+  return {
+    ...c,
+    ...(c.summary !== undefined ? { summary: fit(c.summary, 4000) } : {}),
+    ...(c.error !== undefined ? { error: fit(c.error, 4000) } : {}),
+    ...(c.model !== undefined ? { model: fit(c.model, 120) } : {}),
+    ...(c.blocker
+      ? {
+          blocker: {
+            ...c.blocker,
+            ...(c.blocker.what !== undefined ? { what: fit(c.blocker.what, 1000) } : {}),
+            ...(c.blocker.why !== undefined ? { why: fit(c.blocker.why, 1000) } : {}),
+            ...(c.blocker.waitingOn?.name !== undefined
+              ? { waitingOn: { ...c.blocker.waitingOn, name: clip(c.blocker.waitingOn.name, 120) } }
+              : {}),
+          },
+        }
+      : {}),
+    ...(c.checks
+      ? {
+          checks: c.checks.slice(0, 10).map((k) => ({
+            ...k,
+            title: clip(k.title.trim(), 200),
+            ...(k.detail !== undefined ? { detail: tail(k.detail, 20_000, "…") } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
 /** Base process env plus the allowlisted names. Values never leave the child. */
 export function engineEnvironment(
   passEnvNames: string[],
@@ -85,6 +137,8 @@ export function engineEnvironment(
 }
 
 export async function executeRun(job: { runId: string; jobId: string }, deps: RunDeps): Promise<RunOutcome> {
+  // A job handed over while the worker stops is left for another worker.
+  if (deps.shutdown.aborted) throw new RunInterrupted(job.runId);
   let claimed: ClaimedRun;
   try {
     claimed = await deps.board.claim(job.runId, job.jobId, deps.workerId);
@@ -110,8 +164,9 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
 
   const abort = new AbortController();
   let timedOut = false;
-  const onShutdown = () => abort.abort();
+  const onShutdown = () => abort.abort(SHUTDOWN);
   deps.shutdown.addEventListener("abort", onShutdown, { once: true });
+  const byShutdown = () => abort.signal.aborted && abort.signal.reason === SHUTDOWN;
 
   // Event buffer: batched to the board every second or every 20 events.
   const buffer: RunEventInput[] = [];
@@ -130,7 +185,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
     buffer.push({ ...ev, at: ev.at ?? new Date().toISOString() });
     if (ev.type === "tool" || ev.type === "step")
       step =
-        `${ev.type === "tool" ? String(ev.payload?.name ?? "tool") + " " : ""}${String(ev.payload?.input ?? ev.payload?.text ?? "").slice(0, 120)}`.trim();
+        `${ev.type === "tool" ? String(ev.payload?.name ?? "tool") + " " : ""}${clip(String(ev.payload?.input ?? ev.payload?.text ?? ""), 120)}`.trim();
     if (buffer.length >= 20) void flush();
   };
   const flushTimer = setInterval(() => void flush(), 1000);
@@ -157,9 +212,22 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
   }, deps.heartbeatMs);
 
   let ws: Workspace | null = null;
-  let completion: RunCompleteInput;
+  /** Null: the worker's shutdown cut the run short, and the queue's retry finishes it. */
+  let completion: RunCompleteInput | null;
   const startedAt = Date.now();
   const phases = createPhaseRecorder();
+  const sandbox = spec.sandbox ?? { allowedTools: null, envNames: null, timeoutSeconds: 3600 };
+  const timeLimit = (summary?: string): RunCompleteInput => ({
+    status: "failed",
+    error: `The run hit its ${sandbox.timeoutSeconds} s time limit.`,
+    summary,
+    usage,
+    durationMs: Date.now() - startedAt,
+    blocker: {
+      code: "timeout",
+      what: `The run hit its ${Math.round(sandbox.timeoutSeconds / 60)} minute time limit.`,
+    },
+  });
   try {
     const engine = deps.engines[run.engine];
     if (!engine) {
@@ -169,26 +237,29 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
         blocker: { code: "adapter_unavailable" },
       };
     } else {
-      emit({
-        type: "step",
-        payload: { text: spec.project.repoUrl ? "cloning the repository" : "preparing the workspace" },
-      });
-      phases.begin("workspace", { "rosterdock.repo": !!spec.project.repoUrl });
-      ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitToken);
-      phases.end();
-      emit({ type: "step", payload: { text: `running ${engine.id}` } });
-      phases.begin(`engine ${engine.id}`, { "rosterdock.engine": engine.id, "rosterdock.model": run.model });
-      const sandbox = spec.sandbox ?? { allowedTools: null, envNames: null, timeoutSeconds: 3600 };
+      // The time limit runs from here: a clone that stalls counts against it like the engine.
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
         emit({
           type: "stderr",
-          payload: { text: `time limit of ${sandbox.timeoutSeconds} s reached; stopping the engine` },
+          payload: { text: `time limit of ${sandbox.timeoutSeconds} s reached; stopping the run` },
         });
         abort.abort();
       }, sandbox.timeoutSeconds * 1000);
       let result;
       try {
+        emit({
+          type: "step",
+          payload: { text: spec.project.repoUrl ? "cloning the repository" : "preparing the workspace" },
+        });
+        phases.begin("workspace", { "rosterdock.repo": !!spec.project.repoUrl });
+        ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitToken, abort.signal);
+        phases.end();
+        emit({ type: "step", payload: { text: `running ${engine.id}` } });
+        phases.begin(`engine ${engine.id}`, {
+          "rosterdock.engine": engine.id,
+          "rosterdock.model": run.model,
+        });
         result = await engine.run({
           workdir: ws.dir,
           pack: claimed.pack,
@@ -215,6 +286,10 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       const harvest = await harvestWorkspace(ws, spec.task.declaredOutputs, {
         maxArtifactBytes: spec.limits?.artifactBytes,
       });
+      const omitted = harvest.diffOmitted.length
+        ? ` The diff was over the size the board takes, so the review leaves out: ${harvest.diffOmitted.join(", ")}.`
+        : "";
+      if (omitted) emit({ type: "stderr", payload: { text: clip(omitted.trim(), 500) } });
       await deps.board
         .checkpoint(token, runId, { filesWritten: harvest.filesWritten, attempt: run.attempt })
         .catch(() => {});
@@ -234,9 +309,10 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       if (deps.repoTests && ws.repo && result.ok && !abort.signal.aborted && !harvest.blocked) {
         emit({ type: "step", payload: { text: "running the repository's tests" } });
         phases.begin("tests");
+        // Not the engine's environment: runRepoTests keeps only PATH, HOME, the temp directory and the locale.
         const check = await runRepoTests(ws, {
           exec: deps.repoTests.exec,
-          env: narrowEnv(deps.engineEnv, sandbox.envNames),
+          env: deps.engineEnv,
           timeoutMs: deps.repoTests.timeoutMs,
         });
         if (check) {
@@ -247,18 +323,11 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       }
       const durationMs = Date.now() - startedAt;
       if (timedOut) {
-        completion = {
-          status: "failed",
-          error: `The run hit its ${sandbox.timeoutSeconds} s time limit.`,
-          summary: harvest.handover ?? undefined,
-          usage,
-          durationMs,
-          blocker: {
-            code: "timeout",
-            what: `The run hit its ${Math.round(sandbox.timeoutSeconds / 60)} minute time limit.`,
-          },
-        };
-      } else if (abort.signal.aborted) {
+        completion = timeLimit(harvest.handover ?? undefined);
+      } else if (byShutdown() && !result.ok) {
+        // Not a stop anyone asked for: what the run wrote is stored, and the retry picks it up.
+        completion = null;
+      } else if (abort.signal.aborted && !byShutdown()) {
         completion = {
           status: "stopped",
           summary: harvest.handover ?? "Stopped on request.",
@@ -274,7 +343,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
           durationMs,
           blocker: {
             code: mention ? "waiting_on_teammate" : "unknown",
-            what: harvest.blocked.slice(0, 1000),
+            what: clip(harvest.blocked, 1000),
             ...(mention
               ? { waitingOn: { kind: "teammate", id: mention.toLowerCase(), name: mention.toLowerCase() } }
               : {}),
@@ -294,7 +363,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
           : "";
         completion = {
           status: "completed",
-          summary: `${harvest.handover ?? result.resultText ?? "Finished."}${missing}`.slice(0, 4000),
+          summary: clip(`${harvest.handover ?? result.resultText ?? "Finished."}${missing}${omitted}`, 4000),
           usage,
           durationMs,
           ...(harvest.baseSha ? { baseSha: harvest.baseSha } : {}),
@@ -303,32 +372,72 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       }
     }
   } catch (err) {
-    phases.end((err as Error).message.slice(0, 500));
-    completion = {
-      status: abort.signal.aborted ? "stopped" : "failed",
-      error: (err as Error).message.slice(0, 4000),
-      usage,
-      durationMs: Date.now() - startedAt,
-    };
+    phases.end(clip((err as Error).message, 500));
+    completion = timedOut
+      ? timeLimit()
+      : byShutdown()
+        ? null
+        : {
+            status: abort.signal.aborted ? "stopped" : "failed",
+            error: clip((err as Error).message, 4000),
+            usage,
+            durationMs: Date.now() - startedAt,
+          };
   } finally {
     phases.end();
-    clearInterval(heartbeatTimer);
     clearInterval(flushTimer);
     deps.shutdown.removeEventListener("abort", onShutdown);
   }
+  const finish = async () => {
+    clearInterval(heartbeatTimer);
+    if (ws) await cleanupWorkspace(ws).catch(() => {});
+    if (deps.otlp && phases.phases.length) {
+      const out = await exportWorkerTrace(deps.otlp, runId, deps.workerId, phases.phases);
+      if (!out.ok) deps.log.warn(`run ${runId}: trace not exported: ${out.error}`);
+    }
+  };
+  if (!completion) {
+    emit({ type: "step", payload: { text: "the worker is shutting down; the run will be picked up again" } });
+    await flush();
+    await finish();
+    const err = new RunInterrupted(runId);
+    deps.log.info(err.message);
+    throw err;
+  }
   await flush();
+  completion = fitCompletion(completion);
+  // The heartbeat goes on while the report is retried, so a board that comes back finds the run alive.
   try {
     await deps.board.complete(token, runId, completion);
     deps.log.info(`run ${runId}: ${completion.status}`);
   } catch (err) {
-    if (err instanceof BoardError && err.status === 409)
+    if (err instanceof BoardError && err.status === 409) {
       deps.log.info(`run ${runId}: board already closed it (${err.message})`);
-    else deps.log.warn(`run ${runId}: could not report completion: ${(err as Error).message}`);
+    } else if (err instanceof BoardError && err.status < 500) {
+      // A refusal will not change on a retry: report the failure in words the board takes.
+      deps.log.warn(
+        `run ${runId}: the board refused the report (${err.status} ${err.message}); reporting a failure`,
+      );
+      const refused = fitCompletion({
+        status: "failed",
+        error: `The board refused this run's report: ${err.message}`,
+        usage,
+        durationMs: Date.now() - startedAt,
+      });
+      await deps.board
+        .complete(token, runId, refused)
+        .then(() => (completion = refused))
+        .catch((e: Error) =>
+          deps.log.warn(`run ${runId}: could not report the failure either: ${e.message}`),
+        );
+    } else {
+      // The board stayed unreachable: throw, so pg-boss retries the job and the run is not lost.
+      await finish();
+      throw new Error(
+        `run ${runId}: could not report the result (${(err as Error).message}); the queue retries the run`,
+      );
+    }
   }
-  if (ws) await cleanupWorkspace(ws).catch(() => {});
-  if (deps.otlp && phases.phases.length) {
-    const out = await exportWorkerTrace(deps.otlp, runId, deps.workerId, phases.phases);
-    if (!out.ok) deps.log.warn(`run ${runId}: trace not exported: ${out.error}`);
-  }
+  await finish();
   return { runId, status: completion.status };
 }

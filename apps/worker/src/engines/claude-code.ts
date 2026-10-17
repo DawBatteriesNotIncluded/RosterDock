@@ -2,7 +2,9 @@
 // and moved to stream-json so the board shows what the teammate is doing
 // while it runs. The run pack is the entire prompt; nothing from the
 // operator's global Claude setup leaks in (--strict-mcp-config with no
-// servers, project-only settings, no session persistence).
+// servers, no session persistence), and no settings file is read: not the
+// operator's, and not the cloned repository's .claude/settings.json, which
+// could otherwise allow tools or run hooks beyond the run's allowlist.
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -11,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import type { RunEventInput, RunUsage } from "@rosterdock/shared";
 import type { EngineAdapter, EngineContext, EngineResult } from "./types.js";
+import { clip, tail } from "../text.js";
 
 export const HEADER =
   "You are executing one governed run inside a disposable sandbox: the CURRENT WORKING DIRECTORY. The run pack below is your full contract. Create every expected output named in the pack as a file in the current working directory (exact flat filenames, no subdirectories). Do not read or write anything outside this directory. Do not attempt network writes or production changes. Stop when the outputs and the handover are written.";
@@ -61,6 +64,59 @@ export function mcpConfig(mcp: { url: string; token: string }): string {
 
 export const MCP_TOOL_PATTERN = "mcp__rosterdock";
 
+/** A tool list as Claude Code takes it: comma or space separated, never inside a rule's parentheses. */
+export function splitToolList(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of list) {
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth = Math.max(0, depth - 1);
+    if (depth === 0 && (ch === "," || /\s/.test(ch))) {
+      if (cur.trim()) out.push(cur.trim());
+      cur = "";
+    } else cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+const toolName = (rule: string) => rule.replace(/\(.*$/s, "");
+
+/**
+ * The department's tool list narrows the worker's, never widens it. A rule the worker holds as written
+ * stays; `Name(spec)` stays where the worker allows all of `Name`; a bare `Name` keeps the worker's own
+ * rules for that tool. Anything else is dropped. Null: the worker's list as it is.
+ */
+export function narrowTools(
+  workerList: string,
+  department: string[] | null | undefined,
+): { tools: string[]; dropped: string[] } {
+  const allowed = splitToolList(workerList || DEFAULT_ALLOWED_TOOLS);
+  if (!department?.length) return { tools: allowed, dropped: [] };
+  const tools: string[] = [];
+  const dropped: string[] = [];
+  for (const rule of department.flatMap(splitToolList)) {
+    // The board's own tools are always there; the board's broker governs them, not this list.
+    if (toolName(rule).startsWith(MCP_TOOL_PATTERN)) continue;
+    const name = toolName(rule);
+    const kept =
+      rule === name
+        ? allowed.filter((a) => toolName(a) === name)
+        : allowed.includes(rule) || allowed.includes(name)
+          ? [rule]
+          : [];
+    if (kept.length) tools.push(...kept);
+    else dropped.push(rule);
+  }
+  return { tools: [...new Set(tools)], dropped };
+}
+
+/** The built-in tools a list names, once each: what --tools takes (rules and MCP tools are not built-ins). */
+export function builtInTools(rules: string[]): string[] {
+  return [...new Set(rules.map(toolName).filter((name) => !name.startsWith("mcp__")))];
+}
+
 export function buildArgs(
   opts: ClaudeCodeOptions,
   model: string,
@@ -68,7 +124,11 @@ export function buildArgs(
   mcpConfigPath?: string | null,
   effort?: string | null,
 ): string[] {
-  const tools = allowedTools?.length ? allowedTools.join(",") : opts.allowedTools || DEFAULT_ALLOWED_TOOLS;
+  const { tools } = narrowTools(opts.allowedTools, allowedTools);
+  // --tools is what exists; --allowedTools only pre-approves. Without the first, acceptEdits still lets
+  // Claude Code run Bash for read-only and in-folder commands on its own.
+  const builtIn = builtInTools(tools);
+  if (mcpConfigPath && !tools.includes(MCP_TOOL_PATTERN)) tools.push(MCP_TOOL_PATTERN);
   return [
     ...(opts.prefixArgs ?? []),
     "-p",
@@ -76,13 +136,17 @@ export function buildArgs(
     "stream-json",
     "--verbose",
     "--strict-mcp-config",
+    // No user, project or local settings files (an empty list loads none).
     "--setting-sources",
-    "project",
+    "",
     "--no-session-persistence",
     "--permission-mode",
     opts.permissionMode ?? "acceptEdits",
-    "--allowedTools",
-    mcpConfigPath ? `${tools},${MCP_TOOL_PATTERN}` : tools,
+    // Only the list's built-in tools exist for the run; "" leaves none (the board's MCP tools remain).
+    "--tools",
+    builtIn.join(","),
+    // Nothing left after the department narrowed it: no tool is allowed up front.
+    ...(tools.length ? ["--allowedTools", tools.join(",")] : []),
     ...(mcpConfigPath ? ["--mcp-config", mcpConfigPath] : []),
     "--model",
     model,
@@ -92,7 +156,12 @@ export function buildArgs(
 
 export interface ParsedStream {
   events: RunEventInput[];
+  /** The result's usage once it arrives; until then, the sum of what each message reported so far. */
   usage: Partial<RunUsage>;
+  /** Each assistant message's usage by message id, while the run has no result yet. */
+  messageUsage: Record<string, Record<string, number>>;
+  /** The result's usage has replaced the running sum. */
+  usageFinal: boolean;
   resultText: string | null;
   isError: boolean;
   subtype: string | null;
@@ -102,9 +171,8 @@ export interface ParsedStream {
 function summariseInput(name: string, input: unknown): string {
   const obj = (input ?? {}) as Record<string, unknown>;
   const pick = obj.file_path ?? obj.path ?? obj.command ?? obj.pattern ?? obj.query ?? obj.url;
-  if (typeof pick === "string") return pick.slice(0, 200);
-  const text = JSON.stringify(obj);
-  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+  if (typeof pick === "string") return clip(pick, 200);
+  return clip(JSON.stringify(obj), 201, "…");
 }
 
 /** One stream-json line to zero or more run events. Exported for fixture tests. */
@@ -113,7 +181,11 @@ interface StreamMessage {
   subtype?: string;
   model?: string;
   tools?: unknown[];
-  message?: { content?: { type: string; text?: string; name?: string; input?: unknown }[] };
+  message?: {
+    id?: string;
+    content?: { type: string; text?: string; name?: string; input?: unknown }[];
+    usage?: Record<string, number>;
+  };
   usage?: Record<string, number>;
   result?: unknown;
   is_error?: boolean;
@@ -121,12 +193,48 @@ interface StreamMessage {
   num_turns?: number;
 }
 
+function toRunUsage(u: Record<string, number>): Partial<RunUsage> {
+  return {
+    inputTokens: u.input_tokens ?? 0,
+    outputTokens: u.output_tokens ?? 0,
+    cacheReadTokens: u.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
+  };
+}
+
+const USAGE_KEYS = [
+  "input_tokens",
+  "output_tokens",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+];
+
+/**
+ * Each assistant line repeats its message's usage, so the running total takes every message once, at the
+ * most it reported. A run stopped before its result keeps what its messages cost: the input and cache
+ * tokens in full, the output of an unfinished message as far as it went.
+ */
+function addMessageUsage(acc: ParsedStream, id: string, usage: Record<string, number>): void {
+  const seen = acc.messageUsage[id] ?? {};
+  const merged: Record<string, number> = { ...seen };
+  for (const key of USAGE_KEYS) {
+    const v = usage[key];
+    if (typeof v === "number") merged[key] = Math.max(seen[key] ?? 0, v);
+  }
+  acc.messageUsage[id] = merged;
+  if (acc.usageFinal) return;
+  const sum: Record<string, number> = {};
+  for (const m of Object.values(acc.messageUsage))
+    for (const key of USAGE_KEYS) sum[key] = (sum[key] ?? 0) + (m[key] ?? 0);
+  acc.usage = toRunUsage(sum);
+}
+
 export function parseStreamLine(line: string, acc: ParsedStream): void {
   let msg: StreamMessage;
   try {
     msg = JSON.parse(line) as StreamMessage;
   } catch {
-    acc.events.push({ type: "stdout", payload: { text: line.slice(0, 500) } });
+    acc.events.push({ type: "stdout", payload: { text: clip(line, 500) } });
     return;
   }
   switch (msg.type) {
@@ -143,10 +251,11 @@ export function parseStreamLine(line: string, acc: ParsedStream): void {
       }
       return;
     case "assistant": {
+      if (msg.message?.id && msg.message.usage) addMessageUsage(acc, msg.message.id, msg.message.usage);
       const content = msg.message?.content ?? [];
       for (const block of content) {
         if (block.type === "text" && block.text?.trim()) {
-          acc.events.push({ type: "assistant", payload: { text: block.text.trim().slice(0, 2000) } });
+          acc.events.push({ type: "assistant", payload: { text: clip(block.text.trim(), 2000) } });
         } else if (block.type === "tool_use") {
           acc.events.push({
             type: "tool",
@@ -160,13 +269,8 @@ export function parseStreamLine(line: string, acc: ParsedStream): void {
       // tool results: recorded as a step only, content stays in the sandbox.
       return;
     case "result": {
-      const u = (msg.usage ?? {}) as Record<string, number>;
-      acc.usage = {
-        inputTokens: u.input_tokens ?? 0,
-        outputTokens: u.output_tokens ?? 0,
-        cacheReadTokens: u.cache_read_input_tokens ?? 0,
-        cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
-      };
+      acc.usage = toRunUsage((msg.usage ?? {}) as Record<string, number>);
+      acc.usageFinal = true;
       acc.resultText = typeof msg.result === "string" && msg.result.trim() ? msg.result.trim() : null;
       acc.isError = Boolean(msg.is_error);
       acc.subtype = typeof msg.subtype === "string" ? msg.subtype : null;
@@ -187,15 +291,21 @@ export function parseStreamLine(line: string, acc: ParsedStream): void {
   }
 }
 
-export function parseStream(text: string): ParsedStream {
-  const acc: ParsedStream = {
+export function emptyStream(): ParsedStream {
+  return {
     events: [],
     usage: {},
+    messageUsage: {},
+    usageFinal: false,
     resultText: null,
     isError: false,
     subtype: null,
     durationMs: null,
   };
+}
+
+export function parseStream(text: string): ParsedStream {
+  const acc = emptyStream();
   for (const line of text.split("\n")) {
     if (line.trim()) parseStreamLine(line, acc);
   }
@@ -218,14 +328,19 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
       const cleanupMcp = () =>
         mcpDir ? rm(mcpDir, { recursive: true, force: true }).catch(() => {}) : Promise.resolve();
       const args = [...resolved.prefix, ...buildArgs(opts, ctx.model, ctx.allowedTools, mcpPath, ctx.effort)];
-      const acc: ParsedStream = {
-        events: [],
-        usage: {},
-        resultText: null,
-        isError: false,
-        subtype: null,
-        durationMs: null,
-      };
+      const { dropped } = narrowTools(opts.allowedTools, ctx.allowedTools);
+      if (dropped.length)
+        ctx.emit({
+          type: "stderr",
+          payload: {
+            text: clip(
+              `The department's sandbox names tools this worker does not allow, so the run goes without them: ${dropped.join(", ")}`,
+              500,
+            ),
+          },
+        });
+      const acc = emptyStream();
+      let reported = acc.usage;
       let child: ReturnType<typeof spawn>;
       try {
         child = spawn(resolved.bin, args, {
@@ -262,8 +377,11 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
       ctx.signal.addEventListener("abort", onAbort, { once: true });
       let stdoutBuf = "";
       let stderrTail = "";
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdoutBuf += chunk.toString("utf8");
+      // Decoded as a stream, so a character split across two pipe chunks stays whole.
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
+      child.stdout?.on("data", (chunk: string) => {
+        stdoutBuf += chunk;
         let nl = stdoutBuf.indexOf("\n");
         while (nl >= 0) {
           const line = stdoutBuf.slice(0, nl);
@@ -272,16 +390,16 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
             const before = acc.events.length;
             parseStreamLine(line, acc);
             for (const ev of acc.events.slice(before)) ctx.emit(ev);
-            if (acc.events[acc.events.length - 1]?.type === "result") ctx.onUsage(acc.usage);
+            // As it grows, so the heartbeat shows it and a stopped run still counts it.
+            if (acc.usage !== reported) ctx.onUsage((reported = acc.usage));
           }
           nl = stdoutBuf.indexOf("\n");
         }
       });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        const text = chunk.toString("utf8");
-        stderrTail = (stderrTail + text).slice(-4000);
+      child.stderr?.on("data", (text: string) => {
+        stderrTail = tail(stderrTail + text, 4000);
         for (const line of text.split("\n"))
-          if (line.trim()) ctx.emit({ type: "stderr", payload: { text: line.slice(0, 500) } });
+          if (line.trim()) ctx.emit({ type: "stderr", payload: { text: clip(line, 500) } });
       });
       child.stdin?.on("error", () => {});
       child.stdin?.end(`${HEADER}\n\n${ctx.pack}`, "utf8");
@@ -338,7 +456,7 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
             : acc.isError
               ? // Its own words: an error result's subtype can still be "success" (an unknown model).
                 acc.resultText
-                ? `Claude Code: ${acc.resultText.split("\n")[0]!.slice(0, 300)}`
+                ? `Claude Code: ${clip(acc.resultText.split("\n")[0]!, 300)}`
                 : `Claude Code reported ${acc.subtype ?? "an error"}`
               : `Claude Code exited with code ${exit.code}${stderrTail ? `: ${stderrTail.trim().split("\n").at(-1)}` : ""}`,
       };

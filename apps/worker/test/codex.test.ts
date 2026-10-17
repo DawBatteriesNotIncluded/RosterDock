@@ -61,6 +61,17 @@ describe("codex JSONL parsing", () => {
       { type: "stdout", payload: { text: "not json" } },
     ]);
   });
+
+  it("cuts a long agent message without splitting an emoji", () => {
+    const text = `x${"😀".repeat(1500)}`;
+    const parsed = parseCodexStream(
+      `${JSON.stringify({ type: "item.completed", item: { id: "i", type: "agent_message", text } })}\n`,
+    );
+    const out = String(parsed.events[0]?.payload?.text);
+    expect(out.isWellFormed()).toBe(true);
+    expect(out.endsWith("…")).toBe(true);
+    expect(parsed.resultText).toBe(text);
+  });
 });
 
 describe("invocation", () => {
@@ -235,7 +246,42 @@ process.exit(1);`,
     const stopped = await p;
     expect(stopped.ok).toBe(false);
     expect(stopped.error).toBe("stopped");
+    // Codex counts tokens only when its turn completes: the run log says this one counted none.
+    expect(events.at(-1)).toEqual({
+      type: "stderr",
+      payload: {
+        text: "Codex stopped before it reported its token use, so this run's tokens are not counted.",
+      },
+    });
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it("says in the run log that a department's tool list does not narrow Codex", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-codex-"));
+    const quiet = path.join(dir, "quiet.mjs");
+    await writeFile(quiet, "for await (const c of process.stdin) {}", "utf8");
+    const events: RunEventInput[] = [];
+    try {
+      await createCodexEngine({ bin: process.execPath, sandbox: "read-only", prefixArgs: [quiet] }).run({
+        workdir: dir,
+        pack: "x",
+        model: "m",
+        signal: new AbortController().signal,
+        emit: (e) => events.push(e),
+        onUsage: () => {},
+        env: {},
+        allowedTools: ["Read(./**)"],
+        mcp: null,
+      });
+      expect(events).toContainEqual({
+        type: "stderr",
+        payload: {
+          text: "The department's tool list applies to Claude Code teammates; Codex runs in this worker's read-only sandbox.",
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("says Codex is not installed when the worker has no binary", async () => {
