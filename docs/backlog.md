@@ -15,12 +15,12 @@ scheduled; delete it when it ships.
 - An HTTP or OpenAPI connection, its OAuth discovery and a notification webhook reach any address the board pod
   can, cluster-internal ones included; only `networkPolicy.board.egressTo` narrows them. Refuse private and
   link-local addresses unless the operator lists them.
-- A rework run starts from the round sent back only on a repository (`apps/worker/src/rework.ts`). Without
-  one it starts empty, though the round's documents are new-file diffs in its `changes.diff`; and a round with
-  a binary file never carries over, since the diff has no bytes for it (the run's artifacts do).
 - A goal opens a new project with no repository (`apps/board/src/peter/goals.ts`), so the build tasks Peter
   plans for it have nowhere to push. Let a goal name a project or a repository.
 - Costs' "If billed the other way" shows US$0.00 for a teammate on a seat with no price set; say the seat is
   unpriced instead.
 - Lint is not type-aware (`recommendedTypeChecked` is off, for speed), and `deploy/**` is ignored, so
   `deploy/scripts/*.mjs` is never linted. Turn the first on per package and lint the scripts.
+- A rework run starts from the round sent back only on a repository (`apps/worker/src/rework.ts`). Without
+  one it starts empty, though the round's documents are new-file diffs in its `changes.diff`; and a round with
+  a binary file never carries over, since the diff has no bytes for it (the run's artifacts do).

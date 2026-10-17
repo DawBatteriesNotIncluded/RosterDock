@@ -2,7 +2,7 @@
 // dogfood company (fixtures/rework in @rosterdock/shared), its round 1 diff on the base it was taken
 // against, and the same base after round 2's change landed on main. Local repositories, no network.
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -133,7 +133,7 @@ function fixingEngine(seen: Seen[], fix = true): EngineAdapter {
   };
 }
 
-function fakeBoard(repoUrl: string, rework: Rework | null) {
+function fakeBoard(repoUrl: string, rework: Rework | null, declaredOutputs: string[] = []) {
   const out = {
     shipped: [] as RunEventInput[],
     artifacts: [] as RunArtifactInput[],
@@ -155,7 +155,7 @@ function fakeBoard(repoUrl: string, rework: Rework | null) {
     spec: {
       runId: "run-rework",
       attempt: 1,
-      task: { id: "task-6", number: 6, title: "README landing page", description: "", declaredOutputs: [] },
+      task: { id: "task-6", number: 6, title: "README landing page", description: "", declaredOutputs },
       project: { repoUrl, defaultBranch: "main", name: "RosterDock" },
       teammate: { name: "Wren", handle: "wren", model: "stub", engine: "stub" },
       sandbox: { allowedTools: null, envNames: null, timeoutSeconds: 3600 },
@@ -333,5 +333,99 @@ describe("a rework run", () => {
     expect(whyNotApplied("error: corrupt patch at line 12\n", 1, "main", false)).toBe(
       "git could not apply them (corrupt patch at line 12)",
     );
+  });
+});
+
+describe("a rework run and links", () => {
+  const SECRET = "ROSTERDOCK_WORKER_TOKEN=not-for-the-board";
+  let outside: string;
+  let secretFile: string;
+
+  beforeAll(async () => {
+    outside = path.join(root, "outside");
+    await mkdir(outside, { recursive: true });
+    secretFile = path.join(root, "secret.env");
+    await writeFile(secretFile, `${SECRET}\n`, "utf8");
+  });
+
+  /** A round as the harvest takes it: a clone of the base, changed by `change`, staged and diffed. */
+  async function recordRound(name: string, change: (dir: string) => Promise<void>): Promise<string> {
+    const dir = path.join(root, `record-${name}`);
+    await run(["clone", "--quiet", baseRepo, dir], root);
+    await change(dir);
+    await run(["add", "-A"], dir);
+    return (await git(["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff"], dir, GIT_ENV))
+      .stdout;
+  }
+
+  const roundOf = (diff: string): Rework => ({ round: 1, diffSha256: sha256Hex(diff), baseSha, diff });
+
+  it("never carries a link over: a round that leaves one is undone, and the clone is as it was", async () => {
+    const diff = await recordRound("links", async (dir) => {
+      await symlink(secretFile, path.join(dir, "report.md"));
+      await rm(path.join(dir, "README.md"));
+      await symlink(secretFile, path.join(dir, "README.md"));
+    });
+    expect(diff).toContain("new file mode 120000");
+    const ws = await prepareWorkspace(
+      path.join(root, "work-links"),
+      "run-links",
+      { repoUrl: baseRepo, defaultBranch: "main" },
+      null,
+    );
+    expect(await applyPreviousRound(ws, roundOf(diff), "main")).toEqual({
+      round: 1,
+      applied: false,
+      reason: "README.md, report.md are symbolic links, which a rework run does not carry over",
+    });
+    expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
+    expect((await lstat(path.join(ws.dir, "README.md"))).isFile()).toBe(true);
+    expect(await readFile(path.join(ws.dir, "README.md"), "utf8")).toBe(BASE["README.md"]);
+    expect(existsSync(path.join(ws.dir, "report.md"))).toBe(false);
+    expect(await readFile(secretFile, "utf8")).toBe(`${SECRET}\n`);
+  });
+
+  it("writes nothing through a link: a round that puts a file behind one is refused whole", async () => {
+    // Two real diffs, joined the way a run holding its token could post them: a link out of the
+    // clone, then a file under the link's name.
+    const link = await recordRound("escape-link", async (dir) => symlink(outside, path.join(dir, "escape")));
+    const file = await recordRound("escape-file", async (dir) => {
+      await mkdir(path.join(dir, "escape"));
+      await writeFile(path.join(dir, "escape", "x.md"), "written outside\n", "utf8");
+    });
+    const ws = await prepareWorkspace(
+      path.join(root, "work-escape"),
+      "run-escape",
+      { repoUrl: baseRepo, defaultBranch: "main" },
+      null,
+    );
+    expect(await applyPreviousRound(ws, roundOf(link + file), "main")).toEqual({
+      round: 1,
+      applied: false,
+      reason: "git could not apply them (affected file 'escape/x.md' is beyond a symbolic link)",
+    });
+    expect(await readdir(outside)).toEqual([]);
+    expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
+  });
+
+  it("delivers nothing a round's link points at: the run starts clean and no artifact holds the target", async () => {
+    const diff = await recordRound("leak", async (dir) => symlink(secretFile, path.join(dir, "report.md")));
+    const seen: Seen[] = [];
+    const { board, out } = fakeBoard(baseRepo, roundOf(diff), ["report.md"]);
+    await executeRun({ runId: "run-rework", jobId: "job" }, deps(board, fixingEngine(seen, false), "leak"));
+    expect(seen[0]!.status).toBe("");
+    expect(out.completion).toMatchObject({
+      status: "completed",
+      rework: {
+        round: 1,
+        applied: false,
+        reason: "report.md is a symbolic link, which a rework run does not carry over",
+      },
+    });
+    expect(out.completion!.summary).toContain("Missing declared outputs: report.md.");
+    for (const a of out.artifacts) {
+      expect(a.content).not.toContain(SECRET);
+      expect(Buffer.from(a.content, "base64").toString("utf8")).not.toContain(SECRET);
+    }
   });
 });

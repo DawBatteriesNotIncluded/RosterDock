@@ -2,9 +2,11 @@
 // sha256 the review recorded, applied to the fresh clone before the engine starts. Uncommitted, so the
 // harvest still diffs against the base branch and the next round carries the whole change, which keeps
 // the review's hunks and the pull request right. git apply is all or nothing: when the base branch moved
-// and any part no longer applies, the clone stays as it was and the run says which files.
+// and any part no longer applies, the clone stays as it was and the run says which files. It writes
+// nothing outside the clone, into .git or through a link; and a round that would leave a link behind is
+// undone, so the engine never starts with one the run did not make (the harvest refuses links anyway).
 
-import { rm, writeFile } from "node:fs/promises";
+import { lstat, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseUnifiedDiff, sha256Hex, type RunCompleteInput } from "@rosterdock/shared";
 import { clip } from "./text.js";
@@ -97,6 +99,32 @@ export function withRework(
   };
 }
 
+/**
+ * What the apply left as a symbolic link: every path git status lists after it, ignored ones included
+ * (a fresh clone has none of its own), checked with lstat. Null when git cannot say.
+ */
+async function linksLeft(ws: Workspace): Promise<string[] | null> {
+  const status = await git(
+    ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored", "--no-renames"],
+    ws.dir,
+  );
+  if (status.code !== 0) return null;
+  const links: string[] = [];
+  for (const entry of status.stdout.split("\0")) {
+    const rel = entry.slice(3);
+    if (rel && (await lstat(path.join(ws.dir, rel)).catch(() => null))?.isSymbolicLink()) links.push(rel);
+  }
+  return links;
+}
+
+/** Back to the clean clone: tracked files as committed, the rest removed (git removes a link, never its target). */
+async function undoApply(ws: Workspace): Promise<void> {
+  const reset = await git(["reset", "--hard", "--quiet"], ws.dir);
+  const clean = await git(["clean", "-ffdxq"], ws.dir);
+  if (reset.code !== 0 || clean.code !== 0)
+    throw new Error("the previous round's changes could not be undone in the clone");
+}
+
 /** Apply the round sent back to the run's fresh clone (of a repository), or say why the run starts from the clean clone. */
 export async function applyPreviousRound(
   ws: Workspace,
@@ -114,7 +142,22 @@ export async function applyPreviousRound(
   await writeFile(patch, rework.diff, "utf8");
   const res = await git(["apply", "--whitespace=nowarn", patch], ws.dir);
   await rm(patch, { force: true });
-  if (res.code === 0) return { round, applied: true, files: parseUnifiedDiff(rework.diff).length };
+  if (res.code === 0) {
+    const links = await linksLeft(ws);
+    if (links?.length === 0) return { round, applied: true, files: parseUnifiedDiff(rework.diff).length };
+    await undoApply(ws);
+    return {
+      round,
+      applied: false,
+      reason: links
+        ? clip(
+            `${names(links)} ${links.length === 1 ? "is a symbolic link" : "are symbolic links"}, which a rework run does not carry over`,
+            MAX_REASON_CHARS,
+            "…",
+          )
+        : "git could not list what they changed",
+    };
+  }
   const head = (await git(["rev-parse", "HEAD"], ws.dir)).stdout.trim();
   const moved = rework.baseSha !== null && head !== "" && head !== rework.baseSha;
   return { round, applied: false, reason: whyNotApplied(res.stderr, round, branch, moved) };

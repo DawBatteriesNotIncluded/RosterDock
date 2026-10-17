@@ -76,8 +76,9 @@ var name in Settings) and a row in the Approvals or Company page:
   against the sha256 the review recorded, to its fresh clone, and the next round's diff is still taken
   against the base branch, so the review's hunks and the pull request hold the whole change. When the base
   branch moved and the round no longer applies, or it holds a binary file (the review's diff carries no
-  bytes for one), the run starts from the clean clone instead; the run log, its handover and that message
-  name the files, and the teammate makes the change again on the current branch.
+  bytes for one) or a symbolic link (never carried over), the run starts from the clean clone instead; the
+  run log, its handover and that message name the files, and the teammate makes the change again on the
+  current branch.
 - **Failed at once with "Claude Code is not installed on this worker"**: the published worker image leaves
   Claude Code out. Build the image with it and set `worker.image` (`docs/install.md`, Engines on the
   worker), or move the teammate to Codex.
