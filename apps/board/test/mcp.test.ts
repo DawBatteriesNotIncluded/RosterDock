@@ -10,6 +10,7 @@ import {
   seedCompany,
   startTestBoard,
   type TestBoard,
+  workerClaim,
 } from "./helpers.js";
 
 let board: TestBoard;
@@ -280,6 +281,87 @@ describe("board MCP server", () => {
     expect(minting.payload).toMatchObject({ scope: "manager", label: "Peter from a laptop" });
     const me = await board.api(minted.token).get("/api/auth/me");
     expect(me.status).toBe(200);
+    await client.close();
+  });
+
+  it("a follow-up filed into another project keeps its department's sandbox, pool and write policy", async () => {
+    const { api, base } = await seedCompany(board, "mcp5@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    await addTeammate(api, base, "Ricky");
+    const own = await addProject(api, base, "Intake");
+    const other = await addProject(api, base, "Outbound");
+    const secure = (
+      await api.post(`${base}/departments`, {
+        name: "Secure engineering",
+        writePolicy: "drafts",
+        memberTeammateIds: [cody.id],
+        sandbox: { pool: "secure", allowedTools: ["Read(./**)"], timeoutSeconds: 900 },
+      })
+    ).body;
+    const open = (await api.post(`${base}/departments`, { name: "Open lab", writePolicy: "ask" })).body;
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: own.id,
+        title: "Map the intake",
+        departmentId: secure.id,
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    const { token } = await claimedToken(api, base, task.id);
+    const client = await connect(token);
+    const created = text(
+      await client.callTool({
+        name: "board_create_task",
+        arguments: { title: "Map the outbound mail", project: "Outbound", assigneeHandle: "@ricky" },
+      }),
+    );
+    expect(created).toMatchObject({ projectId: other.id, departmentId: secure.id, parentTaskId: task.id });
+    expect(created.startedRunId).toBeTruthy();
+    // Its run queues on the department's pool and carries the department's sandbox and write policy.
+    const queued = (
+      await board.db.query<{ queue_name: string }>("SELECT queue_name FROM runs WHERE id = $1", [
+        created.startedRunId,
+      ])
+    ).rows[0]!;
+    expect(queued.queue_name).toBe("runs.secure");
+    const { spec } = await workerClaim(board, created.startedRunId);
+    expect(spec.sandbox).toEqual({ allowedTools: ["Read(./**)"], envNames: null, timeoutSeconds: 900 });
+    expect(spec.department).toEqual({ name: "Secure engineering", writePolicy: "drafts" });
+
+    // The REST API is no side door: the run's token files a follow-up in the run's task's department and
+    // cannot name another, or none, on create or on a change.
+    const rest = board.api(token);
+    const filed = await rest.post(`${base}/tasks`, { projectId: other.id, title: "From REST" });
+    expect(filed.status).toBe(201);
+    expect(filed.body).toMatchObject({ departmentId: secure.id, parentTaskId: task.id });
+    for (const departmentId of [open.id, null]) {
+      const refused = await rest.post(`${base}/tasks`, { projectId: other.id, title: "Out", departmentId });
+      expect(refused.status).toBe(403);
+      expect(refused.body.error).toMatch(/stays in the department of the run's task/);
+      expect((await rest.patch(`${base}/tasks/${created.id}`, { departmentId })).status).toBe(403);
+    }
+    expect((await rest.patch(`${base}/tasks/${created.id}`, { departmentId: secure.id })).status).toBe(200);
+    // Outside a run a teammate names only a department it belongs to; a person names any.
+    const plain = board.api((await api.post(`${base}/teammates/${cody.id}/tokens`, {})).body.token);
+    const outside = await plain.post(`${base}/tasks`, {
+      projectId: other.id,
+      title: "Elsewhere",
+      departmentId: open.id,
+    });
+    expect(outside.status).toBe(403);
+    expect(outside.body.error).toMatch(/only into a department it belongs to/);
+    const mine = await plain.post(`${base}/tasks`, {
+      projectId: other.id,
+      title: "Mine",
+      departmentId: secure.id,
+    });
+    expect(mine.status).toBe(201);
+    const byPerson = await api.post(`${base}/tasks`, {
+      projectId: other.id,
+      title: "Lab",
+      departmentId: open.id,
+    });
+    expect(byPerson.body.departmentId).toBe(open.id);
     await client.close();
   });
 

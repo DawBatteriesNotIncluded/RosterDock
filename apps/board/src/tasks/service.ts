@@ -136,6 +136,43 @@ export async function assertDepartment(
   if (!res.rowCount) throw new HttpError(422, "department is not in this company");
 }
 
+/** The department a task is in; null when it has none. */
+async function taskDepartment(db: Queryable, companyId: string, taskId: string): Promise<string | null> {
+  const res = await db.query<{ department_id: string | null }>(
+    "SELECT department_id FROM tasks WHERE id = $1 AND company_id = $2",
+    [taskId, companyId],
+  );
+  return res.rows[0]?.department_id ?? null;
+}
+
+/**
+ * A teammate files and moves work only inside its own department, so a run never leaves its
+ * department's sandbox, worker pool and write policy by putting a task somewhere else. In a run that
+ * is the department of the run's task, whatever project the work goes into; outside a run, a
+ * department the teammate belongs to (or none). People, and Peter's plans, are not narrowed here.
+ */
+export async function assertTeammateDepartment(
+  db: Queryable,
+  companyId: string,
+  teammateId: string,
+  departmentId: string | null,
+  runTaskId: string | null,
+): Promise<void> {
+  if (runTaskId) {
+    if ((await taskDepartment(db, companyId, runTaskId)) !== departmentId)
+      throw new HttpError(403, "a teammate's work in a run stays in the department of the run's task");
+    return;
+  }
+  if (!departmentId) return;
+  const member = await db.query(
+    `SELECT 1 FROM department_members WHERE company_id = $1 AND department_id = $2 AND teammate_id = $3
+     UNION ALL SELECT 1 FROM departments WHERE company_id = $1 AND id = $2 AND lead_teammate_id = $3`,
+    [companyId, departmentId, teammateId],
+  );
+  if (!member.rowCount)
+    throw new HttpError(403, "a teammate files work only into a department it belongs to");
+}
+
 /** Teammates may not flood a project: at most this many tasks per project per day from teammates. */
 export const TEAMMATE_TASKS_PER_PROJECT_PER_DAY = 25;
 
@@ -155,7 +192,10 @@ export async function taskDepth(db: Queryable, taskId: string | null): Promise<n
 }
 
 export interface CreateTaskOptions {
-  /** The task the creating teammate was working; sets the depth for the goal's caps. */
+  /**
+   * The task the creating teammate was working in its run; sets the depth for the goal's caps, and
+   * the new task's department when the body names none.
+   */
   parentTaskId?: string | null;
   /** Peter's own tasks at handoff: counted against the goal's task cap, depth 0. */
   fromGoal?: boolean;
@@ -215,6 +255,13 @@ export async function createTask(
     ]);
     if (!project.rowCount) throw new HttpError(422, "project is not in this company");
     await assertDepartment(ctx.client, companyId, body.departmentId);
+    let departmentId = body.departmentId ?? null;
+    if (actor.kind === "teammate" && !opts.fromGoal) {
+      const runTaskId = opts.parentTaskId ?? null;
+      if (runTaskId && body.departmentId === undefined)
+        departmentId = await taskDepartment(ctx.client, companyId, runTaskId);
+      await assertTeammateDepartment(ctx.client, companyId, actor.id, departmentId, runTaskId);
+    }
     if (actor.kind === "teammate") {
       const recent = await ctx.client.query<{ n: number }>(
         `SELECT count(*)::int AS n FROM tasks WHERE project_id = $1 AND created_by_kind = 'teammate' AND created_at > now() - interval '1 day'`,
@@ -257,7 +304,7 @@ export async function createTask(
       [
         companyId,
         body.projectId,
-        body.departmentId ?? null,
+        departmentId,
         number,
         body.title,
         body.description,
@@ -286,7 +333,7 @@ export async function createTask(
         number,
         title: body.title,
         projectId: body.projectId,
-        departmentId: body.departmentId ?? null,
+        departmentId,
         assignee: assignee ? { kind: assignee.kind, id: assignee.id, name: assignee.name } : null,
         createdByName: creator?.name ?? null,
         dependsOn: body.dependsOn,

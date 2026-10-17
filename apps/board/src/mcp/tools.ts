@@ -233,7 +233,8 @@ export async function createTaskTool(
   },
 ) {
   guard(input);
-  // In a run the new task is a follow-up of the run's task (its project, its department, its parent).
+  // In a run the new task is a follow-up of the run's task: its parent, its department wherever it is
+  // filed, so its run keeps the department's sandbox and pool, and its project unless another is named.
   // Outside a run a manager names the project and the task has no parent.
   const own = actor.taskId ? await loadTask(deps.db, actor.companyId, actor.taskId) : null;
   const projectId = input.project
@@ -253,7 +254,7 @@ export async function createTaskTool(
         projectId,
         title: input.title,
         description: input.description ?? "",
-        departmentId: own && own.project_id === projectId ? own.department_id : null,
+        departmentId: own?.department_id ?? null,
         assignee: assignee ? { kind: "teammate", id: assignee.id } : null,
         dependsOn: dep ? [dep.id] : [],
         declaredOutputs: input.declaredOutputs ?? [],

@@ -61,6 +61,11 @@ var name in Settings) and a row in the Approvals or Company page:
 | Peter proposes … / audited …               | The Company page: accept or decline the draft.                                                           |
 | … runs cost 3× their usual                 | The teammate's page and their last runs; a bigger model, a bigger task, or a loop. Nothing stopped.      |
 
+A teammate's pull request (a merge request on GitLab) is one commit on the branch `rosterdock/task-12`,
+titled `Task 12: <the task's title>`. Its body names the round, the reviewer who approved it, the checks and
+the diff's sha256. The board never writes a bare `#12`: the git host would link that to the repository's
+own issue or pull request 12.
+
 ## Runs that go wrong
 
 - **Interrupted.** A worker stopped heartbeating (the pod died, the node drained). The reaper marks the

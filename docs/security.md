@@ -194,6 +194,10 @@ their own, each with its own database and workers.
   included; the rules on it (`Read(./**)`) are what it may do with them without asking. Codex
   has no per-tool list: it runs in the worker's Codex sandbox (`ROSTERDOCK_CODEX_SANDBOX`) whatever the
   department lists.
+- A run cannot file its way out of its department. A task a teammate files from a run, in any project,
+  takes the department of the run's task, so its run gets the same sandbox, pool and write policy; the
+  board refuses another department, or none, over MCP and REST alike. Outside a run a teammate names only
+  a department it belongs to.
 - Claude Code starts with no settings file (`--setting-sources` empty): not the operator's, and not the
   cloned repository's `.claude/settings.json`, so a repository cannot allow itself a tool or add a hook.
   Codex starts with `--ignore-user-config`.
