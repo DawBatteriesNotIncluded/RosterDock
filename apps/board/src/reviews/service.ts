@@ -818,6 +818,14 @@ export async function requestChanges(
 }
 
 /**
+ * A task as the git host shows it. Never a bare `#N`: GitHub and GitLab link
+ * that to the repository's own issue or pull request N, not to the task.
+ */
+function changeTitle(task: { number: number; title: string }): string {
+  return `Task ${task.number}: ${task.title}`;
+}
+
+/**
  * The pull request an approval proposes: the exact payload the provider will
  * execute, bound by sha256. Only for projects on GitHub whose run recorded a
  * base sha. Executed by the caller after the transaction commits.
@@ -840,7 +848,7 @@ async function proposePullRequest(
   if (!project || !repo || !review.base_sha) return null;
   const checks = await listChecks(ctx.client, review);
   const body = [
-    `RosterDock review of task #${task.number} ${task.title}, round ${review.round}, approved by ${approverName ?? "a reviewer"}.`,
+    `RosterDock review of task ${task.number}, round ${review.round}, approved by ${approverName ?? "a reviewer"}.`,
     summary ? `\n> ${summary}` : "",
     "",
     "Checks:",
@@ -854,8 +862,8 @@ async function proposePullRequest(
     baseSha: review.base_sha,
     baseBranch: project.default_branch,
     headBranch: `rosterdock/task-${task.number}`,
-    title: `#${task.number} ${task.title}`,
-    commitMessage: `#${task.number} ${task.title}\n\nReview ${review.id} round ${review.round}.`,
+    title: changeTitle(task),
+    commitMessage: `${changeTitle(task)}\n\nReview ${review.id} round ${review.round}.`,
     body,
     reviewId: review.id,
     round: review.round,

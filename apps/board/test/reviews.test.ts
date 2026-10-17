@@ -689,12 +689,17 @@ describe("reviews", () => {
     expect(calls.at(-1)).toBe("POST /repos/acme/gtm-automations/pulls");
     const pull = github.requests.at(-1)!.body as { title: string; body: string; head: string; base: string };
     expect(pull).toMatchObject({
-      title: "#1 Map VMS sub-workflow calls",
+      title: "Task 1: Map VMS sub-workflow calls",
       head: "rosterdock/task-1",
       base: "main",
     });
-    expect(pull.body).toContain("round 1, approved by Daniel");
+    expect(pull.body).toContain("task 1, round 1, approved by Daniel");
     expect(pull.body).toContain("Merging needs a person");
+    // No bare #1 anywhere the host reads it: GitHub would link it to the repository's own PR 1.
+    const commit = github.requests.find((r) => r.method === "POST" && r.path.endsWith("/git/commits"))!
+      .body as { message: string };
+    expect(commit.message).toMatch(/^Task 1: Map VMS sub-workflow calls\n\nReview /);
+    for (const text of [pull.title, pull.body, commit.message]) expect(text).not.toMatch(/#\d/);
     const types = (await api.get(`${base}/events`)).body.map((e: any) => e.type);
     expect(types).toContain("pr.proposed");
     expect(types).toContain("pr.opened");
