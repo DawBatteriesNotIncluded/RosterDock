@@ -5,6 +5,7 @@ import type { RunCompleteInput, RunEventInput, RunUsage } from "@rosterdock/shar
 import { BoardError, type BoardClient, type ClaimedRun } from "./board-client.js";
 import type { EngineAdapter } from "./engines/types.js";
 import { createResourceSampler, type ResourceSampler } from "./resources.js";
+import { applyPreviousRound, freshStartBrief, withRework, type ReworkStart } from "./rework.js";
 import { createPhaseRecorder, exportWorkerTrace, type WorkerOtlp } from "./trace.js";
 import { runRepoTests, type Exec } from "./tests.js";
 import { clip, tail } from "./text.js";
@@ -212,6 +213,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
   }, deps.heartbeatMs);
 
   let ws: Workspace | null = null;
+  let reworkStart: ReworkStart | null = null;
   /** Null: the worker's shutdown cut the run short, and the queue's retry finishes it. */
   let completion: RunCompleteInput | null;
   const startedAt = Date.now();
@@ -254,6 +256,25 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
         });
         phases.begin("workspace", { "rosterdock.repo": !!spec.project.repoUrl });
         ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitToken, abort.signal);
+        // Rework: the round sent back carries over into the clone, or the run says why it starts clean.
+        if (spec.rework && ws.repo) {
+          reworkStart = await applyPreviousRound(ws, spec.rework, spec.project.defaultBranch);
+          emit(
+            reworkStart.applied
+              ? {
+                  type: "step",
+                  payload: {
+                    text: `starting from round ${reworkStart.round}'s changes (${reworkStart.files} files)`,
+                  },
+                }
+              : {
+                  type: "stderr",
+                  payload: {
+                    text: `round ${reworkStart.round}'s changes did not carry over: ${reworkStart.reason}; starting from a fresh clone of ${spec.project.defaultBranch}`,
+                  },
+                },
+          );
+        }
         phases.end();
         emit({ type: "step", payload: { text: `running ${engine.id}` } });
         phases.begin(`engine ${engine.id}`, {
@@ -262,7 +283,10 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
         });
         result = await engine.run({
           workdir: ws.dir,
-          pack: claimed.pack,
+          pack:
+            reworkStart && !reworkStart.applied
+              ? `${claimed.pack}\n\n${freshStartBrief(reworkStart, spec.project.defaultBranch)}\n`
+              : claimed.pack,
           model: run.model,
           effort: claimed.spec.teammate.effort ?? null,
           signal: abort.signal,
@@ -408,6 +432,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
     deps.log.info(err.message);
     throw err;
   }
+  if (reworkStart) completion = withRework(completion, reworkStart, spec.project.defaultBranch);
   await flush();
   completion = fitCompletion(completion);
   // The heartbeat goes on while the report is retried, so a board that comes back finds the run alive.

@@ -473,6 +473,17 @@ export const RunCompleteSchema = z.object({
     .array(z.lazy(() => WorkerCheckSchema))
     .max(10)
     .optional(),
+  /**
+   * A rework run: whether the review round it was sent back from carried over into its clone. When it
+   * did not (the base branch moved), `reason` says why in a phrase and the board says so on the task.
+   */
+  rework: z
+    .object({
+      round: z.number().int().positive(),
+      applied: z.boolean(),
+      reason: z.string().trim().max(300).optional(),
+    })
+    .optional(),
 });
 
 export const WorkerCheckSchema = z.object({

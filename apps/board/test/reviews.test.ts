@@ -24,6 +24,10 @@ const BASE = JSON.parse(readFileSync(path.join(shared, "diff-base.json"), "utf8"
   string | null
 >;
 const BASE_SHA = "0253df7ed00df5f84097e01499f26e4be2f011cf";
+// Task #6 of the dogfood company, as its review recorded it: round 1, round 2, and the base both were taken against.
+const ROUND_1 = readFileSync(path.join(shared, "rework/round-1.diff"), "utf8");
+const ROUND_2 = readFileSync(path.join(shared, "rework/round-2.diff"), "utf8");
+const ROUND_1_BASE = "80f18e27f280cbaa1a0be5dfdccce5b9a0e6e258";
 const github = fakeGitHub(
   Object.fromEntries(Object.entries(BASE).filter(([, v]) => v !== null)) as Record<string, string>,
 );
@@ -64,7 +68,12 @@ async function claim(runId: string) {
     payload: { runId, jobId: job, workerId: "w" },
   });
   expect(res.statusCode).toBe(201);
-  return JSON.parse(res.body) as { token: string; pack: string; run: { kind: string } };
+  return JSON.parse(res.body) as {
+    token: string;
+    pack: string;
+    run: { kind: string };
+    spec: { rework?: unknown };
+  };
 }
 
 async function connect(token: string) {
@@ -320,6 +329,9 @@ describe("reviews", () => {
       'workflows/vms-digest.json @@ -1,7 +1,9 @@ line 6 · Verifier: Keep "active": false',
     );
     expect(codyRun.pack).not.toContain("## Your review");
+    // No repository, nothing to apply: the working directory starts empty as on round 1.
+    expect(codyRun.spec.rework).toBeNull();
+    expect(codyRun.pack).not.toContain("Your working directory starts from round");
     // A second request on a waiting review is refused; the queue shows it as waiting.
     const again = await vclient.callTool({ name: "board_request_changes", arguments: {} });
     expect(text(again)).toMatch(/changes requested/);
@@ -736,6 +748,100 @@ describe("reviews", () => {
     await completeTaskRun(api, base, task3.id, textOnly);
     const review3 = (await api.get(`${base}/tasks/${task3.id}/review`)).body;
     expect((await api.post(`${base}/reviews/${review3.id}/approve`, {})).body.pullRequests).toEqual([]);
+  });
+
+  it("sends the author back on a repository with the round's diff to start from, and says on the task when it did not carry over", async () => {
+    const { api, base } = await seedCompany(board, "rv-rework@example.com");
+    const wren = await addTeammate(api, base, "Wren");
+    const project = (
+      await api.post(`${base}/projects`, {
+        name: "RosterDock",
+        client: "RosterDock",
+        repoUrl: "https://github.com/acme/rosterdock.git",
+        defaultBranch: "main",
+      })
+    ).body;
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "README landing page",
+        assignee: { kind: "teammate", id: wren.id },
+      })
+    ).body;
+    await completeTaskRun(api, base, task.id, ROUND_1, { baseSha: ROUND_1_BASE });
+    const review = (await api.get(`${base}/tasks/${task.id}/review`)).body;
+    // The sha256 the dogfood board recorded for this diff.
+    expect(review.diffSha256).toBe("d7bbc46771c270e2dde39f8d9b4321b2c121bd33454378a7079217594e7184a2");
+
+    // Sent back: the author's run carries round 1 whole, bound by that sha256, and the brief says so.
+    const sentBack = await api.post(`${base}/reviews/${review.id}/request-changes`, {
+      summary: "Three fixes to the outline.",
+    });
+    const runId = sentBack.body.restarted.runId as string;
+    const claimed = await claim(runId);
+    expect(claimed.spec.rework).toEqual({
+      round: 1,
+      diffSha256: review.diffSha256,
+      baseSha: ROUND_1_BASE,
+      diff: ROUND_1,
+    });
+    expect(claimed.pack).toContain(
+      "Your working directory starts from round 1: its changes are applied to a fresh clone of main, uncommitted",
+    );
+    expect(claimed.pack).toContain("the worker starts you from the clean clone instead and says so");
+    // The diff is in the clone, not in the brief.
+    expect(claimed.pack).not.toContain("For real models, see [Engines](#engines) below");
+
+    // main moved and round 1 did not apply: the worker says so, and the board says it on the task.
+    const asWren = board.api(claimed.token);
+    await asWren.post(`/api/worker/runs/${runId}/artifacts`, {
+      path: "changes.diff",
+      kind: "diff",
+      content: ROUND_2,
+    });
+    const reason = "README.md changed on main since round 1";
+    const done = await asWren.post(`/api/worker/runs/${runId}/complete`, {
+      status: "completed",
+      summary: `Started from a fresh copy of main: round 1's changes did not carry over (${reason}). Rewrote the outline.`,
+      rework: { round: 1, applied: false, reason },
+    });
+    expect(done.status).toBe(200);
+    const messages = (await api.get(`${base}/tasks/${task.id}/messages`)).body;
+    expect(messages.map((m: any) => [m.author, m.body])).toEqual([
+      [
+        { kind: "teammate", id: wren.id, name: "Wren" },
+        `Round 1's changes did not carry over to this run: ${reason}. It started from a fresh copy of main and makes the change again instead of editing round 1.`,
+      ],
+    ]);
+    expect(
+      (await board.db.query("SELECT run_id FROM messages WHERE id = $1", [messages[0].id])).rows[0].run_id,
+    ).toBe(runId);
+    const posted = (await api.get(`${base}/events?limit=20`)).body.find(
+      (e: any) => e.type === "message.posted" && e.payload.messageId === messages[0].id,
+    );
+    expect(posted).toMatchObject({ subject: { kind: "task", id: task.id }, payload: { authorName: "Wren" } });
+    expect((await api.get(`${base}/runs/${runId}`)).body.summary).toMatch(
+      /^Started from a fresh copy of main/,
+    );
+
+    // Round 2 opened as usual; sent back again, the next run starts from round 2, and one that carried over says nothing.
+    const round2 = (await api.get(`${base}/tasks/${task.id}/review`)).body;
+    expect(round2).toMatchObject({ round: 2, status: "open" });
+    const again = await api.post(`${base}/reviews/${round2.id}/request-changes`, { summary: "One more." });
+    const next = await claim(again.body.restarted.runId);
+    expect(next.spec.rework).toMatchObject({ round: 2, diff: ROUND_2, diffSha256: round2.diffSha256 });
+    const asNext = board.api(next.token);
+    await asNext.post(`/api/worker/runs/${again.body.restarted.runId}/artifacts`, {
+      path: "changes.diff",
+      kind: "diff",
+      content: ROUND_2,
+    });
+    await asNext.post(`/api/worker/runs/${again.body.restarted.runId}/complete`, {
+      status: "completed",
+      summary: "Edited round 2.",
+      rework: { round: 2, applied: true },
+    });
+    expect((await api.get(`${base}/tasks/${task.id}/messages`)).body).toHaveLength(1);
   });
 
   it("a research task's review checks that its documents cite sources, and its reviewer gets the checklist", async () => {

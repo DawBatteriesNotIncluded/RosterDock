@@ -9,6 +9,7 @@ import type {
   RunHeartbeatInput,
   RunStatus,
 } from "@rosterdock/shared";
+import type { Rework } from "./rework.js";
 
 export interface ClaimedRun {
   run: {
@@ -33,6 +34,8 @@ export interface ClaimedRun {
     /** The largest artifact the board takes back, in bytes; older boards do not say (the worker assumes the inline limit). */
     limits?: { artifactBytes: number };
     checkpoint: unknown | null;
+    /** Sent back with changes requested on a repository task: the round to start from. Older boards send none. */
+    rework?: Rework | null;
   };
 }
 
