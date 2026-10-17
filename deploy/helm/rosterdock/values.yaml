@@ -116,7 +116,9 @@ board:
   # of naming an env var, and the board keeps the tokens it obtains in Secrets of its own
   # (rosterdock-connection-<id>) in the release namespace. That takes the pod's service account token and a
   # Role over Secrets in the namespace (rbac.yaml), which the chart withholds otherwise; keep RosterDock in a
-  # namespace of its own when you turn this on. Off: connections authenticate by env var NAME only.
+  # namespace of its own when you turn this on. With networkPolicy.enabled it also opens the board's egress
+  # on ports 443 and 6443 to any address, for the API server, whatever networkPolicy.board.egressTo lists:
+  # private ranges and the rest of the cluster included. Off: connections authenticate by env var NAME only.
   oauth:
     enabled: false
   # Model CLIs Peter may plan with where the board runs (Settings > Peter; Automatic takes the first signed in).
@@ -214,7 +216,10 @@ worker:
   # runtime whose engine forks beyond it, the worker can ask the metrics API instead (metrics-server or
   # an equivalent must be installed): that takes a service account token in a pod that runs model output,
   # so the chart gives the worker an account of its own with one Role, get pod metrics in this namespace,
-  # mounts the token, and opens the worker's egress to the API server. The cgroup stays behind it.
+  # mounts the token, and opens the worker's egress to the API server; the cgroup stays behind it. That
+  # egress rule has no destination: every worker pod, in every pool, then reaches any address on ports 443
+  # and 6443, private ranges and the rest of the cluster included, even in a pool whose egress is otherwise
+  # only the board and Postgres.
   podMetrics:
     enabled: false
   # Extra worker fleets, one per department sandbox pool. A department whose sandbox names the pool
@@ -288,6 +293,8 @@ ingress:
 # Network policies. The web reaches only the board; the board reaches Postgres, storage and the outside
 # (model API, git host, MCP servers, webhooks); the worker reaches the board, Postgres and the public
 # internet on 443 (model API, git host) and nothing private in the cluster. Worker pods run model output.
+# Two settings open ports 443 and 6443 to any address, for the API server, private ranges included:
+# worker.podMetrics.enabled for every worker pod in every pool, and board.oauth.enabled for the board.
 networkPolicy:
   enabled: false
   # Extra sources allowed to reach the web (the ingress controller's namespace, a load balancer range).
@@ -306,7 +313,8 @@ networkPolicy:
     # else ever reaches a worker.
     metricsFrom: []
     # Public HTTPS only by default: the model API and the git host; nothing private in the cluster besides
-    # the board, Postgres and storage. Narrow to your provider's ranges when you know them.
+    # the board and Postgres (any address on postgres.port until postgres.cidr names it). Narrow to your
+    # provider's ranges when you know them.
     egressPorts: [443]
     egressTo:
       - ipBlock:

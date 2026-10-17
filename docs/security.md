@@ -29,9 +29,9 @@ model output on their cluster.
   the approval executor. The worker starts every engine with the board as its only MCP server.
 - **Teammates never mark Done.** An approved review does; a person can veto any review.
 - **Policy only narrows.** A teammate's toolbox is the ceiling (a connection with a mode, and optionally
-  only some of its tools: the rest are never listed to that teammate and refused if called); the department's write policy and the
-  project's client policy tighten it and never widen it. Files import grants only on connections the
-  company already has.
+  only some of its tools: the rest are never listed to that teammate and refused if called); the
+  department's write policy and the project's client policy tighten it and never widen it. Files import
+  grants only on connections the company already has.
 - **One event stream, per company.** Every mutation appends an event in the same transaction, with the
   actor (a person or a teammate). Activity, the Office, notifications, metrics and traces are projections
   of it. Every row carries `company_id`; every company route goes through one role guard, and every board
@@ -57,7 +57,8 @@ What an owner or admin of one company can reach:
   Secrets, which needs `board.oauth.enabled`).
 - The network as the board pod sees it. An HTTP or OpenAPI connection, its OAuth discovery and a
   notification webhook are requests from the board pod to an address the company chose, cluster-internal
-  ones included. Narrow `networkPolicy.board.egressTo` to the services companies may use.
+  ones included. Narrow `networkPolicy.board.egressTo` to the services companies may use; with
+  `board.oauth.enabled`, ports 443 and 6443 stay open to any address (The board, below).
 - The command lines the operator lists for stdio connections (`ROSTERDOCK_STDIO_COMMANDS`, chart
   `board.stdioCommands`; none by default). Such a server runs inside the board pod as the board, so a
   server that reads files or runs commands reaches what the board can: the board process's environment
@@ -82,12 +83,45 @@ What they cannot reach:
   skipped with a note. A row written before this rule that names one simply does not resolve. The board
   refuses to start when `ROSTERDOCK_SHARED_ENV_NAMES` lists one of its own names: `DATABASE_URL`, the
   `S3_` keys, `OTEL_EXPORTER_OTLP_HEADERS`, and anything under `ROSTERDOCK_`, `ANTHROPIC_`, `CLAUDE_`,
-  `CODEX_` or `OPENAI_`. The one way around this is a stdio server the operator lists that reads files
-  or runs commands (above), which is why none is listed by default.
+  `CODEX_` or `OPENAI_`. On the board, the one way around this is a stdio server the operator lists that
+  reads files or runs commands (above), which is why none is listed by default. The worker pods hold the
+  same database URL and the worker token, and a company's runs can read them there (below).
 - Any other command inside the board. A stdio connection starts only a command line the operator lists,
   matched exactly up to a final `*`. One that is not listed is refused when it is written (on create, on a
   change of its command or arguments, and on discovery: 403), skipped with a note in an imported file, and
   never started, whatever an older row says: the check runs again before every start.
+
+The worker fleet is shared, and it is not a boundary between companies. Every company's runs go to the
+same worker pods: a department's sandbox picks the pool (`worker.pools`), and any company's department may
+name any pool. The pods are hardened (Workers run model output, below): a read-only root filesystem, the
+repository's tests without the engine's keys, Claude Code with only the built-in tools its list names, and
+a run's outputs read only as files, never through a link. What they do not do is keep a company's code
+away from the worker process. Code a company controls runs in those pods as the worker's user:
+
+- The repository's own `test` script. When the engine finishes, the worker runs it in the workspace
+  (`ROSTERDOCK_RUN_REPO_TESTS`, on by default), outside any engine sandbox. It gets PATH, HOME, the temp
+  directory, the locale and `CI=1`, and no key or token. Whoever can push to a project's repository, or
+  ask its teammates to change the tests, writes that script.
+- The commands an engine runs in a shell. Codex always has one; its sandbox (`ROSTERDOCK_CODEX_SANDBOX`)
+  limits what the commands write, not what they read. Claude Code has one when the worker's list names
+  Bash (`worker.claudeAllowedTools`, per pool too); a department's list only narrows that one.
+
+The worker process still holds the board's `DATABASE_URL`, the worker token (`ROSTERDOCK_WORKER_TOKEN`),
+the git token (`worker.gitSecret`) and the model keys, and code running as the same user can read them
+from its environment (`/proc/1/environ`). The database URL is the board's own and the worker's network
+policy lets the pod reach Postgres, so with it that code reads and writes every company's rows,
+memberships and tokens included. The worker token claims any company's queued run (the queue names them
+all), and with it that run's pack and run token. The worker ends the engine and test processes it
+starts, not what they start in turn: a process a run leaves running carries on beside the next runs the
+pod takes, whichever company they are for, and so does whatever a run leaves in the pod's home and temp
+directories.
+
+So host on one board only companies that trust each other with all of that. Where that is not so, keep
+company code off the worker's user: turn the tests off (`ROSTERDOCK_RUN_REPO_TESTS=0`, chart
+`worker.extraEnv`), put no Codex key (`OPENAI_API_KEY`, `CODEX_API_KEY`) in `worker.engineEnvNames`, and
+leave Bash out of `worker.claudeAllowedTools` in every pool. That takes away the shells; the database URL
+and the worker token stay in the pods, so companies that must not reach each other still need boards of
+their own, each with its own database and workers.
 
 ## Identity
 
@@ -105,12 +139,21 @@ What they cannot reach:
   teammates run on your workers and keys, so keep the list to the people you would give that to.
 - Sessions are random tokens stored as sha256, in an httpOnly, SameSite=Lax, Secure cookie. One lasts 30 days
   from sign-in (`ROSTERDOCK_SESSION_TTL_SECONDS`, chart `board.extraEnv`).
-- Teammates authenticate with run-scoped tokens minted at claim time, valid for one run, stored as sha256,
-  dead when the run ends. The worker fleet presents a shared claim token (`ROSTERDOCK_WORKER_TOKEN`) compared
-  in constant time.
+- A teammate acts on the board with a bearer token stored as sha256, of one of two kinds. A run token is
+  minted when a worker claims the run and deleted when the run ends or is claimed again (eight hours at
+  most). An owner or admin can also mint one for a teammate
+  (`POST /api/companies/:companyId/teammates/:teammateId/tokens`, shown once, recorded as an event): it
+  lasts a day by default and up to 30 days, and with the `manager` scope it also reaches the board's MCP
+  server outside a run, naming the task in each call. No route revokes a minted token; it stops working
+  when it expires or the teammate is deleted. Either kind is the teammate on its company's REST API, not
+  only in a run: it may do whatever the teammate role may (below). The worker routes take a run token for
+  its own run only. The worker fleet presents a shared claim token (`ROSTERDOCK_WORKER_TOKEN`) compared in
+  constant time.
 - Roles: owner, admin, reviewer, viewer, teammate. Owners and admins manage the company, connections,
-  toolboxes, templates and approvals; reviewers decide reviews; viewers read; teammates act only through
-  the board's tools with their run token.
+  toolboxes, templates and approvals; reviewers decide reviews; viewers read. A teammate, with either kind
+  of token and in its own company only, reads the company and its events, files and updates tasks, posts
+  messages and review comments, decides the reviews it is assigned, and manages projects; it never manages
+  connections, departments, teammates or members, and never decides an approval.
 - Only an owner grants owner, or changes or removes an owner, and a company always keeps one: neither an
   admin nor the last owner can leave it with none.
 - The dev login (`ROSTERDOCK_DEV_LOGIN=1`) signs anyone in as anyone. Never in production; the chart warns.
@@ -135,10 +178,13 @@ What they cannot reach:
   seccomp profile, and no service account token. The one exception is `worker.podMetrics.enabled`: the
   worker then has an account of its own with one Role, get pod metrics in the namespace, and its token
   mounted, so it can read its pod's CPU and memory from the metrics API; that account is never bound to
-  the board's Secrets Role.
+  the board's Secrets Role. It also opens every worker pod's egress on ports 443 and 6443 to any address,
+  for the API server: private ranges and the rest of the cluster included, and in every pool, the ones
+  that otherwise reach only the board and Postgres too.
 - With `networkPolicy.enabled`, a worker reaches DNS, the board, Postgres and public HTTPS (the model
-  API, the git host), with every private range excluded; nothing reaches it. A pool (`worker.pools`)
-  narrows further, down to the board and Postgres only, and a department's sandbox chooses the pool.
+  API, the git host), with every private range excluded; nothing reaches it. Postgres is any address on
+  `postgres.port` until `postgres.cidr` names it. A pool (`worker.pools`) narrows further, down to the
+  board and Postgres only, and a department's sandbox chooses the pool.
 - The engine sees only the env var names the worker was told to pass, narrowed again by the department's
   sandbox, which also sets a time limit. A department's tool list narrows the worker's Claude Code
   allowlist (`ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`, chart `worker.claudeAllowedTools`, per pool too) and never
@@ -175,7 +221,9 @@ What they cannot reach:
 - Runs as non-root, read-only root filesystem, all capabilities dropped; reads every credential from a
   Secret by name; logs redact the headers that carry tokens; nothing logs a value.
 - The board's egress is wide by design (model API, git host, MCP servers, webhooks); narrow
-  `networkPolicy.board.egressTo` to the destinations you use.
+  `networkPolicy.board.egressTo` to the destinations you use. With `board.oauth.enabled` the board also
+  reaches any address on ports 443 and 6443, for the API server, whatever `egressTo` lists: private
+  ranges and the rest of the cluster included.
 - `/metrics` is served on the board's own port and never proxied by the web; keep the board's Service
   internal (the default) and reach it with a scraper inside the cluster, or put a bearer on it
   (`board.metricsSecret`) where the port is reachable.
