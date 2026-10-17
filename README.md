@@ -149,7 +149,17 @@ a telecoms company, recovers from a bad week. Both are invented; their guides se
 A RosterDock company on the maintainer's board (Engineering, Issues & PRs, Docs, Release & Security, and
 Peter) takes tasks here. A reviewer teammate reviews each change it makes, the board opens the pull request
 and a person merges ([#7](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/7),
-[#8](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/8)). Most of the history is the maintainer's.
+[#8](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/8),
+[#14](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/14),
+[#15](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/15)). Most of the history is the
+maintainer's.
+
+![The Office view of the RosterDock company: the owner's room where approvals wait, reception, a kitchen, a
+lounge and the four department rooms (Engineering, Issues & PRs, Docs, Release & Security) with teammates
+at their desks and each room's write policy on its name plate](docs/images/office.png)
+
+_The company that works this repository, at a quiet moment: teammates with nothing on take a break in the
+kitchen or the lounge, Peter among them._
 
 ## Contributing
 
