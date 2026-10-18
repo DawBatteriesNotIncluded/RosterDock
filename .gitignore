@@ -13,6 +13,7 @@ Thumbs.db
 deploy/helm/*/charts/
 deploy/helm/*.tgz
 .claude/launch.json.local
+.claude/settings.local.json
 
 # the board's local file secret store and other local data; never in the tree
 .data/
