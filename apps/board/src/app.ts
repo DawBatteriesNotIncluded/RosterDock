@@ -1,5 +1,6 @@
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import { stdioCommandLine } from "@rosterdock/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { ApprovalExecutor } from "./approvals/service.js";
@@ -255,6 +256,9 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
   await app.register(cookie);
   if (config.corsOrigin)
     await app.register(cors, { origin: config.corsOrigin.split(","), credentials: true });
+  // Counts only on the routes that ask for it: the sign-in routes (auth/plugin.ts). Any wider limit is the
+  // ingress's (docs/security.md).
+  await app.register(rateLimit, { global: false });
 
   app.setErrorHandler((err: unknown, _req, reply) => {
     if (err instanceof HttpError) {

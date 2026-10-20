@@ -76,6 +76,7 @@ export function testConfig(databaseUrl: string, overrides: Partial<BoardConfig> 
     cookieSecure: false,
     corsOrigin: null,
     sessionTtlSeconds: 3600,
+    signInRateLimit: 60,
     workerToken: "test-worker-token",
     reaperIntervalMs: 15_000,
     runStaleAfterMs: 90_000,
