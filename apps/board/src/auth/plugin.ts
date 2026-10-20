@@ -1,7 +1,7 @@
 // Authentication: resolves a Principal from the session cookie or a bearer
 // token for every non-public route, and exposes the dev login when enabled.
 
-import { DevLoginSchema } from "@rosterdock/shared";
+import { bearerToken, DevLoginSchema } from "@rosterdock/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { BoardConfig } from "../config.js";
 import type { Db } from "../db/pool.js";
@@ -20,12 +20,6 @@ import {
 } from "./oidc.js";
 import { createSession, deleteSession, resolveApiToken, resolveSession, SESSION_COOKIE } from "./tokens.js";
 
-function bearerFrom(header: string | undefined): string | null {
-  if (!header) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(header);
-  return m?.[1]?.trim() || null;
-}
-
 export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, oidc: OidcDeps): void {
   /** Where the browser is: ROSTERDOCK_PUBLIC_URL, else the request's own origin (behind a trusted proxy). */
   const publicBase = (req: FastifyRequest): string => config.publicUrl ?? `${req.protocol}://${req.host}`;
@@ -40,7 +34,7 @@ export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, 
 
   app.addHook("onRequest", async (req) => {
     if (req.routeOptions.config.public) return;
-    const bearer = bearerFrom(req.headers.authorization);
+    const bearer = bearerToken(req.headers.authorization);
     const cookie = req.cookies[SESSION_COOKIE];
     const principal = bearer
       ? ((await resolveSession(db, bearer)) ?? (await resolveApiToken(db, bearer)))
@@ -149,7 +143,7 @@ export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, 
   // (RP-initiated logout: the provider's end_session_endpoint with this client and a way back).
   app.post("/api/auth/logout", { config: {} }, async (req, reply) => {
     const cookie = req.cookies[SESSION_COOKIE];
-    const bearer = bearerFrom(req.headers.authorization);
+    const bearer = bearerToken(req.headers.authorization);
     const token = cookie ?? bearer;
     const provider = token ? await deleteSession(db, token) : null;
     reply.clearCookie(SESSION_COOKIE, { path: "/" });

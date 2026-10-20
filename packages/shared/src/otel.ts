@@ -6,6 +6,7 @@
 // side talking to the other.
 
 import { createHash } from "node:crypto";
+import { trimTrailingSlashes } from "./text.js";
 
 export type OtelAttrValue = string | number | boolean;
 
@@ -110,7 +111,7 @@ export function otlpTracesEndpoint(env: { [k: string]: string | undefined }): st
   const direct = env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?.trim();
   if (direct) return direct;
   const base = env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
-  return base ? `${base.replace(/\/+$/, "")}/v1/traces` : null;
+  return base ? `${trimTrailingSlashes(base)}/v1/traces` : null;
 }
 
 export interface OtlpTarget {

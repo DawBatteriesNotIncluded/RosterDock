@@ -10,6 +10,8 @@
 // is empty by default, and empty means none. Pure functions, shared by the
 // board (it enforces them) and its tests.
 
+import { trimTrailingSlashes } from "./text.js";
+
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
@@ -145,6 +147,6 @@ export const PUBLIC_OIDC_ISSUERS: readonly string[] = [
 ];
 
 export function isPublicOidcIssuer(issuer: string): boolean {
-  const i = issuer.trim().replace(/\/+$/, "").toLowerCase();
+  const i = trimTrailingSlashes(issuer.trim()).toLowerCase();
   return PUBLIC_OIDC_ISSUERS.includes(i);
 }

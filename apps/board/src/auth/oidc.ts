@@ -12,6 +12,7 @@
 // tests replay a recorded provider), and signatures are checked with node:crypto.
 
 import { createHash, createPublicKey, randomBytes, verify as cryptoVerify } from "node:crypto";
+import { trimTrailingSlashes } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
 
 export interface OidcConfig {
@@ -94,15 +95,11 @@ export function resetOidcCaches(): void {
   caches.clear();
 }
 
-function trimSlash(u: string): string {
-  return u.replace(/\/+$/, "");
-}
-
 export async function discover(config: OidcConfig, deps: OidcDeps): Promise<Discovery> {
   const cache = cacheFor(config.issuer);
   const now = deps.now?.() ?? Date.now();
   if (cache.discovery && now - cache.discovery.at < DISCOVERY_TTL_MS) return cache.discovery.doc;
-  const url = `${trimSlash(config.issuer)}/.well-known/openid-configuration`;
+  const url = `${trimTrailingSlashes(config.issuer)}/.well-known/openid-configuration`;
   const res = await deps.fetch(url, { headers: { accept: "application/json" } }).catch((err: Error) => {
     throw new OidcError("provider", `could not reach the identity provider: ${err.message}`);
   });
@@ -110,7 +107,7 @@ export async function discover(config: OidcConfig, deps: OidcDeps): Promise<Disc
   const doc = (await res.json()) as Partial<Discovery>;
   if (!doc.authorization_endpoint || !doc.token_endpoint || !doc.jwks_uri || !doc.issuer)
     throw new OidcError("provider", "the discovery document is missing an endpoint");
-  if (trimSlash(doc.issuer) !== trimSlash(config.issuer))
+  if (trimTrailingSlashes(doc.issuer) !== trimTrailingSlashes(config.issuer))
     throw new OidcError("provider", "the discovery document names a different issuer");
   cache.discovery = { at: now, doc: doc as Discovery };
   return doc as Discovery;
@@ -207,7 +204,7 @@ export function checkClaims(
   claims: IdClaims,
   expect: { issuer: string; clientId: string; nonce: string; nowSeconds: number },
 ): void {
-  if (trimSlash(String(claims.iss ?? "")) !== trimSlash(expect.issuer))
+  if (trimTrailingSlashes(String(claims.iss ?? "")) !== trimTrailingSlashes(expect.issuer))
     throw new OidcError("token", "the id_token was issued by someone else");
   const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   if (!aud.includes(expect.clientId)) throw new OidcError("token", "the id_token is for another client");
