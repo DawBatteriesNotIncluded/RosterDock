@@ -46,6 +46,14 @@ function toJson(row: ProjectRow, counts?: Counts) {
   };
 }
 
+// Where a project's work goes and what its client allows: a teammate opens and renames projects, and a
+// request of its that names one of these is refused whole.
+const SETTINGS = {
+  repoUrl: "project.configure",
+  defaultBranch: "project.configure",
+  clientPolicy: "project.configure",
+} as const;
+
 export function registerProjectRoutes(app: FastifyInstance, db: Db): void {
   app.get("/api/companies/:companyId/projects", { config: { action: "company.read" } }, async (req) => {
     const res = await db.query<ProjectRow & Counts>(
@@ -66,7 +74,7 @@ export function registerProjectRoutes(app: FastifyInstance, db: Db): void {
 
   app.post(
     "/api/companies/:companyId/projects",
-    { config: { action: "project.manage" } },
+    { config: { action: "project.manage", fieldActions: SETTINGS } },
     async (req, reply) => {
       const body = parseBody(CreateProjectSchema, req.body);
       const { result } = await mutate(db, req.companyId, req.principal.actor, async (ctx) => {
@@ -113,7 +121,7 @@ export function registerProjectRoutes(app: FastifyInstance, db: Db): void {
 
   app.patch(
     "/api/companies/:companyId/projects/:projectId",
-    { config: { action: "project.manage" } },
+    { config: { action: "project.manage", fieldActions: SETTINGS } },
     async (req) => {
       const id = uuidParam((req.params as { projectId: string }).projectId, "projectId");
       const body = parseBody(UpdateProjectSchema, req.body);

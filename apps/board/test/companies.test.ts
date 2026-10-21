@@ -124,6 +124,55 @@ describe("companies and memberships", () => {
     expect((await asCody.get(other.base)).status).toBe(403);
   });
 
+  it("a teammate opens and renames projects; where the code goes and what the client allows are a person's", async () => {
+    const { api, base } = await seedCompany(board, "c10@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const asCody = board.api((await api.post(`${base}/teammates/${cody.id}/tokens`, {})).body.token);
+    const policy = { default: "read", caps: { n8n: "off" } };
+    const project = (await api.post(`${base}/projects`, { name: "Globex", clientPolicy: policy })).body;
+    const url = `${base}/projects/${project.id}`;
+
+    for (const settings of [
+      { repoUrl: "https://github.com/globex/site.git" },
+      { repoUrl: null },
+      { defaultBranch: "release" },
+      { clientPolicy: { default: "ask", caps: {} } },
+    ]) {
+      const refused = await asCody.patch(url, { name: "Globex site", ...settings });
+      expect(refused.status, JSON.stringify(settings)).toBe(403);
+      expect(refused.body.error).toMatch(/may not project\.configure/);
+      const opened = await asCody.post(`${base}/projects`, { name: "Initech", ...settings });
+      expect(opened.status, JSON.stringify(settings)).toBe(403);
+    }
+    const unchanged = (await api.get(url)).body;
+    expect(unchanged).toMatchObject({
+      name: "Globex",
+      repoUrl: null,
+      defaultBranch: "main",
+      clientPolicy: policy,
+    });
+
+    expect((await asCody.patch(url, { name: "Globex site", goal: "Ship it" })).status).toBe(200);
+    expect((await asCody.post(`${base}/projects`, { name: "Initech", client: "Initech" })).status).toBe(201);
+    const set = await api.patch(url, {
+      repoUrl: "https://github.com/globex/site.git",
+      clientPolicy: { caps: {} },
+    });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({ name: "Globex site", repoUrl: "https://github.com/globex/site.git" });
+
+    // A goal opens a project too: a teammate hands one over, but not with a repository or a branch.
+    for (const settings of [
+      { repoUrl: "https://github.com/globex/site.git" },
+      { defaultBranch: "release" },
+    ]) {
+      const goal = await asCody.post(`${base}/goals`, { text: "Ship the Globex site", ...settings });
+      expect(goal.status, JSON.stringify(settings)).toBe(403);
+      expect(goal.body.error).toMatch(/may not project\.configure/);
+    }
+    expect((await asCody.post(`${base}/goals`, { text: "Ship the Globex site" })).status).toBe(201);
+  });
+
   it("keeps the office layout in the company settings: slots, colours and desk cells, and nothing else", async () => {
     const { api, base } = await seedCompany(board, "c8@example.com");
     const office = { rooms: { none: { slot: 0, color: "#e6f2ec" } }, desks: { "t-1": { col: 2, row: 1 } } };

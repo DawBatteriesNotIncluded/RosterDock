@@ -154,8 +154,10 @@ their own, each with its own database and workers.
 - Roles: owner, admin, reviewer, viewer, teammate. Owners and admins manage the company, connections,
   toolboxes, templates and approvals; reviewers decide reviews; viewers read. A teammate, with either kind
   of token and in its own company only, reads the company and its events, files and updates tasks, posts
-  messages and review comments, decides the reviews it is assigned, and manages projects; it never manages
-  connections, departments, teammates or members, and never decides an approval.
+  messages and review comments, decides the reviews it is assigned, and opens and renames projects; it never
+  sets a project's repository, default branch or client policy, on a project or on a goal that opens one (a
+  request that names one is refused whole), never manages connections, departments, teammates or members,
+  and never decides an approval.
 - Only an owner grants owner, or changes or removes an owner, and a company always keeps one: neither an
   admin nor the last owner can leave it with none.
 - The dev login (`ROSTERDOCK_DEV_LOGIN=1`) signs anyone in as anyone. Never in production; the chart warns.

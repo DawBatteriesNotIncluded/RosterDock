@@ -22,6 +22,7 @@ export const ACTIONS = [
   "teammate.manage",
   "teammate.token",
   "project.manage",
+  "project.configure",
   "goal.caps",
   "task.create",
   "task.update",
@@ -50,6 +51,9 @@ const MATRIX: Record<Action, readonly Role[]> = {
   "teammate.token": OWNERS_ADMINS,
   // Peter opens projects on handoff, so teammates may manage projects.
   "project.manage": ["owner", "admin", "teammate"],
+  // Set a project's repository, its default branch and its client policy: where the work goes and what the
+  // client allows. People only: a teammate never points its work elsewhere or loosens the policy it works under.
+  "project.configure": OWNERS_ADMINS,
   // Raise or lower a goal's caps. People only: a teammate at the cap asks, never widens it.
   "goal.caps": OWNERS_ADMINS,
   "task.create": CONTRIBUTORS,
