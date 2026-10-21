@@ -828,8 +828,10 @@ function changeTitle(task: { number: number; title: string }): string {
 
 /**
  * The pull request an approval proposes: the exact payload the provider will
- * execute, bound by sha256. Only for projects on GitHub whose run recorded a
- * base sha. Executed by the caller after the transaction commits.
+ * execute, bound by sha256. Only for build work on a project whose repository
+ * is on a host the board opens changes on, and whose run recorded a base sha:
+ * research documents are delivered on the board. Executed by the caller after
+ * the transaction commits.
  */
 async function proposePullRequest(
   ctx: MutationContext,
@@ -840,13 +842,14 @@ async function proposePullRequest(
   hosts: GitHosts | null = null,
 ): Promise<string | null> {
   const project = (
-    await ctx.client.query<{ repo_url: string | null; default_branch: string }>(
-      "SELECT p.repo_url, p.default_branch FROM projects p JOIN tasks t ON t.project_id = p.id WHERE t.id = $1",
+    await ctx.client.query<{ repo_url: string | null; default_branch: string; work_kind: string }>(
+      `SELECT p.repo_url, p.default_branch, t.work_kind FROM projects p JOIN tasks t ON t.project_id = p.id
+       WHERE t.id = $1`,
       [review.task_id],
     )
   ).rows[0];
   const repo = parseRepo(project?.repo_url, hosts);
-  if (!project || !repo || !review.base_sha) return null;
+  if (!project || project.work_kind !== "build" || !repo || !review.base_sha) return null;
   const checks = await listChecks(ctx.client, review);
   const body = [
     `RosterDock review of task ${task.number}, round ${review.round}, approved by ${approverName ?? "a reviewer"}.`,

@@ -66,10 +66,10 @@ export async function goalResult(db: Queryable, companyId: string, goalId: strin
     await db.query<ResultTask & { status: string; needed: boolean }>(
       `SELECT t.id, t.number, t.title, t.declared_outputs, t.status,
          EXISTS (SELECT 1 FROM task_dependencies d JOIN tasks n ON n.id = d.task_id
-                 WHERE d.depends_on_task_id = t.id AND n.project_id = t.project_id
+                 WHERE d.depends_on_task_id = t.id AND n.goal_id = t.goal_id
                    AND n.status <> 'cancelled') AS needed
-       FROM tasks t WHERE t.project_id = $1 ORDER BY t.number`,
-      [goal.project_id],
+       FROM tasks t WHERE t.goal_id = $1 ORDER BY t.number`,
+      [goal.id],
     )
   ).rows;
   const done = tasks.filter((t) => t.status === "done");

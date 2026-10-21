@@ -430,7 +430,10 @@ export function describeEvent(
       return { text: `${who} signed in` };
     // Peter (M4)
     case "goal.created":
-      return { text: `${who} handed Peter a goal: ${p(ev).title}`, go: { view: "company" } };
+      return {
+        text: `${who} handed Peter a goal${p(ev).projectName ? ` for ${p(ev).projectName}` : ""}: ${p(ev).title}`,
+        go: { view: "company" },
+      };
     case "goal.questions": {
       const qs = (p(ev).questions as string[] | undefined)?.length ?? 0;
       return {

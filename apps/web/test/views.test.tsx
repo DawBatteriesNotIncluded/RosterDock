@@ -957,7 +957,7 @@ describe("views render with sample data", () => {
     expect(goalTone(peterFixture.goals[1]!, [])).toBe("warn");
     expect(goalTone({ ...active, status: "done" }, [])).toBe("muted");
     // Cancelled tasks leave the total and are counted apart.
-    const mine = peterFixture.tasks.filter((t) => t.projectId === active.projectId);
+    const mine = peterFixture.tasks.filter((t) => t.goalId === active.id);
     const q = goalProgress(
       active,
       mine.map((t, i) => (i === 0 ? { ...t, status: "cancelled" as const } : t)),

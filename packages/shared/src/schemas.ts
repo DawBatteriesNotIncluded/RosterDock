@@ -287,13 +287,31 @@ export const ClientPolicySchema = z.object({
 });
 export type ClientPolicyInput = z.infer<typeof ClientPolicySchema>;
 
+/**
+ * Git URL the worker clones. Credentials come from the worker environment by name, never from here: a URL
+ * with a password, or with a user on http(s), where the user is the token, is refused.
+ */
+const repoUrl = z
+  .string()
+  .trim()
+  .url()
+  .max(500)
+  .refine((v) => {
+    try {
+      const u = new URL(v);
+      return !u.password && !(/^https?:$/.test(u.protocol) && u.username);
+    } catch {
+      return true; // not a URL at all, which the check above reports
+    }
+  }, "a repository URL carries no credentials: the worker's git token is named in its environment");
+const branch = z.string().trim().min(1).max(120);
+
 export const CreateProjectSchema = z.object({
   name,
   client: z.string().trim().max(120).default("Internal"),
   goal: longText.default(""),
-  /** Git URL the worker clones. Credentials come from the worker environment by name, never from here. */
-  repoUrl: z.string().trim().url().max(500).nullable().optional(),
-  defaultBranch: z.string().trim().min(1).max(120).default("main"),
+  repoUrl: repoUrl.nullable().optional(),
+  defaultBranch: branch.default("main"),
   clientPolicy: ClientPolicySchema.default({ default: null, caps: {} }),
   /** A cost centre, client code or invoice reference the monthly cost report groups by (M6). */
   chargebackTag: z.string().trim().max(64).nullable().optional(),
@@ -303,8 +321,8 @@ export const UpdateProjectSchema = z.object({
   name: name.optional(),
   client: z.string().trim().max(120).optional(),
   goal: longText.optional(),
-  repoUrl: z.string().trim().url().max(500).nullable().optional(),
-  defaultBranch: z.string().trim().min(1).max(120).optional(),
+  repoUrl: repoUrl.nullable().optional(),
+  defaultBranch: branch.optional(),
   clientPolicy: ClientPolicySchema.optional(),
   chargebackTag: z.string().trim().max(64).nullable().optional(),
 });
@@ -579,13 +597,33 @@ export const GoalCapsSchema = z.object({
 });
 export type GoalCaps = z.infer<typeof GoalCapsSchema>;
 
-export const CreateGoalSchema = z.object({
-  text: z.string().trim().min(3).max(4000),
-  /** Route the goal to a department (its lead plans it). Otherwise Peter picks or keeps it.
-   */
-  departmentId: uuid.nullable().optional(),
-  caps: GoalCapsSchema.partial().default({}),
-});
+export const CreateGoalSchema = z
+  .object({
+    text: z.string().trim().min(3).max(4000),
+    /** Route the goal to a department (its lead plans it). Otherwise Peter picks or keeps it.
+     */
+    departmentId: uuid.nullable().optional(),
+    /**
+     * A project that exists, for the goal's tasks to go into instead of a new one. It stays as it is: its
+     * name, goal text, repository and branch.
+     */
+    projectId: uuid.nullable().optional(),
+    /**
+     * The repository of the project the goal opens, and the branch its pull requests go to (main when
+     * none is named). Peter plans changes to code only in a project with a repository.
+     */
+    repoUrl: repoUrl.nullable().optional(),
+    defaultBranch: branch.optional(),
+    caps: GoalCapsSchema.partial().default({}),
+  })
+  .refine((g) => !g.projectId || (!g.repoUrl && !g.defaultBranch), {
+    message: "a goal goes into a project that exists or opens one on a repository, not both",
+    path: ["projectId"],
+  })
+  .refine((g) => g.repoUrl || !g.defaultBranch, {
+    message: "a branch belongs to a repository: name the repository too",
+    path: ["defaultBranch"],
+  });
 /** Change a goal's caps after creation. Explicit, no defaults: an absent key means "leave it". */
 export const UpdateGoalCapsSchema = z
   .object({

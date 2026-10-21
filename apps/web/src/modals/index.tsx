@@ -424,6 +424,11 @@ export function NewGoalModal({
   const [text, setText] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [tokens, setTokens] = useState("");
+  // Empty: a new project, on the repository named below if any.
+  const [projectId, setProjectId] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
+  const [branch, setBranch] = useState("");
+  const project = data.projects.find((p) => p.id === projectId) ?? null;
   const [phase, setPhase] = useState<"input" | "thinking" | "result">("input");
   const [goal, setGoal] = useState<GoalDetail | null>(null);
   const [answers, setAnswers] = useState<string[]>([]);
@@ -435,6 +440,11 @@ export function NewGoalModal({
       const g = await onCreate({
         text: text.trim(),
         departmentId: departmentId || null,
+        ...(project
+          ? { projectId: project.id }
+          : repoUrl.trim()
+            ? { repoUrl: repoUrl.trim(), ...(branch.trim() ? { defaultBranch: branch.trim() } : {}) }
+            : {}),
         caps: tokens.trim() ? { tokens: Number(tokens) } : {},
       });
       setGoal(g);
@@ -470,6 +480,16 @@ export function NewGoalModal({
             />
           </Field>
           <div className="grid2">
+            <Field label="Project" hint="Its tasks land on that project's board.">
+              <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                <option value="">A new project</option>
+                {data.projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="Department" hint="Its lead plans and watches the goal. Leave it to Peter to route.">
               <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
                 <option value="">Let Peter route it</option>
@@ -480,6 +500,44 @@ export function NewGoalModal({
                 ))}
               </select>
             </Field>
+          </div>
+          {project ? (
+            <span className="hint">
+              {project.repoUrl ? (
+                <>
+                  {project.name} works on <span className="mono">{project.repoUrl}</span> (
+                  <span className="mono">{project.defaultBranch}</span>): Peter plans changes to its code, and
+                  each approved change opens a pull request.
+                </>
+              ) : (
+                `${project.name} has no repository, so the goal delivers files.`
+              )}
+            </span>
+          ) : (
+            <div className="grid2">
+              <Field
+                label="Repository (optional)"
+                hint="Peter plans changes to its code, and each approved change opens a pull request. Without one, the goal delivers files."
+              >
+                <input
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  placeholder="https://github.com/acme/app"
+                  className="mono"
+                />
+              </Field>
+              <Field label="Branch" hint="Where its pull requests go.">
+                <input
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  placeholder="main"
+                  className="mono"
+                  disabled={!repoUrl.trim()}
+                />
+              </Field>
+            </div>
+          )}
+          <div className="grid2">
             <Field label="Token cap (optional)" hint="A lifetime budget for the goal; runs stop at the cap.">
               <input
                 value={tokens}

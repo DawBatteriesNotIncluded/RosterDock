@@ -92,10 +92,9 @@ async function teammateOf(
   );
 }
 
-async function goalOf(deps: PeterDeps, projectId: string): Promise<GoalRow | null> {
-  return (
-    (await deps.db.query<GoalRow>("SELECT * FROM goals WHERE project_id = $1", [projectId])).rows[0] ?? null
-  );
+async function goalOf(deps: PeterDeps, goalId: string | null): Promise<GoalRow | null> {
+  if (!goalId) return null;
+  return (await deps.db.query<GoalRow>("SELECT * FROM goals WHERE id = $1", [goalId])).rows[0] ?? null;
 }
 
 // --- 1. Goals waiting to be planned (a restart mid-plan) ---------------------
@@ -160,7 +159,7 @@ async function replanFailures(deps: PeterDeps, companyId: string, out: PassResul
        AND t.blocker->>'code' NOT IN ('dependencies_unresolved', 'waiting_on_teammate', 'approval_required')
        AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.status IN ('queued', 'running', 'interrupted'))
        AND EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.kind = 'task' AND r.status IN ('failed', 'blocked'))
-       AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.project_id = t.project_id AND g.status IN ('stopped', 'done'))
+       AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = t.goal_id AND g.status IN ('stopped', 'done'))
      ORDER BY t.updated_at LIMIT 20`,
     [companyId],
   );
@@ -209,7 +208,7 @@ async function replanRejections(deps: PeterDeps, companyId: string, out: PassRes
        AND t.blocker->>'code' = 'approval_required' AND a.status = 'rejected'
        AND NOT EXISTS (SELECT 1 FROM approvals p WHERE p.task_id = t.id AND p.status = 'pending')
        AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.status IN ('queued', 'running', 'interrupted'))
-       AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.project_id = t.project_id AND g.status IN ('stopped', 'done'))
+       AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = t.goal_id AND g.status IN ('stopped', 'done'))
      ORDER BY t.updated_at LIMIT 20`,
     [companyId],
   );
@@ -238,7 +237,7 @@ async function replanTask(
 ): Promise<void> {
   const manager = await actorFor(deps, companyId, task);
   if (!manager) return;
-  const goal = await goalOf(deps, task.project_id);
+  const goal = await goalOf(deps, task.goal_id);
   const actor: ActorRef = { kind: "teammate", id: manager.id };
   if (task.replans >= MAX_REPLANS) {
     await escalateTask(
@@ -355,13 +354,13 @@ async function tendReviews(deps: PeterDeps, companyId: string, out: PassResult):
     task_status: string;
     department_id: string | null;
     assignee_id: string | null;
-    project_id: string;
+    goal_id: string | null;
     number: number;
     title: string;
     live: number;
     restarted: boolean;
   }>(
-    `SELECT r.id, r.task_id, r.round, rt.name AS reviewer_name, t.status AS task_status, t.department_id, t.assignee_id, t.project_id, t.number, t.title,
+    `SELECT r.id, r.task_id, r.round, rt.name AS reviewer_name, t.status AS task_status, t.department_id, t.assignee_id, t.goal_id, t.number, t.title,
        (SELECT count(*)::int FROM runs x WHERE x.task_id = t.id AND x.status IN ('queued', 'running', 'interrupted')) AS live,
        EXISTS (SELECT 1 FROM runs x WHERE x.task_id = t.id AND x.kind = 'task'
                AND x.created_at >= COALESCE(r.decided_at, r.updated_at)) AS restarted
@@ -373,7 +372,7 @@ async function tendReviews(deps: PeterDeps, companyId: string, out: PassResult):
   for (const r of sentBack.rows) {
     const manager = await actorFor(deps, companyId, r);
     if (!manager) continue;
-    const goal = await goalOf(deps, r.project_id);
+    const goal = await goalOf(deps, r.goal_id);
     if (goal && (goal.status === "stopped" || goal.status === "done")) continue;
     // Someone is on it: the author restarted, or a person asked for another round.
     if (r.live > 0 || r.task_status === "doing") continue;
@@ -465,8 +464,8 @@ async function rebalance(deps: PeterDeps, companyId: string, out: PassResult): P
 async function closeGoals(deps: PeterDeps, companyId: string, out: PassResult): Promise<void> {
   const done = await deps.db.query<GoalRow>(
     `SELECT g.* FROM goals g WHERE g.company_id = $1 AND g.status = 'active'
-       AND EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = g.project_id AND t.status = 'done')
-       AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = g.project_id AND t.status NOT IN ('done', 'cancelled'))`,
+       AND EXISTS (SELECT 1 FROM tasks t WHERE t.goal_id = g.id AND t.status = 'done')
+       AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.goal_id = g.id AND t.status NOT IN ('done', 'cancelled'))`,
     [companyId],
   );
   for (const goal of done.rows) {
@@ -503,13 +502,13 @@ async function resumeGoals(deps: PeterDeps, companyId: string, out: PassResult):
   const rows = await deps.db.query<GoalRow>(
     `SELECT g.* FROM goals g WHERE g.company_id = $1 AND g.status = 'needs_you'
        AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(coalesce(g.questions, '[]'::jsonb)) q WHERE q->>'answer' IS NULL)
-       AND EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = g.project_id)
-       AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = g.project_id AND t.status = 'blocked'
+       AND EXISTS (SELECT 1 FROM tasks t WHERE t.goal_id = g.id)
+       AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.goal_id = g.id AND t.status = 'blocked'
          AND t.blocker->>'code' NOT IN ('dependencies_unresolved', 'waiting_on_teammate')
          AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.task_id = t.id AND a.status = 'pending')
          AND NOT EXISTS (${live}))
        AND NOT EXISTS (SELECT 1 FROM reviews r JOIN tasks t ON t.id = r.task_id
-         WHERE t.project_id = g.project_id AND r.status = 'changes_requested' AND r.round >= $2
+         WHERE t.goal_id = g.id AND r.status = 'changes_requested' AND r.round >= $2
            AND t.status NOT IN ('done', 'doing') AND NOT EXISTS (${live}))`,
     [companyId, MAX_REVIEW_ROUNDS],
   );

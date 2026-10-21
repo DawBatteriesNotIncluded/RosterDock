@@ -34,7 +34,7 @@ export function recordedRequest(model: string) {
       mayAsk: false,
       maxTasks: MAX_PLAN_TASKS,
       departmentId: null,
-      repoUrl: null,
+      repo: null,
     }),
     schema: PlanSchema,
   };

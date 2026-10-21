@@ -36,9 +36,9 @@ export function goalTone(goal: Goal, tasks: Task[]): "ok" | "warn" | "info" | "b
   return "muted";
 }
 
-/** Tasks of the goal's project: done, open, whether one is blocked, and what was cancelled (not in the total). */
+/** The goal's tasks: done, open, whether one is blocked, and what was cancelled (not in the total). */
 export function goalProgress(goal: Goal, tasks: Task[]) {
-  const mine = tasks.filter((t) => t.projectId === goal.projectId);
+  const mine = tasks.filter((t) => t.goalId === goal.id);
   const cancelled = mine.filter((t) => t.status === "cancelled").length;
   return {
     total: mine.length - cancelled,
@@ -322,6 +322,8 @@ function GoalCard({
     ),
   ];
   const dept = goal.departmentId ? data.departments.find((d) => d.id === goal.departmentId) : null;
+  // A goal that went into a project that existed says which; one that opened its project is named after it.
+  const joined = goal.openedProject ? null : data.projects.find((p) => p.id === goal.projectId);
   const tone = goalTone(goal, progress.tasks);
   return (
     <div className="card goal-card">
@@ -332,6 +334,7 @@ function GoalCard({
         <Pill tone={tone}>{tone === "ok" ? "Live" : GOAL_LABEL[goal.status]}</Pill>
       </div>
       <span className="text-[12px] text-muted">
+        {joined ? `In ${joined.name} · ` : ""}
         {dept ? `${dept.name} · ` : ""}
         {progress.total
           ? `${progress.done} of ${progress.total} tasks done${progress.working ? ` · ${progress.working} working` : ""}${progress.blocked ? ` · ${progress.blocked} blocked` : ""}${progress.cancelled ? ` · ${progress.cancelled} cancelled` : ""}`
