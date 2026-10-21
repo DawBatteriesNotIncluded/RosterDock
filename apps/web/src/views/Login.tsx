@@ -102,7 +102,7 @@ export function LoginView({
               />
             </Field>
             <Field label="Name" hint="Shown on tasks and messages you write.">
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Daniel" />
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Alex" />
             </Field>
             <Button variant="primary" type="submit" disabled={busy || !email.trim()} className="block">
               Sign in
