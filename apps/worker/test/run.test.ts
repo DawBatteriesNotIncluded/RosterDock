@@ -121,7 +121,7 @@ function deps(board: FakeBoard, overrides: Partial<RunDeps> = {}): RunDeps {
     heartbeatMs: 50,
     engineEnv: {},
     boardUrl: "http://board.test",
-    gitToken: null,
+    gitCredential: null,
     repoTests: null,
     shutdown: new AbortController().signal,
     log: { info: () => {}, warn: () => {} },

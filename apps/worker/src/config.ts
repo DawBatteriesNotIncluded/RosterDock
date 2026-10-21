@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { otlpHeaders, otlpTracesEndpoint, queueNameForPool, type OtlpTarget } from "@rosterdock/shared";
+import type { GitCredential } from "./workspace.js";
 
 export interface WorkerConfig {
   databaseUrl: string;
@@ -16,7 +17,8 @@ export interface WorkerConfig {
   codexSandbox: string;
   /** Env var NAMES passed through to engines. Values never appear in logs or the board. */
   passEnvNames: string[];
-  gitToken: string | null;
+  /** The git token (ROSTERDOCK_GIT_TOKEN) and the hosts it is sent to (ROSTERDOCK_GIT_TOKEN_HOSTS). Null: no token. */
+  gitCredential: GitCredential | null;
   /** Run the repository's own test script after the diff is captured; the result is a review check. */
   runRepoTests: boolean;
   testTimeoutMs: number;
@@ -55,6 +57,25 @@ function wholeNumber(
   return n;
 }
 
+/** A host name, lower case, with a port where it is not 443: what a clone URL's host is compared with. */
+const GIT_HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/;
+
+/**
+ * The git token and the hosts it is for: github.com unless ROSTERDOCK_GIT_TOKEN_HOSTS names others. A clone
+ * from any other host gets no token. A URL or a pattern there is refused, not guessed at.
+ */
+function gitCredential(env: NodeJS.ProcessEnv): GitCredential | null {
+  const token = env.ROSTERDOCK_GIT_TOKEN?.trim();
+  if (!token) return null;
+  const raw = env.ROSTERDOCK_GIT_TOKEN_HOSTS?.trim() || "github.com";
+  const hosts = raw.split(",").map((h) => h.trim().toLowerCase().replace(/:443$/, ""));
+  if (!hosts.every((h) => GIT_HOST_RE.test(h)))
+    throw new Error(
+      `ROSTERDOCK_GIT_TOKEN_HOSTS names hosts, comma-separated (github.com,git.example.com:8443), not "${raw}"`,
+    );
+  return { token, hosts };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -83,7 +104,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
-    gitToken: env.ROSTERDOCK_GIT_TOKEN?.trim() || null,
+    gitCredential: gitCredential(env),
     runRepoTests: env.ROSTERDOCK_RUN_REPO_TESTS !== "0" && env.ROSTERDOCK_RUN_REPO_TESTS !== "false",
     testTimeoutMs: wholeNumber(env, "ROSTERDOCK_TEST_TIMEOUT_MS", 10 * 60_000, 1000),
     startAttempts: wholeNumber(env, "ROSTERDOCK_START_ATTEMPTS", 60, 1),

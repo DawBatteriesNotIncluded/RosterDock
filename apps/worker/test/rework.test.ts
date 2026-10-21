@@ -183,7 +183,7 @@ function deps(board: BoardClient, engine: EngineAdapter, name: string): RunDeps 
     heartbeatMs: 10_000,
     engineEnv: {},
     boardUrl: "http://board.test",
-    gitToken: null,
+    gitCredential: null,
     repoTests: null,
     shutdown: new AbortController().signal,
     log: { info: () => {}, warn: () => {} },

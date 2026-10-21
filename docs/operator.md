@@ -92,8 +92,10 @@ own issue or pull request 12.
 - **"runs on opencode, which is not available"**: OpenCode has no worker yet, so the board starts no run on it
   and the pickers no longer offer it. Pick another engine in the teammate's editor.
 - **Failed with "git clone failed"**: the project's repository URL or branch, or the worker's git token
-  (`worker.gitSecret`). A clone that moves under 1 KB a second for a minute gives up, and the run's time
-  limit counts from the start of the clone.
+  (`worker.gitSecret`). The token goes only to the hosts in `worker.gitSecret.hosts` (github.com unless you
+  list others), so a private repository on GitLab or GitHub Enterprise Server needs its host listed there.
+  A clone that moves under 1 KB a second for a minute gives up, and the run's time limit counts from the
+  start of the clone.
 - **The board was down when a run finished.** The worker retries the report for about five minutes,
   heartbeating meanwhile, then leaves the run to pg-boss's retry, which runs it again. A report the board
   refuses outright is replaced by a failed run that says why.
@@ -172,6 +174,7 @@ setting with no value of its own from `board.extraEnv`. The ones an operator cha
 | Worker: `ROSTERDOCK_WORKER_POOL`             | Which queue this fleet consumes.                                                                                                                                                                                                                                                                                                                                       |
 | Worker: `ROSTERDOCK_HEARTBEAT_MS`            | How often a running run tells the board it is alive (15000). Keep it well under `ROSTERDOCK_RUN_STALE_AFTER_MS`, or the board takes the run over (chart `worker.extraEnv`).                                                                                                                                                                                            |
 | Worker: `ROSTERDOCK_ENGINE_PASS_ENV`         | Env var NAMES handed to the engine process.                                                                                                                                                                                                                                                                                                                            |
+| Worker: `ROSTERDOCK_GIT_TOKEN_HOSTS`         | The git hosts the worker's git token (`ROSTERDOCK_GIT_TOKEN`) is sent to, comma-separated, with a port where it is not 443 (chart `worker.gitSecret.hosts`). Default `github.com`; a repository on any other host clones without the token.                                                                                                                            |
 | Worker: `ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`    | The most a Claude Code teammate may use (chart `worker.claudeAllowedTools`, per pool too). A department's sandbox only narrows it: Lighthouse's Research names WebSearch and WebFetch, which run only on a fleet that lists them.                                                                                                                                      |
 | Worker: `ROSTERDOCK_RUN_REPO_TESTS`          | Run the repository's tests after the harvest (a review check). The test script gets PATH, HOME, the temp directory, the locale and `CI=1`: no model key, board token or git token, so a private registry install fails there. `0` turns it off (chart `worker.extraEnv`; `docs/security.md`).                                                                          |
 | Worker: `ROSTERDOCK_POD_METRICS`             | Read the pod's CPU and memory from the metrics API instead of the cgroup (the chart sets it with `worker.podMetrics.enabled`, with the token and the Role it needs).                                                                                                                                                                                                   |

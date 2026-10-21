@@ -9,7 +9,13 @@ import { applyPreviousRound, freshStartBrief, withRework, type ReworkStart } fro
 import { createPhaseRecorder, exportWorkerTrace, type WorkerOtlp } from "./trace.js";
 import { runRepoTests, type Exec } from "./tests.js";
 import { clip, tail } from "./text.js";
-import { cleanupWorkspace, harvestWorkspace, prepareWorkspace, type Workspace } from "./workspace.js";
+import {
+  cleanupWorkspace,
+  harvestWorkspace,
+  prepareWorkspace,
+  type GitCredential,
+  type Workspace,
+} from "./workspace.js";
 
 export interface RunDeps {
   board: BoardClient;
@@ -21,7 +27,8 @@ export interface RunDeps {
   engineEnv: Record<string, string>;
   /** Board URL as the engine process will reach it; the MCP endpoint is derived from it. */
   boardUrl: string;
-  gitToken: string | null;
+  /** The git token and the hosts it is sent to; null clones without one. */
+  gitCredential: GitCredential | null;
   /** Run the repository's tests after the harvest; null skips them. `exec` is for tests of the worker itself. */
   repoTests: { timeoutMs: number; exec?: Exec } | null;
   /** Worker shutdown signal. */
@@ -255,7 +262,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
           payload: { text: spec.project.repoUrl ? "cloning the repository" : "preparing the workspace" },
         });
         phases.begin("workspace", { "rosterdock.repo": !!spec.project.repoUrl });
-        ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitToken, abort.signal);
+        ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitCredential, abort.signal);
         // Rework: the round sent back carries over into the clone, or the run says why it starts clean.
         if (spec.rework && ws.repo) {
           reworkStart = await applyPreviousRound(ws, spec.rework, spec.project.defaultBranch);
