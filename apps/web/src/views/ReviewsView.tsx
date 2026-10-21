@@ -166,6 +166,13 @@ export function ReviewsView(p: ReviewsViewProps) {
       setBusy(false);
     }
   };
+  // A decision carries the note; once it is recorded the note is spent, so the next decision starts empty.
+  // One that fails keeps it.
+  const decide = (send: (summary?: string) => Promise<void>) =>
+    act(async () => {
+      await send(note.trim() || undefined);
+      setNote("");
+    });
 
   const queue = useMemo(() => sortReviews(p.data.reviews), [p.data.reviews]);
   const canDecide = p.role === "owner" || p.role === "admin" || p.role === "reviewer";
@@ -647,14 +654,14 @@ export function ReviewsView(p: ReviewsViewProps) {
                 variant="accent"
                 className="block"
                 disabled={busy || !canDecide || r.taskStatus === "doing"}
-                onClick={() => void act(() => p.onApprove(r.id, note.trim() || undefined))}
+                onClick={() => void decide((summary) => p.onApprove(r.id, summary))}
               >
                 Approve
               </Button>
               <Button
                 className="block"
                 disabled={busy || !canDecide || r.status === "changes_requested"}
-                onClick={() => void act(() => p.onRequestChanges(r.id, note.trim() || undefined))}
+                onClick={() => void decide((summary) => p.onRequestChanges(r.id, summary))}
               >
                 {r.status === "changes_requested" ? "Sent back to the author" : "Request changes"}
               </Button>
