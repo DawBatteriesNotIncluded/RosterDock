@@ -1,4 +1,5 @@
 // executeRun against an in-memory board. No network, no model, no Postgres.
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -11,6 +12,7 @@ import {
   type RunEventInput,
 } from "@rosterdock/shared";
 import { BoardError, type BoardClient, type ClaimedRun } from "../src/board-client.js";
+import { createCodexEngine } from "../src/engines/codex.js";
 import { stubEngine } from "../src/engines/stub.js";
 import type { EngineAdapter } from "../src/engines/types.js";
 import { engineEnvironment, executeRun, fitCompletion, RunInterrupted, type RunDeps } from "../src/run.js";
@@ -44,6 +46,8 @@ function fakeBoard(
     repoUrl?: string;
     sandbox?: ClaimedRun["spec"]["sandbox"];
     limits?: ClaimedRun["spec"]["limits"];
+    engine?: string;
+    department?: ClaimedRun["spec"]["department"];
   } = {},
 ): FakeBoard {
   const claimed: ClaimedRun = {
@@ -51,7 +55,7 @@ function fakeBoard(
       id: "run-1",
       taskId: "task-1",
       teammateId: "cody",
-      engine: "stub",
+      engine: opts.engine ?? "stub",
       model: "stub",
       attempt: 1,
       status: "running",
@@ -64,7 +68,8 @@ function fakeBoard(
       attempt: 1,
       task: { id: "task-1", number: 7, title: "Fixture", description: "", declaredOutputs },
       project: { repoUrl: opts.repoUrl ?? null, defaultBranch: "main", name: "P" },
-      teammate: { name: "Cody", handle: "cody", model: "stub", engine: "stub" },
+      teammate: { name: "Cody", handle: "cody", model: "stub", engine: opts.engine ?? "stub" },
+      ...(opts.department ? { department: opts.department } : {}),
       sandbox: opts.sandbox ?? { allowedTools: null, envNames: null, timeoutSeconds: 3600 },
       ...(opts.limits ? { limits: opts.limits } : {}),
       checkpoint: null,
@@ -399,6 +404,47 @@ describe("sandbox preset", () => {
     expect(outcome.status).toBe("failed");
     expect(slow.completion?.blocker?.code).toBe("timeout");
     expect(slow.completion?.error).toMatch(/time limit/);
+  });
+
+  it("fails a run whose engine cannot keep to the department's tool list before anything starts", async () => {
+    const started = path.join(workRoot, "codex-started");
+    const mark = path.join(workRoot, "codex-mark.mjs");
+    await writeFile(
+      mark,
+      `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(started)}, "yes");`,
+      "utf8",
+    );
+    const board = fakeBoard(PACK(), ["notes.md"], {
+      engine: "codex",
+      department: { name: "Research", writePolicy: "drafts" },
+      // Never cloned: a clone of this missing repository would fail with an error of its own.
+      repoUrl: path.join(workRoot, "missing.git"),
+      sandbox: {
+        allowedTools: ["Read(./**)", "Write(./**)", "WebSearch"],
+        envNames: null,
+        timeoutSeconds: 60,
+      },
+    });
+    const codex = createCodexEngine({
+      bin: process.execPath,
+      sandbox: "workspace-write",
+      prefixArgs: [mark],
+    });
+    const outcome = await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board, { engines: { codex } }));
+    expect(outcome.status).toBe("failed");
+    expect(board.completion).toEqual({
+      status: "failed",
+      error:
+        "Codex cannot keep to Research's tool list. It reads files and runs commands only through its shell, and the list leaves out Bash. Name Bash on its own in the list, or pick another engine in the teammate's editor.",
+      blocker: {
+        code: "adapter_unavailable",
+        what: "Codex cannot keep to Research's tool list.",
+        why: "It reads files and runs commands only through its shell, and the list leaves out Bash.",
+      },
+    });
+    // Nothing started: no workspace, no clone, no engine process.
+    expect(board.shipped.filter((e) => e.type === "step")).toEqual([]);
+    expect(existsSync(started)).toBe(false);
   });
 });
 

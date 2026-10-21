@@ -30,6 +30,8 @@ export interface ClaimedRun {
     task: { id: string; number: number; title: string; description: string; declaredOutputs: string[] };
     project: { repoUrl: string | null; defaultBranch: string; name: string };
     teammate: { name: string; handle: string; model: string; engine: string; effort?: string | null };
+    /** The task's department, whose sandbox this is; null for none. */
+    department?: { name: string; writePolicy: string } | null;
     sandbox: { allowedTools: string[] | null; envNames: string[] | null; timeoutSeconds: number };
     /** The largest artifact the board takes back, in bytes; older boards do not say (the worker assumes the inline limit). */
     limits?: { artifactBytes: number };

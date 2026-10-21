@@ -2,26 +2,77 @@
 // scripts/hermes-codex-worker.mjs and moved to the JSONL event stream so the
 // board shows what the teammate is doing while it runs. The run pack is the
 // entire prompt; nothing from the operator's own Codex setup leaks in
-// (--ignore-user-config, --ephemeral, approvals off, the sandbox from the
-// worker's config; a department's tool list does not apply). Codex's final
-// message is written as the handover, so the board always has one. The board
-// MCP server is passed as config, the run token by env var NAME (never on the
-// command line).
+// (--ignore-user-config, --ephemeral, approvals off, ChatGPT apps and plugins
+// off, the sandbox from the worker's config as the department's tool list
+// narrows it). Codex's final message is written as the handover, so the board
+// always has one. The board MCP server is passed as config, the run token by
+// env var NAME (never on the command line).
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { RunEventInput, RunUsage } from "@rosterdock/shared";
+import {
+  asSentence,
+  codexReach,
+  type CodexReach,
+  type RunEventInput,
+  type RunUsage,
+} from "@rosterdock/shared";
 import { HEADER, startFailure } from "./claude-code.js";
-import type { EngineAdapter, EngineContext, EngineResult } from "./types.js";
+import type { EngineAdapter, EngineContext, EngineResult, EngineRefusal } from "./types.js";
 import { clip, tail } from "../text.js";
+
+/** Codex's sandbox modes for model-generated commands, narrowest first. */
+export const CODEX_SANDBOXES = ["read-only", "workspace-write", "danger-full-access"] as const;
+export type CodexSandbox = (typeof CODEX_SANDBOXES)[number];
 
 export interface CodexOptions {
   bin: string;
-  /** Codex sandbox mode for model-generated commands: workspace-write (default), read-only, danger-full-access. */
-  sandbox: string;
+  /** The widest sandbox for model-generated commands: workspace-write (default), read-only, danger-full-access. */
+  sandbox: CodexSandbox;
   /** Extra leading argv (tests use it to load a stub script with the same Node). */
   prefixArgs?: string[];
+}
+
+/** No department list: nothing narrowed. */
+const UNNARROWED: CodexReach = { write: true, network: true, webSearch: true };
+
+/**
+ * Codex under a department's tool list (shared tool-list.ts), on its own controls in the pinned CLI: the
+ * narrower of the worker's sandbox and what the list allows, and the config that holds it there. A list
+ * without a write tool runs Codex read-only; without WebFetch its commands get no network (workspace-write
+ * keeps none, and danger-full-access comes down to it); without WebSearch, Codex's web search is off. Its
+ * ChatGPT apps and plugins are off whatever the list, so the board's is the only MCP server it has.
+ */
+export function codexControls(
+  worker: CodexSandbox,
+  reach: CodexReach,
+): { sandbox: CodexSandbox; config: string[] } {
+  const allowed: CodexSandbox = !reach.write
+    ? "read-only"
+    : !reach.network
+      ? "workspace-write"
+      : "danger-full-access";
+  return {
+    sandbox: CODEX_SANDBOXES.indexOf(allowed) < CODEX_SANDBOXES.indexOf(worker) ? allowed : worker,
+    config: [
+      "features.apps=false",
+      "features.plugins=false",
+      ...(reach.network ? [] : ["sandbox_workspace_write.network_access=false"]),
+      ...(reach.webSearch ? [] : ['web_search="disabled"']),
+    ],
+  };
+}
+
+/** Why Codex will not run under a department's tool list, in the words the task shows; null when it will. */
+export function codexRefusal(allowedTools: string[] | null, department: string | null): EngineRefusal | null {
+  const reach = codexReach(allowedTools);
+  if (reach.ok) return null;
+  return {
+    what: `Codex cannot keep to ${department ? `${department}'s` : "the department's"} tool list.`,
+    why: asSentence(`${reach.reason.charAt(0).toUpperCase()}${reach.reason.slice(1)}`),
+    fix: "Name Bash on its own in the list, or pick another engine in the teammate's editor.",
+  };
 }
 
 export const RUN_TOKEN_ENV = "ROSTERDOCK_RUN_TOKEN";
@@ -50,15 +101,18 @@ export function buildArgs(
   mcp: { url: string } | null,
   workdir: string,
   effort?: string | null,
+  reach: CodexReach = UNNARROWED,
 ): string[] {
+  const controls = codexControls(opts.sandbox, reach);
   return [
     ...(opts.prefixArgs ?? []),
     "exec",
     "--json",
     "--sandbox",
-    opts.sandbox,
+    controls.sandbox,
     "-c",
     'approval_policy="never"',
+    ...controls.config.flatMap((c) => ["-c", c]),
     "--skip-git-repo-check",
     "--ephemeral",
     "--ignore-user-config",
@@ -236,18 +290,35 @@ export function parseCodexStream(text: string): ParsedCodexStream {
 export function createCodexEngine(opts: CodexOptions): EngineAdapter {
   return {
     id: "codex",
+    refuse: codexRefusal,
     async run(ctx: EngineContext): Promise<EngineResult> {
+      const reach = codexReach(ctx.allowedTools);
+      // The worker asks refuse() before the workspace; nothing that cannot keep to the list starts here either.
+      if (!reach.ok) {
+        const refusal = codexRefusal(ctx.allowedTools, null)!;
+        return {
+          ok: false,
+          exitCode: null,
+          usage: {},
+          resultText: null,
+          error: `${refusal.what} ${refusal.why} ${refusal.fix}`,
+        };
+      }
       const resolved = resolveCodexBin(opts.bin);
-      const args = [...resolved.prefix, ...buildArgs(opts, ctx.model, ctx.mcp, ctx.workdir, ctx.effort)];
+      const args = [
+        ...resolved.prefix,
+        ...buildArgs(opts, ctx.model, ctx.mcp, ctx.workdir, ctx.effort, reach),
+      ];
       const acc = emptyCodexStream();
-      // Codex has no per-tool allowlist to narrow; its sandbox mode is the worker's.
-      if (ctx.allowedTools?.length)
+      if (ctx.allowedTools?.length) {
+        const { sandbox } = codexControls(opts.sandbox, reach);
         ctx.emit({
           type: "stderr",
           payload: {
-            text: `The department's tool list applies to Claude Code teammates; Codex runs in this worker's ${opts.sandbox} sandbox.`,
+            text: `The department's tool list runs Codex in the ${sandbox} sandbox${sandbox === opts.sandbox ? "" : ` (this worker's is ${opts.sandbox})`}: ${sandbox === "danger-full-access" ? "its commands reach the network" : "no network for its commands"}, ${reach.webSearch ? "web search on" : "no web search"}.`,
           },
         });
+      }
       let child: ReturnType<typeof spawn>;
       try {
         child = spawn(resolved.bin, args, {
