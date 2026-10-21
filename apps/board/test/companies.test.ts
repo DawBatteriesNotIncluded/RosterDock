@@ -160,6 +160,17 @@ describe("companies and memberships", () => {
     });
     expect(set.status).toBe(200);
     expect(set.body).toMatchObject({ name: "Globex site", repoUrl: "https://github.com/globex/site.git" });
+
+    // A goal opens a project too: a teammate hands one over, but not with a repository or a branch.
+    for (const settings of [
+      { repoUrl: "https://github.com/globex/site.git" },
+      { defaultBranch: "release" },
+    ]) {
+      const goal = await asCody.post(`${base}/goals`, { text: "Ship the Globex site", ...settings });
+      expect(goal.status, JSON.stringify(settings)).toBe(403);
+      expect(goal.body.error).toMatch(/may not project\.configure/);
+    }
+    expect((await asCody.post(`${base}/goals`, { text: "Ship the Globex site" })).status).toBe(201);
   });
 
   it("keeps the office layout in the company settings: slots, colours and desk cells, and nothing else", async () => {
