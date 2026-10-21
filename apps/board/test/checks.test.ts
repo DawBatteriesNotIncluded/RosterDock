@@ -77,6 +77,55 @@ describe("sources fetched", () => {
     expect(summarisePage("text/plain", "  plain   text\n\n\n more ").excerpt).toBe("plain text\nmore");
   });
 
+  it("reads each character reference once, so escaped markup stays text", () => {
+    const page = summarisePage(
+      "text/html",
+      "<title>A &amp;amp; B</title><p>Write &amp;lt;script&amp;gt; as &lt;script&gt;.</p><p>It&#8217;s &#x41;&#65;; &#0; &bogus;</p>",
+    );
+    expect(page.title).toBe("A &amp; B");
+    expect(page.excerpt).toBe("Write &lt;script&gt; as <script>.\nIt\u2019s AA; &#0; &bogus;");
+  });
+
+  it("ends a script, a style, a title or a comment wherever a browser would", () => {
+    const page = summarisePage(
+      "text/html",
+      [
+        "<html><head><title>Kept</title ><meta charset=utf-8>",
+        "<style>p{}</style\n>",
+        "<body><p>one</p>",
+        "<script>a()</script ><p>two</p>",
+        "<SCRIPT type=module>b()</SCRIPT\t>three",
+        '<script>c()</script foo="bar"><p>four</p>',
+        "<!-- d --!>five<!-->six<!--->seven",
+        "<p>1 < 2 and 3 > 2</p>",
+        "<script>never closed()",
+      ].join(""),
+    );
+    expect(page.title).toBe("Kept");
+    expect(page.excerpt).toBe("one\ntwo three\nfour five six seven\n1 < 2 and 3 > 2");
+  });
+
+  it("reads a hostile page, or a link in a document, in one pass", () => {
+    const half = 512 * 1024; // the most of a page the fetcher reads
+    const pages = [
+      "<".repeat(half),
+      "<script".repeat(half / 7),
+      "<title".repeat(half / 6),
+      "<!--".repeat(half / 4),
+      "<p>" + "\u00a0".repeat(half),
+      "&nbsp;".repeat(half / 6) + "<p>",
+    ];
+    for (const body of pages) {
+      const start = performance.now();
+      summarisePage("text/html", body);
+      expect(performance.now() - start).toBeLessThan(500);
+    }
+    const start = performance.now();
+    const link = `https://example.org/${".".repeat(half)}x`;
+    expect(extractSourceUrls([{ content: `See ${link}.` }])).toEqual([link]);
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
   it("fetches each source once with the guard on every hop, and the check reads the answers", async () => {
     const calls: string[] = [];
     const fake: typeof fetch = async (input, init) => {

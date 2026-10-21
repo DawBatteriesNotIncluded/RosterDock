@@ -34,7 +34,9 @@ export function extractSourceUrls(documents: { content: string | null }[]): stri
   const seen = new Set<string>();
   for (const d of documents) {
     for (const m of (d.content ?? "").matchAll(URL_RE)) {
-      const url = m[0].replace(/[.,;:!?]+$/, "");
+      let end = m[0].length; // without the punctuation of the sentence around it
+      while (end > 0 && ".,;:!?".includes(m[0][end - 1]!)) end--;
+      const url = m[0].slice(0, end);
       seen.add(url);
       if (seen.size >= MAX_SOURCES) return [...seen];
     }
@@ -74,14 +76,106 @@ function isText(contentType: string): boolean {
   );
 }
 
+const ENTITIES: Record<string, string> = { nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+
+/** Character references, each read once: `&amp;lt;` is the text `&lt;`, not `<`. */
 function decodeEntities(s: string): string {
-  return s
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'");
+  return s.replace(
+    /&(?:(nbsp|amp|lt|gt|quot|apos)|#(\d{1,7})|#x([\da-f]{1,6}));/gi,
+    (ref: string, name?: string, dec?: string, hex?: string) => {
+      if (name) return ENTITIES[name.toLowerCase()]!;
+      const code = dec ? Number(dec) : parseInt(hex!, 16);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ref;
+    },
+  );
+}
+
+// Elements whose content is not the page's text. The title is read on its own. The rest of a
+// page's head is tags, and `</head>` is optional, so the head is not skipped as one block.
+const SKIPPED = ["title", "script", "style"] as const;
+type Skipped = (typeof SKIPPED)[number];
+// An end tag is the name followed by whitespace, a slash or `>`: `</script >` ends a script too.
+const END_TAG = Object.fromEntries(SKIPPED.map((n) => [n, new RegExp(`</${n}[\\s/>]`, "gi")])) as Record<
+  Skipped,
+  RegExp
+>;
+const BLOCKS = new Set([
+  "br",
+  "p",
+  "div",
+  "li",
+  "tr",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "section",
+  "article",
+]);
+const TAG_START = /[a-z/!?]/i;
+const TAG_NAME = /\/?([a-z][^\s/>]*)/iy;
+// A comment ends at `-->`, or at `--!>` as browsers also accept; `<!-->` is an empty one.
+const COMMENT_END = /--!?>/g;
+
+/** Where `re` next matches from `from`, or -1. */
+function searchFrom(re: RegExp, s: string, from: number): number {
+  re.lastIndex = from;
+  return re.exec(s)?.index ?? -1;
+}
+
+function pageTitle(html: string): string | null {
+  const open = /<title[\s/>]/i.exec(html);
+  if (!open) return null;
+  const gt = html.indexOf(">", open.index);
+  const close = gt < 0 ? -1 : searchFrom(END_TAG.title, html, gt + 1);
+  return close < 0 ? null : html.slice(gt + 1, close).trim() || null;
+}
+
+/**
+ * The text of a page with its markup dropped. One pass with no backtracking: the page is not ours,
+ * and a regular expression that backtracks can be made to take minutes on half a megabyte of it.
+ * What is left over is never rendered as HTML; it only has to read well.
+ */
+function htmlToText(html: string): string {
+  let out = "";
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    if (lt < 0) {
+      out += html.slice(i);
+      break;
+    }
+    out += html.slice(i, lt);
+    const next = html[lt + 1] ?? "";
+    if (html.startsWith("<!--", lt)) {
+      const end = searchFrom(COMMENT_END, html, lt + 2);
+      if (end < 0) break;
+      out += " ";
+      i = COMMENT_END.lastIndex;
+      continue;
+    }
+    if (!TAG_START.test(next)) {
+      out += "<"; // `a < b` is text, not a tag
+      i = lt + 1;
+      continue;
+    }
+    const gt = html.indexOf(">", lt + 1);
+    if (gt < 0) break; // a tag the page never closes: nothing after it is text
+    i = gt + 1;
+    TAG_NAME.lastIndex = lt + 1;
+    const name = TAG_NAME.exec(html)?.[1]?.toLowerCase() ?? "";
+    const closing = next === "/";
+    if (!closing && (SKIPPED as readonly string[]).includes(name)) {
+      const end = searchFrom(END_TAG[name as Skipped], html, gt + 1);
+      const endGt = end < 0 ? -1 : html.indexOf(">", end);
+      if (endGt < 0) break;
+      i = endGt + 1;
+    }
+    out += !closing && BLOCKS.has(name) ? "\n" : " ";
+  }
+  return out;
 }
 
 /** The page's title and its text without markup, scripts or styles, collapsed and capped. */
@@ -91,23 +185,11 @@ export function summarisePage(contentType: string, body: string): { title: strin
     type === "text/html" ||
     type === "application/xhtml+xml" ||
     /<(?:html|body|p|div)[\s>]/i.test(body.slice(0, 4000));
-  let title: string | null = null;
-  let text = body;
-  if (looksHtml) {
-    title = /<title[^>]*>([^<]*)<\/title>/i.exec(body)?.[1]?.trim() || null;
-    text = body
-      .replace(/<head[\s\S]*?<\/head>/gi, " ")
-      .replace(/<title[\s\S]*?<\/title>/gi, " ")
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<!--[\s\S]*?-->/g, " ")
-      .replace(/<(?:br|p|div|li|tr|h[1-6]|section|article)[^>]*>/gi, "\n")
-      .replace(/<[^>]+>/g, " ");
-    text = decodeEntities(text);
-  }
+  const title = looksHtml ? pageTitle(body) : null;
+  const text = looksHtml ? decodeEntities(htmlToText(body)) : body;
+  // A run of whitespace is one space, or one line break when it holds one.
   const excerpt = text
-    .replace(/[ \t\r\f]+/g, " ")
-    .replace(/\s*\n\s*/g, "\n")
+    .replace(/\s+/g, (ws) => (ws.includes("\n") ? "\n" : " "))
     .trim()
     .slice(0, MAX_EXCERPT_CHARS);
   return { title: title ? decodeEntities(title).replace(/\s+/g, " ").slice(0, 200) : null, excerpt };
