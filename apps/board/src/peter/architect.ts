@@ -9,6 +9,7 @@
 
 import { z } from "zod";
 import { DEFAULT_MODEL, handleFor, WRITE_POLICIES, type ActorRef } from "@rosterdock/shared";
+import { recordPlanningUsage } from "../budgets/usage.js";
 import type { Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate } from "../mutate.js";
@@ -391,6 +392,14 @@ export async function proposeOrg(deps: PeterDeps, companyId: string, brief: stri
         user: `The owner asks:\n${brief}\n\nPropose the departments to add, at most ${MAX_DRAFT_DEPARTMENTS}.`,
         schema: OrgProposalSchema,
         trace: { purpose: "org", companyId },
+      });
+      // Costs and budgets count the call under the manager; the draft keeps its own total.
+      await recordPlanningUsage(deps.db, {
+        companyId,
+        teammateId: manager.id,
+        purpose: "org",
+        model: result.model || manager.model,
+        usage: result.usage,
       });
       usage = result.usage;
       if (result.output) {

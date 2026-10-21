@@ -45,7 +45,8 @@ export function registerBudgetRoutes(app: FastifyInstance, db: Db): void {
     return costReport(db, req.companyId, window);
   });
 
-  // Every run's usage as CSV, for a window (day, week, month from now) or a calendar month (YYYY-MM).
+  // Every run's usage, and every manager's planning call, as CSV, for a window (day, week, month from now)
+  // or a calendar month (YYYY-MM).
   app.get(
     "/api/companies/:companyId/costs/export.csv",
     { config: { action: "company.read" } },

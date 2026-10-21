@@ -5,10 +5,13 @@
 // window. Both are computed so the page can show "if billed the other way".
 // Money is computed from the price table as it stands now, so a price set
 // after a run still prices it; the run itself keeps the cost at completion.
+// A manager's own model calls (planning) count with the runs: under the
+// manager, the model that answered, and the project and department they served.
 
 import type { BudgetWindow } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
 import { costFor, usageModel, type ModelPrice } from "./cost.js";
+import { USAGE_ROWS } from "./usage.js";
 
 export interface TokenTotals {
   input: number;
@@ -20,9 +23,11 @@ export interface TokenTotals {
 
 export interface CostLine {
   tokens: TokenTotals;
-  /** Per-token cost in minor units; null when no run in the line had a price. */
+  /** Per-token cost in minor units; null when nothing in the line had a price. */
   costMinorUnits: number | null;
   runs: number;
+  /** A manager's own model calls in the line (planning a goal, a re-plan note, an org proposal). */
+  calls: number;
 }
 
 export interface CostReport {
@@ -62,7 +67,8 @@ const WINDOW_DAYS: Record<BudgetWindow, number> = { day: 1, week: 7, month: 30.4
 
 interface UsageRow {
   teammate_id: string;
-  project_id: string;
+  /** Null for a call that served no project (an org proposal). */
+  project_id: string | null;
   department_id: string | null;
   model: string;
   input_tokens: string;
@@ -70,6 +76,7 @@ interface UsageRow {
   cache_read_tokens: string;
   cache_write_tokens: string;
   runs: string;
+  calls: string;
 }
 
 function emptyTotals(): TokenTotals {
@@ -89,10 +96,11 @@ function addUsage(line: CostLine, r: UsageRow, price: ModelPrice | null): void {
   const cost = costFor({ inputTokens: i, outputTokens: o, cacheReadTokens: cr, cacheWriteTokens: cw }, price);
   if (cost !== null) line.costMinorUnits = (line.costMinorUnits ?? 0) + cost;
   line.runs += Number(r.runs);
+  line.calls += Number(r.calls);
 }
 
 function line<T>(extra: T): CostLine & T {
-  return { tokens: emptyTotals(), costMinorUnits: null, runs: 0, ...extra };
+  return { tokens: emptyTotals(), costMinorUnits: null, runs: 0, calls: 0, ...extra };
 }
 
 export async function costReport(
@@ -118,8 +126,8 @@ export async function costReport(
     `SELECT teammate_id, project_id, department_id, model,
             sum(input_tokens)::text AS input_tokens, sum(output_tokens)::text AS output_tokens,
             sum(cache_read_tokens)::text AS cache_read_tokens, sum(cache_write_tokens)::text AS cache_write_tokens,
-            count(*)::text AS runs
-     FROM run_usage WHERE company_id = $1 AND created_at >= $2 AND created_at < $3
+            sum(runs)::text AS runs, sum(calls)::text AS calls
+     FROM ${USAGE_ROWS} u WHERE company_id = $1 AND created_at >= $2 AND created_at < $3
      GROUP BY teammate_id, project_id, department_id, model`,
     [companyId, bounds.from, bounds.to],
   );
@@ -181,8 +189,8 @@ export async function costReport(
             '' AS teammate_id, '' AS project_id, NULL AS department_id,
             sum(input_tokens)::text AS input_tokens, sum(output_tokens)::text AS output_tokens,
             sum(cache_read_tokens)::text AS cache_read_tokens, sum(cache_write_tokens)::text AS cache_write_tokens,
-            count(*)::text AS runs
-     FROM run_usage WHERE company_id = $1 AND created_at >= now() - interval '14 days'
+            sum(runs)::text AS runs, sum(calls)::text AS calls
+     FROM ${USAGE_ROWS} u WHERE company_id = $1 AND created_at >= now() - interval '14 days'
      GROUP BY 1, 2 ORDER BY 1`,
     [companyId],
   );
@@ -277,7 +285,7 @@ export async function costReport(
       addUsage(none, r, price);
       byDepartment.set(null, none);
     }
-    const project = byProject.get(r.project_id);
+    const project = r.project_id ? byProject.get(r.project_id) : undefined;
     if (project) addUsage(project, r, price);
     let model = byModel.get(r.model);
     if (!model) {

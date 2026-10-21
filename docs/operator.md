@@ -40,7 +40,12 @@ board, Postgres and, by default, public HTTPS for the model API and the git host
   Code run that is stopped or hits its time limit counts what its messages reported (the output of the
   last one may be short); Codex reports tokens only at the end, so a stopped Codex run counts none, and
   its run log says so. A run on the stub engine counts under the stub, whatever model its teammate names:
-  it called none, so it has no price.
+  it called none, so it has no price. Peter's own model calls (a goal's plan, a re-plan note, an org
+  proposal) count like runs: under Peter, or the department's lead who made the call, the model that
+  answered, and the project, department and goal they served when made; priced from the same table, a
+  line each in the usage CSV (`kind` plan, re-plan or org proposal, beside run), and against budgets,
+  which they also alert. A spent budget stops runs at dispatch, not his planning. On upgrade, what goals
+  and org proposals had already spent planning is carried over, dated when each goal was planned.
 - **Drift.** A teammate whose runs suddenly cost or take far more than their own usual, or whose work is
   sent back far more often, raises one alert per day: in Activity, in the notifications, on their page.
   Nothing stops; open their recent runs and reviews and decide. What counts as "far more" is the
