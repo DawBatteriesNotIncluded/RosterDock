@@ -63,6 +63,18 @@ describe("request schemas", () => {
       expect(CreateProjectSchema.safeParse({ name: "App", repoUrl }).success).toBe(false);
       expect(UpdateProjectSchema.safeParse({ repoUrl }).success).toBe(false);
     }
+    // A goal goes into a project that exists, or opens one on a repository; not both.
+    expect(CreateGoalSchema.parse({ text: "Fix the export", projectId: id }).projectId).toBe(id);
+    expect(
+      CreateGoalSchema.safeParse({
+        text: "Fix the export",
+        projectId: id,
+        repoUrl: "https://github.com/acme/app",
+      }).success,
+    ).toBe(false);
+    expect(
+      CreateGoalSchema.safeParse({ text: "Fix the export", projectId: id, defaultBranch: "develop" }).success,
+    ).toBe(false);
     // The user on an ssh URL is who git signs in as, not a secret.
     expect(
       CreateProjectSchema.safeParse({ name: "App", repoUrl: "ssh://git@example.com/acme/app.git" }).success,

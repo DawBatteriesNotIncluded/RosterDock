@@ -472,6 +472,8 @@ export interface Goal {
   /** Why the goal needs a person, while it does. */
   attention: string | null;
   planner: string | null;
+  /** The goal opened its project; false: it went into a project that existed. */
+  openedProject: boolean;
   createdBy: ActorRef;
   plannedAt: string | null;
   closedAt: string | null;

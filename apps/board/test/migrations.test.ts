@@ -1,6 +1,6 @@
 // Migrations that move data, run on rows written in the shape before them: the
 // database is migrated up to the one under test, seeded with plain SQL, then
-// migrated the rest of the way. No board, no network.
+// migrated through it. No board, no network.
 import { copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,15 +11,16 @@ import { createTestDb, type TestDb } from "./helpers.js";
 
 let testDb: TestDb;
 let pool: pg.Pool;
-let dir: string | null = null;
+const dirs: string[] = [];
 
-/** A directory with the migrations before `name`, to stop there. */
-async function migrationsBefore(name: string): Promise<string> {
-  const before = await mkdtemp(path.join(os.tmpdir(), "rosterdock-migrations-"));
+/** A directory with the migrations before `name`, and `name` too when it says so: where to stop. */
+async function migrationsUpTo(name: string, through: boolean): Promise<string> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-migrations-"));
+  dirs.push(dir);
   for (const file of await readdir(DEFAULT_MIGRATIONS_DIR))
-    if (/^\d{4}_.+\.sql$/.test(file) && file < name)
-      await copyFile(path.join(DEFAULT_MIGRATIONS_DIR, file), path.join(before, file));
-  return before;
+    if (/^\d{4}_.+\.sql$/.test(file) && (file < name || (through && file === name)))
+      await copyFile(path.join(DEFAULT_MIGRATIONS_DIR, file), path.join(dir, file));
+  return dir;
 }
 
 beforeAll(async () => {
@@ -28,14 +29,13 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await pool.end();
-  if (dir) await rm(dir, { recursive: true, force: true });
+  for (const dir of dirs) await rm(dir, { recursive: true, force: true });
   await testDb.drop();
 });
 
 describe("0033_task_goal", () => {
   it("gives every task in a goal's project that goal, and moves a goal's token cap onto the goal", async () => {
-    dir = await migrationsBefore("0033_task_goal.sql");
-    await migrate(pool, dir);
+    await migrate(pool, await migrationsUpTo("0033_task_goal.sql", false));
     const one = async <T extends pg.QueryResultRow>(sql: string, params: unknown[] = []) =>
       (await pool.query<T>(sql, params)).rows[0]!;
     const company = (await one<{ id: string }>("INSERT INTO companies (name) VALUES ('Old') RETURNING id"))
@@ -83,7 +83,9 @@ describe("0033_task_goal", () => {
       [company, first, byHand],
     );
 
-    expect((await migrate(pool)).applied).toEqual(["0033_task_goal.sql"]);
+    expect((await migrate(pool, await migrationsUpTo("0033_task_goal.sql", true))).applied).toEqual([
+      "0033_task_goal.sql",
+    ]);
 
     const goalOf = async (id: string) =>
       (await one<{ goal_id: string | null }>("SELECT goal_id FROM tasks WHERE id = $1", [id])).goal_id;

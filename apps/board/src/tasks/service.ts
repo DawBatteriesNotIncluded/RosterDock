@@ -220,7 +220,10 @@ async function goalOfNewTask(
     ]);
     if (parent.rows[0]?.goal_id) return parent.rows[0].goal_id;
   }
-  const opened = await db.query<{ id: string }>("SELECT id FROM goals WHERE project_id = $1", [projectId]);
+  const opened = await db.query<{ id: string }>(
+    "SELECT id FROM goals WHERE project_id = $1 AND opened_project",
+    [projectId],
+  );
   return opened.rows[0]?.id ?? null;
 }
 

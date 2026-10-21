@@ -460,109 +460,252 @@ describe("goals by model (recorded responses)", () => {
   });
 });
 
+const BASE_SHA = "0253df7ed00df5f84097e01499f26e4be2f011cf";
+
+/** The assignee's queued run delivers files (in a checkout of the branch when there is one) and completes. */
+async function deliver(
+  api: Api,
+  base: string,
+  task: { id: string },
+  files: Record<string, string>,
+  usage: { inputTokens: number; outputTokens: number } = { inputTokens: 0, outputTokens: 0 },
+) {
+  const run = (await api.get(`${base}/tasks/${task.id}/runs`)).body.find((r: any) => r.status === "queued");
+  expect(run).toBeTruthy();
+  const { token, api: asRun } = await workerClaim(board, run.id);
+  for (const [path, content] of Object.entries(files))
+    await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
+      path,
+      kind: path.endsWith(".md") ? "document" : "file",
+      content,
+    });
+  await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
+    path: "changes.diff",
+    kind: "diff",
+    content: Object.entries(files)
+      .map(([path, content]) => renderNewFileDiff(path, content))
+      .join(""),
+  });
+  await workerComplete(board, token, run.id, {
+    status: "completed",
+    summary: "Delivered.",
+    baseSha: BASE_SHA,
+    usage,
+  });
+  return (await api.get(`${base}/tasks/${task.id}/review`)).body;
+}
+
 describe("a goal on a repository (the M4 demo)", () => {
-  const BASE_SHA = "0253df7ed00df5f84097e01499f26e4be2f011cf";
-
-  it("one typed goal ends in a reviewed pull request, and only its build work opens one", async () => {
-    const { api, base, companyId } = await seedCompany(board, "g-pr@example.com");
-    const { verifier } = await team(api, base);
-    const created = await api.post(`${base}/goals`, {
-      text: "Add a weekly digest of new deals to the app.",
-      repoUrl: "https://github.com/acme/gtm-automations.git",
-      defaultBranch: "develop",
-    });
-    expect(created.status).toBe(201);
-    const goal = created.body;
-    const [research, requirements, build] = goal.tasks;
-    const deps = {
-      db: board.db,
-      queue: board.queue,
-      hosts: {
-        github: { fetch: github.fetch, token: "ghs_test_token", apiBase: "https://api.github.test" },
-        gitlab: null,
-      },
-    } as unknown as Parameters<typeof approveTool>[0];
-
-    // The assignee's run delivers files in a checkout of the branch; the reviewer teammate approves.
-    const deliverAndApprove = async (task: any, files: Record<string, string>) => {
-      const run = (await api.get(`${base}/tasks/${task.id}/runs`)).body.find(
-        (r: any) => r.status === "queued",
-      );
-      expect(run).toBeTruthy();
-      const { token, api: asRun } = await workerClaim(board, run.id);
-      for (const [path, content] of Object.entries(files))
-        await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
-          path,
-          kind: path.endsWith(".md") ? "document" : "file",
-          content,
-        });
-      await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
-        path: "changes.diff",
-        kind: "diff",
-        content: Object.entries(files)
-          .map(([path, content]) => renderNewFileDiff(path, content))
-          .join(""),
+  for (const existing of [false, true])
+    it(`one typed goal ${existing ? "in a project that exists on a repository" : "that opens its project on a repository"} ends in a reviewed pull request, and only its build work opens one`, async () => {
+      const { api, base, companyId } = await seedCompany(board, `g-pr-${existing}@example.com`);
+      const { verifier } = await team(api, base);
+      const repo = { repoUrl: "https://github.com/acme/gtm-automations.git", defaultBranch: "develop" };
+      const where = existing
+        ? { projectId: (await api.post(`${base}/projects`, { name: "GTM automations", ...repo })).body.id }
+        : repo;
+      const created = await api.post(`${base}/goals`, {
+        text: "Add a weekly digest of new deals to the app.",
+        ...where,
       });
-      await workerComplete(board, token, run.id, {
-        status: "completed",
-        summary: "Delivered.",
-        baseSha: BASE_SHA,
-      });
-      const review = (await api.get(`${base}/tasks/${task.id}/review`)).body;
-      expect(review.reviewer).toMatchObject({ kind: "teammate", id: verifier.id });
-      return approveTool(
-        deps,
-        {
-          companyId,
-          teammateId: verifier.id,
-          teammateName: "Verifier",
-          handle: "verifier",
-          runId: null,
-          taskId: task.id,
+      expect(created.status).toBe(201);
+      const goal = created.body;
+      expect(goal.openedProject).toBe(!existing);
+      const [research, requirements, build] = goal.tasks;
+      const deps = {
+        db: board.db,
+        queue: board.queue,
+        hosts: {
+          github: { fetch: github.fetch, token: "ghs_test_token", apiBase: "https://api.github.test" },
+          gitlab: null,
         },
-        { summary: "Meets the brief." },
-      );
-    };
+      } as unknown as Parameters<typeof approveTool>[0];
 
-    // Research and requirements are documents: approved, Done, and no pull request.
-    const sources = "\n\n# Sources\n\n- https://example.com/deals-api\n";
-    const researched = await deliverAndApprove(research, { "research.md": `# Deals${sources}` });
-    expect(researched).toMatchObject({ status: "approved", taskStatus: "done", pullRequests: [] });
-    await api.post(`${base}/peter/pass`, {});
-    const required = await deliverAndApprove(requirements, {
-      "requirements.md": `# Weekly digest${sources}`,
-    });
-    expect(required.pullRequests).toEqual([]);
+      // The assignee's run delivers; the reviewer teammate approves through its board tool.
+      const deliverAndApprove = async (task: any, files: Record<string, string>) => {
+        const review = await deliver(api, base, task, files);
+        expect(review.reviewer).toMatchObject({ kind: "teammate", id: verifier.id });
+        return approveTool(
+          deps,
+          {
+            companyId,
+            teammateId: verifier.id,
+            teammateName: "Verifier",
+            handle: "verifier",
+            runId: null,
+            taskId: task.id,
+          },
+          { summary: "Meets the brief." },
+        );
+      };
 
-    // The build is the change to the code: its approval opens the pull request to the goal's branch.
-    await api.post(`${base}/peter/pass`, {});
-    github.requests.length = 0;
-    const built = await deliverAndApprove(build, {
-      "src/digest.ts": 'export const digest = (deals: string[]) => deals.join("\\n");\n',
+      // Research and requirements are documents: approved, Done, and no pull request.
+      const sources = "\n\n# Sources\n\n- https://example.com/deals-api\n";
+      const researched = await deliverAndApprove(research, { "research.md": `# Deals${sources}` });
+      expect(researched).toMatchObject({ status: "approved", taskStatus: "done", pullRequests: [] });
+      await api.post(`${base}/peter/pass`, {});
+      const required = await deliverAndApprove(requirements, {
+        "requirements.md": `# Weekly digest${sources}`,
+      });
+      expect(required.pullRequests).toEqual([]);
+
+      // The build is the change to the code: its approval opens the pull request to the branch.
+      await api.post(`${base}/peter/pass`, {});
+      github.requests.length = 0;
+      const built = await deliverAndApprove(build, {
+        "src/digest.ts": 'export const digest = (deals: string[]) => deals.join("\\n");\n',
+      });
+      expect(built.taskStatus).toBe("done");
+      expect(built.pullRequests).toEqual([
+        expect.objectContaining({
+          provider: "github",
+          repo: "acme/gtm-automations",
+          baseBranch: "develop",
+          headBranch: `rosterdock/task-${build.number}`,
+          status: "opened",
+          number: 42,
+        }),
+      ]);
+      const pull = github.requests.find((r) => r.method === "POST" && r.path.endsWith("/pulls"))!.body;
+      expect(pull).toMatchObject({
+        base: "develop",
+        head: `rosterdock/task-${build.number}`,
+        title: `Task ${build.number}: ${build.title}`,
+      });
+      // Every task is Done: the next pass closes the goal, and merging stays with a person.
+      await api.post(`${base}/peter/pass`, {});
+      expect((await api.get(`${base}/goals/${goal.id}`)).body.status).toBe("done");
+      const types = (await api.get(`${base}/events`)).body.map((e: any) => e.type);
+      expect(types.filter((t: string) => t === "pr.opened")).toHaveLength(1);
+      expect(types).toContain("goal.done");
     });
-    expect(built.taskStatus).toBe("done");
-    expect(built.pullRequests).toEqual([
-      expect.objectContaining({
-        provider: "github",
-        repo: "acme/gtm-automations",
-        baseBranch: "develop",
-        headBranch: `rosterdock/task-${build.number}`,
-        status: "opened",
-        number: 42,
-      }),
-    ]);
-    const pull = github.requests.find((r) => r.method === "POST" && r.path.endsWith("/pulls"))!.body;
-    expect(pull).toMatchObject({
-      base: "develop",
-      head: `rosterdock/task-${build.number}`,
-      title: `Task ${build.number}: ${build.title}`,
+});
+
+describe("a goal in a project that exists", () => {
+  it("puts its tasks there and leaves the project, and the work filed by hand in it, alone", async () => {
+    const { api, base } = await seedCompany(board, "g-shared@example.com");
+    const { cody } = await team(api, base);
+    const project = (
+      await api.post(`${base}/projects`, {
+        name: "RosterDock",
+        goal: "The product's own repository.",
+        repoUrl: "https://github.com/acme/rosterdock",
+      })
+    ).body;
+    const byHand = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Fix the typo",
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    expect(byHand.goalId).toBeNull();
+    const res = await api.post(`${base}/goals`, {
+      text: "Add a dark theme.",
+      projectId: project.id,
+      caps: { maxTasks: 3 },
     });
-    // Every task is Done: the next pass closes the goal, and merging stays with a person.
-    await api.post(`${base}/peter/pass`, {});
+    expect(res.status).toBe(201);
+    const goal = res.body;
+    expect(goal).toMatchObject({ projectId: project.id, openedProject: false, status: "active" });
+    // Peter's three tasks fit the goal's cap of three though the project holds other work, and its build
+    // changes the project's repository.
+    expect(goal.tasks.map((t: any) => [t.projectId, t.goalId])).toEqual(Array(3).fill([project.id, goal.id]));
+    expect(goal.tasks[2]).toMatchObject({ workKind: "build", declaredOutputs: [] });
+    // The project keeps its name and goal text; no project opened; the feed says where the goal went.
+    expect((await api.get(`${base}/projects/${project.id}`)).body).toMatchObject({
+      name: "RosterDock",
+      goal: "The product's own repository.",
+    });
+    const events = (await api.get(`${base}/events`)).body;
+    expect(events.filter((e: any) => e.type === "project.created")).toHaveLength(1);
+    expect(events.find((e: any) => e.type === "goal.created").payload).toMatchObject({
+      projectId: project.id,
+      projectName: "RosterDock",
+    });
+    // Its runs read the goal, which the project's own text does not carry.
+    const run = (await api.get(`${base}/tasks/${goal.tasks[0].id}/runs`)).body[0];
+    const { pack } = await workerClaim(board, run.id);
+    expect(pack).toMatch(/## Goal\n[^\n]+\n\nAdd a dark theme\.\n\nOutcome: /);
+    // Work filed by hand afterwards stays outside it; a second goal in the project gets its own tasks.
+    const later = (await api.post(`${base}/tasks`, { projectId: project.id, title: "Bump a dependency" }))
+      .body;
+    expect(later.goalId).toBeNull();
+    const second = (
+      await api.post(`${base}/goals`, { text: "Write the release notes.", projectId: project.id })
+    ).body;
+    expect(second.tasks.length).toBeGreaterThan(0);
+    expect(second.tasks.every((t: any) => t.goalId === second.id)).toBe(true);
+    expect((await api.get(`${base}/goals/${goal.id}`)).body.tasks.map((t: any) => t.id)).toEqual(
+      goal.tasks.map((t: any) => t.id),
+    );
+    // Stopping the first goal cancels its own tasks only.
+    await api.post(`${base}/goals/${goal.id}/stop`, {});
+    const tasks = (await api.get(`${base}/tasks?projectId=${project.id}`)).body as any[];
+    const status = (id: string) => tasks.find((t) => t.id === id).status;
+    expect(goal.tasks.map((t: any) => status(t.id))).toEqual(["cancelled", "cancelled", "cancelled"]);
+    expect([byHand, later, ...second.tasks].some((t: any) => status(t.id) === "cancelled")).toBe(false);
+    // A project in another company is not one to go into; nor are a project and a repository at once.
+    const other = await seedCompany(board, "g-shared-other@example.com");
+    const theirs = await addProject(other.api, other.base, "Theirs");
+    expect((await api.post(`${base}/goals`, { text: "Into theirs.", projectId: theirs.id })).status).toBe(
+      422,
+    );
+    expect(
+      (
+        await api.post(`${base}/goals`, {
+          text: "Both at once.",
+          projectId: project.id,
+          repoUrl: "https://github.com/acme/elsewhere",
+        })
+      ).status,
+    ).toBe(400);
+  });
+
+  it("closes when its own tasks are done, and counts only its own runs against its spend and cap", async () => {
+    const { api, base } = await seedCompany(board, "g-shared-close@example.com");
+    const ricky = await addTeammate(api, base, "Ricky", "researcher");
+    const project = (await api.post(`${base}/projects`, { name: "Shared" })).body;
+    // Work in the project before the goal, open and already spent past what the goal's cap allows.
+    const open = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Still open",
+        assignee: { kind: "teammate", id: ricky.id },
+      })
+    ).body;
+    const run = (await api.post(`${base}/tasks/${open.id}/runs`, {})).body;
+    await board.db.query(
+      `INSERT INTO run_usage (company_id, run_id, task_id, teammate_id, project_id, model, input_tokens, output_tokens)
+       VALUES ($1, $2, $3, $4, $5, 'claude-sonnet-5', 4000, 1000)`,
+      [open.companyId, run.id, open.id, ricky.id, project.id],
+    );
+    await api.post(`${base}/runs/${run.id}/stop`, {});
+    // The goal's one research task starts: the project's spend is not the goal's.
+    const goal = (
+      await api.post(`${base}/goals`, {
+        text: "Write one research note.",
+        projectId: project.id,
+        caps: { tokens: 1000 },
+      })
+    ).body;
+    expect(goal.tasks.map((t: any) => t.status)).toEqual(["doing"]);
+    expect(goal.spend).toMatchObject({ runTokens: 0, tokensCap: 1000 });
+    const review = await deliver(
+      api,
+      base,
+      goal.tasks[0],
+      { "research.md": "# Note\n\n# Sources\n\n- https://example.com/a\n" },
+      { inputTokens: 300, outputTokens: 100 },
+    );
+    expect((await api.get(`${base}/goals/${goal.id}`)).body.spend.runTokens).toBe(400);
+    const budget = (await api.get(`${base}/budgets`)).body.find((b: any) => b.scopeId === goal.id);
+    expect(budget).toMatchObject({ scopeKind: "goal", used: 400, percent: 40 });
+    // Approved: the goal's every task is Done, so it closes with the hand-filed task still open.
+    expect((await api.post(`${base}/reviews/${review.id}/approve`, {})).body.taskStatus).toBe("done");
+    expect((await api.post(`${base}/peter/pass`, {})).body.closed).toEqual([goal.id]);
     expect((await api.get(`${base}/goals/${goal.id}`)).body.status).toBe("done");
-    const types = (await api.get(`${base}/events`)).body.map((e: any) => e.type);
-    expect(types.filter((t: string) => t === "pr.opened")).toHaveLength(1);
-    expect(types).toContain("goal.done");
+    expect((await api.get(`${base}/tasks/${open.id}`)).body.status).not.toBe("done");
   });
 });
 

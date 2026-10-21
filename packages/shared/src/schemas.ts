@@ -604,12 +604,21 @@ export const CreateGoalSchema = z
      */
     departmentId: uuid.nullable().optional(),
     /**
+     * A project that exists, for the goal's tasks to go into instead of a new one. It stays as it is: its
+     * name, goal text, repository and branch.
+     */
+    projectId: uuid.nullable().optional(),
+    /**
      * The repository of the project the goal opens, and the branch its pull requests go to (main when
      * none is named). Peter plans changes to code only in a project with a repository.
      */
     repoUrl: repoUrl.nullable().optional(),
     defaultBranch: branch.optional(),
     caps: GoalCapsSchema.partial().default({}),
+  })
+  .refine((g) => !g.projectId || (!g.repoUrl && !g.defaultBranch), {
+    message: "a goal goes into a project that exists or opens one on a repository, not both",
+    path: ["projectId"],
   })
   .refine((g) => g.repoUrl || !g.defaultBranch, {
     message: "a branch belongs to a repository: name the repository too",

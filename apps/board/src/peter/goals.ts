@@ -70,6 +70,8 @@ export interface GoalRow {
   planning_usage: Partial<ModelUsage> & { calls?: number };
   attention: string | null;
   planner: string | null;
+  /** The goal opened its project (and names it after its plan); false: it went into one that existed. */
+  opened_project: boolean;
   created_by_kind: "user" | "teammate";
   created_by_id: string;
   planned_at: Date | null;
@@ -97,6 +99,7 @@ export function goalToJson(row: GoalRow) {
     },
     attention: row.attention,
     planner: row.planner,
+    openedProject: row.opened_project,
     createdBy: { kind: row.created_by_kind, id: row.created_by_id },
     plannedAt: row.planned_at?.toISOString() ?? null,
     closedAt: row.closed_at?.toISOString() ?? null,
@@ -132,8 +135,8 @@ function shortTitle(text: string): string {
 }
 
 /**
- * Open a project for the goal, on the repository and branch the goal names, and record it as planning. The
- * caller plans it next.
+ * Record the goal as planning, in the project it names or in a project opened for it on the repository and
+ * branch it names. The caller plans it next.
  */
 export async function createGoal(
   deps: PeterDeps,
@@ -142,6 +145,7 @@ export async function createGoal(
   input: {
     text: string;
     departmentId?: string | null;
+    projectId?: string | null;
     repoUrl?: string | null;
     defaultBranch?: string;
     caps?: Partial<GoalCaps>;
@@ -158,22 +162,34 @@ export async function createGoal(
       if (!d.rowCount) throw new HttpError(422, "department is not in this company");
     }
     const title = shortTitle(input.text);
-    const project = (
-      await ctx.client.query<{ id: string; name: string; client: string }>(
-        `INSERT INTO projects (company_id, name, client, goal, repo_url, default_branch)
-         VALUES ($1, $2, 'Internal', $3, $4, $5) RETURNING id, name, client`,
-        [companyId, title, input.text, input.repoUrl ?? null, input.defaultBranch ?? "main"],
-      )
-    ).rows[0]!;
-    await ctx.emit(
-      "project.created",
-      { kind: "project", id: project.id },
-      { name: project.name, client: project.client, fromGoal: true },
-    );
+    let project: { id: string; name: string; client: string };
+    if (input.projectId) {
+      const existing = (
+        await ctx.client.query<{ id: string; name: string; client: string }>(
+          "SELECT id, name, client FROM projects WHERE id = $1 AND company_id = $2",
+          [input.projectId, companyId],
+        )
+      ).rows[0];
+      if (!existing) throw new HttpError(422, "project is not in this company");
+      project = existing;
+    } else {
+      project = (
+        await ctx.client.query<{ id: string; name: string; client: string }>(
+          `INSERT INTO projects (company_id, name, client, goal, repo_url, default_branch)
+           VALUES ($1, $2, 'Internal', $3, $4, $5) RETURNING id, name, client`,
+          [companyId, title, input.text, input.repoUrl ?? null, input.defaultBranch ?? "main"],
+        )
+      ).rows[0]!;
+      await ctx.emit(
+        "project.created",
+        { kind: "project", id: project.id },
+        { name: project.name, client: project.client, fromGoal: true },
+      );
+    }
     const goal = (
       await ctx.client.query<GoalRow>(
-        `INSERT INTO goals (company_id, project_id, department_id, text, title, caps, created_by_kind, created_by_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        `INSERT INTO goals (company_id, project_id, department_id, text, title, caps, created_by_kind, created_by_id, opened_project)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
         [
           companyId,
           project.id,
@@ -183,6 +199,7 @@ export async function createGoal(
           JSON.stringify(caps),
           actor.kind,
           actor.id,
+          !input.projectId,
         ],
       )
     ).rows[0]!;
@@ -192,6 +209,8 @@ export async function createGoal(
       {
         title: goal.title,
         projectId: project.id,
+        // Named when the goal went into a project that existed.
+        projectName: input.projectId ? project.name : null,
         departmentId: goal.department_id,
         preview: input.text.slice(0, 200),
       },
@@ -490,11 +509,13 @@ async function handoff(
     created.push(row);
   }
   const { result } = await mutate(deps.db, goal.company_id, actor, async (ctx) => {
-    await ctx.client.query("UPDATE projects SET name = $2, goal = $3, updated_at = now() WHERE id = $1", [
-      goal.project_id,
-      plan.title,
-      `${goal.text}\n\nOutcome: ${plan.outcome}\nDone when: ${plan.doneDefinition}`,
-    ]);
+    // A project the goal opened takes the plan's title and done definition; one it went into stays as it is.
+    if (goal.opened_project)
+      await ctx.client.query("UPDATE projects SET name = $2, goal = $3, updated_at = now() WHERE id = $1", [
+        goal.project_id,
+        plan.title,
+        `${goal.text}\n\nOutcome: ${plan.outcome}\nDone when: ${plan.doneDefinition}`,
+      ]);
     if (goal.caps.tokens) {
       await ctx.client.query(
         `INSERT INTO budgets (company_id, scope_kind, scope_id, tokens_limit, window_kind) VALUES ($1, 'goal', $2, $3, 'goal')

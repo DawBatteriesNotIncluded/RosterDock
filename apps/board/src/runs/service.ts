@@ -561,6 +561,22 @@ export async function buildRunSpec(
       task.project_id,
     ])
   ).rows[0];
+  // A goal that went into a project that existed is not in the project's own goal text: the pack says it.
+  const goal = task.goal_id
+    ? (
+        await db.query<{
+          title: string;
+          text: string;
+          opened_project: boolean;
+          outcome: string | null;
+          done_definition: string | null;
+        }>(
+          `SELECT title, text, opened_project, plan->>'outcome' AS outcome, plan->>'doneDefinition' AS done_definition
+           FROM goals WHERE id = $1`,
+          [task.goal_id],
+        )
+      ).rows[0]
+    : undefined;
   const teammate = (
     await db.query<{
       id: string;
@@ -736,6 +752,15 @@ export async function buildRunSpec(
       repoUrl: project.repo_url,
       defaultBranch: project.default_branch,
     },
+    goal:
+      goal && !goal.opened_project
+        ? {
+            title: goal.title,
+            text: goal.text,
+            outcome: goal.outcome,
+            doneDefinition: goal.done_definition,
+          }
+        : null,
     teammate: { ...teammate, personaMd: teammate.persona_md, playbooks: teammate.playbooks ?? [] },
     department: department ? { name: department.name, writePolicy: department.write_policy } : null,
     houseStyle: await houseStyleFor(db, run.company_id),

@@ -53,6 +53,11 @@ export interface RunSpec {
     repoUrl: string | null;
     defaultBranch: string;
   };
+  /**
+   * The goal the task serves, when the goal went into a project that existed: a project a goal opened
+   * carries the goal as its own. Older specs have none.
+   */
+  goal?: { title: string; text: string; outcome: string | null; doneDefinition: string | null } | null;
   teammate: {
     id: string;
     name: string;
@@ -351,6 +356,13 @@ export function renderRunPack(spec: RunSpec): string {
     push("No repository. Your working directory starts empty; put every output there.");
   }
   push("");
+  if (spec.goal) {
+    push("## Goal");
+    push(spec.goal.title, "", spec.goal.text.trim());
+    if (spec.goal.outcome) push("", `Outcome: ${spec.goal.outcome}`);
+    if (spec.goal.doneDefinition) push(`Done when: ${spec.goal.doneDefinition}`);
+    push("");
+  }
   if (spec.dependencies.length) {
     push("## Depends on");
     for (const d of spec.dependencies) push(`- #${d.number} ${d.title} (${d.status})`);
