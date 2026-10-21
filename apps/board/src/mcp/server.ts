@@ -201,7 +201,7 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
     "board_list_tools",
     {
       description:
-        "The live systems in your toolbox as they apply to a task: each connection with its mode (read: reads run; ask: reads run and writes are proposed for a person), why it was narrowed, and its tools with a verdict each (run, propose, refuse).",
+        "The live systems in your toolbox as they apply to your task (in a run, the run's own; outside one, a task assigned to you): each connection with its mode (read: reads run; ask: reads run and writes are proposed for a person), why it was narrowed, and its tools with a verdict each (run, propose, refuse).",
       inputSchema: { task: taskRef },
     },
     (input) => listToolsTool(deps, actor, input),
@@ -210,7 +210,7 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
     "board_tool_call",
     {
       description:
-        "Call a tool on a connection (see board_list_tools). A read runs now and returns the answer. A write is never executed by you: give title (what it does, in plain words) and why, and it is proposed for a person to approve; the task then waits, so finish what you can, hand over and stop. Never put credential values in arguments.",
+        "Call a tool on a connection (see board_list_tools), for your task: in a run, the run's own; outside one, a task assigned to you. A read runs now and returns the answer. A write is never executed by you: give title (what it does, in plain words) and why, and it is proposed for a person to approve; the task then waits, so finish what you can, hand over and stop. Never put credential values in arguments.",
       inputSchema: {
         task: taskRef,
         connection: z.string().min(1).max(64),

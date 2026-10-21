@@ -32,6 +32,9 @@ model output on their cluster.
   only some of its tools: the rest are never listed to that teammate and refused if called); the
   department's write policy and the project's client policy tighten it and never widen it. Files import
   grants only on connections the company already has.
+  The department and the client are those of the teammate's own task: in a run, the run's task; outside
+  one, a task assigned to the teammate. A tool call or listing that names any other task is refused, so
+  no task lends its policy to another.
 - **One event stream, per company.** Every mutation appends an event in the same transaction, with the
   actor (a person or a teammate). Activity, the Office, notifications, metrics and traces are projections
   of it. Every row carries `company_id`; every company route goes through one role guard, and every board

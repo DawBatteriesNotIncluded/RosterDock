@@ -427,4 +427,63 @@ describe("the tool broker", () => {
     expect(failed.body.error).toContain("manage_crm_objects on hubspot is switched off by a person");
     expect(mcp.calls).toHaveLength(0);
   });
+
+  it("a call is narrowed by the run's own task, or outside a run by a task of one's own: naming another borrows nothing", async () => {
+    const { api, base } = await seedCompany(board, "br7@example.com");
+    // Cody holds HubSpot at ask, and his task is in Research, which is read only.
+    const { client, cody, project, task } = await setup(api, base, "ask", { writePolicy: "readonly" });
+    const ricky = await addTeammate(api, base, "Ricky");
+    const eng = (
+      await api.post(`${base}/departments`, {
+        name: "Engineering",
+        writePolicy: "ask",
+        memberTeammateIds: [ricky.id],
+      })
+    ).body;
+    const looser = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Ship the list",
+        assignee: { kind: "teammate", id: ricky.id },
+        departmentId: eng.id,
+      })
+    ).body;
+    mcp.calls.length = 0;
+
+    // In the run: another task's department is not the run's, for a call or for the list.
+    const named = text(
+      await client.callTool({ name: "board_tool_call", arguments: { ...write, task: `#${looser.number}` } }),
+    );
+    expect(named.isError).toBe(true);
+    expect(named.value).toContain(`this run's own task, #${task.number}`);
+    const listed = text(
+      await client.callTool({ name: "board_list_tools", arguments: { task: `#${looser.number}` } }),
+    );
+    expect(listed.isError).toBe(true);
+    const own = text(
+      await client.callTool({ name: "board_tool_call", arguments: { ...write, task: `#${task.number}` } }),
+    );
+    expect(own.value).toContain("the Research department is read only");
+
+    // Outside a run, a manager token reaches tools only for a task assigned to its teammate.
+    const minted = await api.post(`${base}/teammates/${cody.id}/tokens`, { scope: "manager" });
+    const manager = await connect(minted.body.token);
+    const outside = text(
+      await manager.callTool({ name: "board_tool_call", arguments: { ...write, task: `#${looser.number}` } }),
+    );
+    expect(outside.isError).toBe(true);
+    expect(outside.value).toContain(`#${looser.number} is not assigned to you`);
+    const outsideList = text(
+      await manager.callTool({ name: "board_list_tools", arguments: { task: `#${looser.number}` } }),
+    );
+    expect(outsideList.isError).toBe(true);
+    const assigned = text(
+      await manager.callTool({ name: "board_tool_call", arguments: { ...write, task: `#${task.number}` } }),
+    );
+    expect(assigned.value).toContain("the Research department is read only");
+    await manager.close();
+
+    expect(mcp.calls).toHaveLength(0);
+    expect((await api.get(`${base}/approvals?status=pending`)).body).toEqual([]);
+  });
 });
