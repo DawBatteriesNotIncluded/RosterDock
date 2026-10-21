@@ -1,0 +1,103 @@
+// Migrations that move data, run on rows written in the shape before them: the
+// database is migrated up to the one under test, seeded with plain SQL, then
+// migrated the rest of the way. No board, no network.
+import { copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DEFAULT_MIGRATIONS_DIR, migrate } from "../src/db/migrate.js";
+import { createTestDb, type TestDb } from "./helpers.js";
+
+let testDb: TestDb;
+let pool: pg.Pool;
+let dir: string | null = null;
+
+/** A directory with the migrations before `name`, to stop there. */
+async function migrationsBefore(name: string): Promise<string> {
+  const before = await mkdtemp(path.join(os.tmpdir(), "rosterdock-migrations-"));
+  for (const file of await readdir(DEFAULT_MIGRATIONS_DIR))
+    if (/^\d{4}_.+\.sql$/.test(file) && file < name)
+      await copyFile(path.join(DEFAULT_MIGRATIONS_DIR, file), path.join(before, file));
+  return before;
+}
+
+beforeAll(async () => {
+  testDb = await createTestDb();
+  pool = new pg.Pool({ connectionString: testDb.url, max: 2 });
+});
+afterAll(async () => {
+  await pool.end();
+  if (dir) await rm(dir, { recursive: true, force: true });
+  await testDb.drop();
+});
+
+describe("0033_task_goal", () => {
+  it("gives every task in a goal's project that goal, and moves a goal's token cap onto the goal", async () => {
+    dir = await migrationsBefore("0033_task_goal.sql");
+    await migrate(pool, dir);
+    const one = async <T extends pg.QueryResultRow>(sql: string, params: unknown[] = []) =>
+      (await pool.query<T>(sql, params)).rows[0]!;
+    const company = (await one<{ id: string }>("INSERT INTO companies (name) VALUES ('Old') RETURNING id"))
+      .id;
+    const project = async (name: string) =>
+      (
+        await one<{ id: string }>("INSERT INTO projects (company_id, name) VALUES ($1, $2) RETURNING id", [
+          company,
+          name,
+        ])
+      ).id;
+    const [first, second, byHand] = [
+      await project("First"),
+      await project("Second"),
+      await project("By hand"),
+    ];
+    const person = "00000000-0000-4000-8000-000000000001";
+    const goal = async (projectId: string, title: string) =>
+      (
+        await one<{ id: string }>(
+          `INSERT INTO goals (company_id, project_id, text, title, created_by_kind, created_by_id)
+           VALUES ($1, $2, $3, $3, 'user', $4) RETURNING id`,
+          [company, projectId, title, person],
+        )
+      ).id;
+    const [goalOne, goalTwo] = [await goal(first, "One"), await goal(second, "Two")];
+    let number = 0;
+    const task = async (projectId: string) =>
+      (
+        await one<{ id: string }>(
+          `INSERT INTO tasks (company_id, project_id, number, title, created_by_kind, created_by_id)
+           VALUES ($1, $2, $3, 'A task', 'user', $4) RETURNING id`,
+          [company, projectId, ++number, person],
+        )
+      ).id;
+    const tasks = {
+      first: [await task(first), await task(first)],
+      second: await task(second),
+      byHand: await task(byHand),
+    };
+    // Goal one's cap, as a project budget; a person's weekly budget on the hand-made project.
+    await pool.query(
+      `INSERT INTO budgets (company_id, scope_kind, scope_id, tokens_limit, window_kind)
+       VALUES ($1, 'project', $2, 1000, 'goal'), ($1, 'project', $3, 5000, 'week')`,
+      [company, first, byHand],
+    );
+
+    expect((await migrate(pool)).applied).toEqual(["0033_task_goal.sql"]);
+
+    const goalOf = async (id: string) =>
+      (await one<{ goal_id: string | null }>("SELECT goal_id FROM tasks WHERE id = $1", [id])).goal_id;
+    for (const id of tasks.first) expect(await goalOf(id)).toBe(goalOne);
+    expect(await goalOf(tasks.second)).toBe(goalTwo);
+    expect(await goalOf(tasks.byHand)).toBeNull();
+    const budgets = (
+      await pool.query(
+        "SELECT scope_kind, scope_id, tokens_limit::int, window_kind FROM budgets ORDER BY tokens_limit",
+      )
+    ).rows;
+    expect(budgets).toEqual([
+      { scope_kind: "goal", scope_id: goalOne, tokens_limit: 1000, window_kind: "goal" },
+      { scope_kind: "project", scope_id: byHand, tokens_limit: 5000, window_kind: "week" },
+    ]);
+  });
+});

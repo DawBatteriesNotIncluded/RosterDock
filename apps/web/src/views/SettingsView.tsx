@@ -645,8 +645,10 @@ const SCOPE_LABEL: Record<BudgetScopeKind, string> = {
   project: "Project",
   teammate: "Teammate",
 };
+/** What a listed budget is on: a goal's cap is listed here too, though it is set from the goal. */
+const LISTED_SCOPE_LABEL: Record<Budget["scopeKind"], string> = { ...SCOPE_LABEL, goal: "Goal" };
 
-/** A budget's window as a person reads it; "goal" is the lifetime cap Peter sets on a goal's project. */
+/** A budget's window as a person reads it; "goal" is a goal's lifetime cap. */
 const WINDOW_PHRASE: Record<Budget["window"], string> = {
   day: "a day",
   week: "a week",
@@ -669,6 +671,8 @@ export function scopeName(data: CompanyData, b: Pick<Budget, "scopeKind" | "scop
       return data.projects.find((p) => p.id === b.scopeId)?.name ?? "a project";
     case "teammate":
       return data.teammates.find((t) => t.id === b.scopeId)?.name ?? "a teammate";
+    case "goal":
+      return data.goals.find((g) => g.id === b.scopeId)?.title ?? "a goal";
   }
 }
 
@@ -1013,7 +1017,7 @@ function PricesTab(p: SettingsViewProps) {
               <tr key={b.id}>
                 <td>
                   <span className="font-semibold">{scopeName(p.data, b)}</span>
-                  <span className="hint"> · {SCOPE_LABEL[b.scopeKind]}</span>
+                  <span className="hint"> · {LISTED_SCOPE_LABEL[b.scopeKind]}</span>
                 </td>
                 <td className="mono text-right whitespace-nowrap">{budgetLine(b)}</td>
                 <td className="text-right">

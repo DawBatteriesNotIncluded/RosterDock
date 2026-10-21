@@ -1,5 +1,5 @@
-// Token budgets per company, department, project and teammate, enforced at
-// dispatch and alerted at 80% and 100% when a run reports usage.
+// Token budgets per company, department, project, teammate and goal, enforced
+// at dispatch and alerted at 80% and 100% when a run reports usage.
 
 import { blockerFor } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
@@ -7,8 +7,9 @@ import { HttpError } from "../http-error.js";
 import type { MutationContext } from "../mutate.js";
 import type { ModelPrice } from "./cost.js";
 
-export type BudgetScopeKind = "company" | "department" | "project" | "teammate";
-/** goal: a lifetime cap Peter sets on a goal's project. */
+/** goal: a goal's token cap, which nobody sets by hand. */
+export type BudgetScopeKind = "company" | "department" | "project" | "teammate" | "goal";
+/** goal: a lifetime cap, a goal's. */
 export type BudgetWindow = "day" | "week" | "month" | "goal";
 
 export interface BudgetRow {
@@ -27,13 +28,17 @@ export interface RunScopes {
   departmentId: string | null;
   projectId: string;
   teammateId: string;
+  /** The goal the run's task serves, if any. */
+  goalId: string | null;
 }
 
-const SCOPE_COLUMN: Record<BudgetScopeKind, string> = {
-  company: "company_id",
-  department: "department_id",
-  project: "project_id",
-  teammate: "teammate_id",
+/** The usage rows that count against a scope ($2): a goal's are its tasks' runs. */
+const SCOPE_FILTER: Record<BudgetScopeKind, string> = {
+  company: "company_id = $2",
+  department: "department_id = $2",
+  project: "project_id = $2",
+  teammate: "teammate_id = $2",
+  goal: "task_id IN (SELECT id FROM tasks WHERE goal_id = $2)",
 };
 
 export function scopeIdFor(kind: BudgetScopeKind, scopes: RunScopes): string | null {
@@ -46,6 +51,8 @@ export function scopeIdFor(kind: BudgetScopeKind, scopes: RunScopes): string | n
       return scopes.projectId;
     case "teammate":
       return scopes.teammateId;
+    case "goal":
+      return scopes.goalId;
   }
 }
 
@@ -59,7 +66,7 @@ export async function usedInWindow(
 ): Promise<number> {
   const res = await db.query<{ used: number }>(
     `SELECT coalesce(sum(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0)::bigint AS used
-     FROM run_usage WHERE company_id = $1 AND ${SCOPE_COLUMN[kind]} = $2
+     FROM run_usage WHERE company_id = $1 AND ${SCOPE_FILTER[kind]}
        AND created_at >= CASE WHEN $3 = 'goal' THEN '-infinity'::timestamptz ELSE date_trunc($3, now()) END`,
     [companyId, scopeId, window],
   );
@@ -93,8 +100,12 @@ export async function scopeName(
     department: "departments",
     project: "projects",
     teammate: "teammates",
+    goal: "goals",
   }[kind];
-  const res = await db.query<{ name: string }>(`SELECT name FROM ${table} WHERE id = $1`, [scopeId]);
+  const column = kind === "goal" ? "title" : "name";
+  const res = await db.query<{ name: string }>(`SELECT ${column} AS name FROM ${table} WHERE id = $1`, [
+    scopeId,
+  ]);
   return res.rows[0]?.name ?? null;
 }
 

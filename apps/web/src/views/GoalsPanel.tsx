@@ -36,9 +36,9 @@ export function goalTone(goal: Goal, tasks: Task[]): "ok" | "warn" | "info" | "b
   return "muted";
 }
 
-/** Tasks of the goal's project: done, open, whether one is blocked, and what was cancelled (not in the total). */
+/** The goal's tasks: done, open, whether one is blocked, and what was cancelled (not in the total). */
 export function goalProgress(goal: Goal, tasks: Task[]) {
-  const mine = tasks.filter((t) => t.projectId === goal.projectId);
+  const mine = tasks.filter((t) => t.goalId === goal.id);
   const cancelled = mine.filter((t) => t.status === "cancelled").length;
   return {
     total: mine.length - cancelled,

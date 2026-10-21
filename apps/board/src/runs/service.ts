@@ -175,6 +175,7 @@ interface TaskForRun {
   status: string;
   project_id: string;
   department_id: string | null;
+  goal_id: string | null;
   assignee_kind: string | null;
   assignee_id: string | null;
   declared_outputs: string[];
@@ -262,6 +263,7 @@ export async function dispatchRun(
       departmentId: task.department_id,
       projectId: task.project_id,
       teammateId: teammate.id,
+      goalId: task.goal_id,
     });
     const inserted = await ctx.client.query<RunRow>(
       `INSERT INTO runs (company_id, task_id, teammate_id, engine, model, note, created_by_kind, created_by_id, trigger_message_id)
@@ -369,6 +371,7 @@ export async function dispatchTurn(
         departmentId: task.department_id,
         projectId: task.project_id,
         teammateId: teammate.id,
+        goalId: task.goal_id,
       });
       const inserted = await ctx.client.query<RunRow>(
         `INSERT INTO runs (company_id, task_id, teammate_id, engine, model, note, created_by_kind, created_by_id, kind, trigger_message_id)
@@ -459,6 +462,7 @@ export async function dispatchReviewRun(
         departmentId: task.department_id,
         projectId: task.project_id,
         teammateId: teammate.id,
+        goalId: task.goal_id,
       });
       const inserted = await ctx.client.query<RunRow>(
         `INSERT INTO runs (company_id, task_id, teammate_id, engine, model, note, created_by_kind, created_by_id, kind)
@@ -1224,8 +1228,8 @@ export async function completeRun(
       ).rows[0]!;
     }
     const scopes = (
-      await ctx.client.query<{ project_id: string; department_id: string | null }>(
-        "SELECT project_id, department_id FROM tasks WHERE id = $1",
+      await ctx.client.query<{ project_id: string; department_id: string | null; goal_id: string | null }>(
+        "SELECT project_id, department_id, goal_id FROM tasks WHERE id = $1",
         [run.task_id],
       )
     ).rows[0]!;
@@ -1254,6 +1258,7 @@ export async function completeRun(
         departmentId: scopes.department_id,
         projectId: scopes.project_id,
         teammateId: run.teammate_id,
+        goalId: scopes.goal_id,
       },
       totalTokens(usage),
     );

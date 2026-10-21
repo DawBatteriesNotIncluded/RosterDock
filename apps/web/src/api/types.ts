@@ -220,6 +220,8 @@ export interface Task {
   /** research: documents with sources, reviewed against a checklist. build: the diff is reviewed. */
   workKind: "build" | "research";
   parentTaskId: string | null;
+  /** The goal the task serves; null for work outside any goal. */
+  goalId: string | null;
   /** How many times Peter re-planned it after a failed run. */
   replans: number;
   createdAt: string;
@@ -475,7 +477,7 @@ export interface Goal {
   closedAt: string | null;
   createdAt: string;
   updatedAt: string;
-  /** What the goal has cost so far: the runs on its project and Peter's planning. */
+  /** What the goal has cost so far: its tasks' runs and Peter's planning. */
   spend: GoalSpend;
 }
 
@@ -754,10 +756,10 @@ export type BudgetScopeKind = "company" | "department" | "project" | "teammate";
 
 export interface Budget {
   id: string;
-  scopeKind: BudgetScopeKind;
+  /** "goal": a goal's token cap, a lifetime budget Peter sets from the goal; nobody sets one by hand. */
+  scopeKind: BudgetScopeKind | "goal";
   scopeId: string;
   tokensLimit: number;
-  /** "goal" is the lifetime cap Peter sets on a goal's project; nobody sets one by hand. */
   window: BudgetWindow | "goal";
   used: number;
   percent: number;

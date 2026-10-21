@@ -38,6 +38,8 @@ export interface TaskRow {
   active_run_id: string | null;
   work_kind: WorkKind;
   parent_task_id: string | null;
+  /** The goal the task serves; null for work outside any goal. */
+  goal_id: string | null;
   replans: number;
   created_at: Date;
   updated_at: Date;
@@ -75,6 +77,7 @@ export function taskToJson(row: TaskRow) {
     activeRunId: row.active_run_id,
     workKind: row.work_kind ?? "build",
     parentTaskId: row.parent_task_id,
+    goalId: row.goal_id ?? null,
     replans: row.replans ?? 0,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
@@ -197,32 +200,52 @@ export interface CreateTaskOptions {
    * the new task's department when the body names none.
    */
   parentTaskId?: string | null;
-  /** Peter's own tasks at handoff: counted against the goal's task cap, depth 0. */
-  fromGoal?: boolean;
+  /** Peter's own tasks at handoff, for this goal: counted against its task cap, depth 0. */
+  fromGoal?: string;
 }
 
 /**
- * A project that came from a goal has caps: teammates (Peter included) cannot
- * create tasks past them; a person must. Runaway delegation stops here.
+ * The goal a new task serves: the goal Peter planned it for, the goal of the task it was filed from, or
+ * the goal its project was opened for. Null: work outside any goal.
+ */
+async function goalOfNewTask(
+  db: Queryable,
+  projectId: string,
+  opts: CreateTaskOptions,
+): Promise<string | null> {
+  if (opts.fromGoal) return opts.fromGoal;
+  if (opts.parentTaskId) {
+    const parent = await db.query<{ goal_id: string | null }>("SELECT goal_id FROM tasks WHERE id = $1", [
+      opts.parentTaskId,
+    ]);
+    if (parent.rows[0]?.goal_id) return parent.rows[0].goal_id;
+  }
+  const opened = await db.query<{ id: string }>("SELECT id FROM goals WHERE project_id = $1", [projectId]);
+  return opened.rows[0]?.id ?? null;
+}
+
+/**
+ * A goal has caps: teammates (Peter included) cannot create tasks for it
+ * past them; a person must. Runaway delegation stops here.
  */
 async function assertWithinGoalCaps(
   db: Queryable,
-  projectId: string,
+  goalId: string | null,
   actor: ActorRef,
   opts: CreateTaskOptions,
 ): Promise<void> {
-  if (actor.kind !== "teammate") return;
+  if (actor.kind !== "teammate" || !goalId) return;
   const goal = (
     await db.query<{ id: string; title: string; caps: { maxTasks?: number; maxDepth?: number } }>(
-      "SELECT id, title, caps FROM goals WHERE project_id = $1",
-      [projectId],
+      "SELECT id, title, caps FROM goals WHERE id = $1",
+      [goalId],
     )
   ).rows[0];
   if (!goal) return;
   const maxTasks = goal.caps?.maxTasks ?? 12;
   const maxDepth = goal.caps?.maxDepth ?? 2;
   const count = (
-    await db.query<{ n: number }>("SELECT count(*)::int AS n FROM tasks WHERE project_id = $1", [projectId])
+    await db.query<{ n: number }>("SELECT count(*)::int AS n FROM tasks WHERE goal_id = $1", [goalId])
   ).rows[0]!.n;
   if (count >= maxTasks) {
     throw new HttpError(
@@ -274,12 +297,15 @@ export async function createTask(
         );
       }
     }
-    await assertWithinGoalCaps(ctx.client, body.projectId, actor, opts);
+    const goalId = await goalOfNewTask(ctx.client, body.projectId, opts);
+    await assertWithinGoalCaps(ctx.client, goalId, actor, opts);
     const assignee = body.assignee ? await assertActorInCompany(ctx.client, companyId, body.assignee) : null;
-    // What the task points at (the tasks it waits on, the one it was filed from) is locked before it takes a
-    // number. Every other mutation locks its rows first and the company counter last, with its first event;
-    // numbering first and locking a dependency after deadlocked with a task being started (Peter filing a
-    // plan's second task while the loop started the first).
+    // What the task points at (its goal, the tasks it waits on, the one it was filed from) is locked before it
+    // takes a number. Every other mutation locks its rows first and the company counter last, with its first
+    // event; numbering first and locking a dependency after deadlocked with a task being started (Peter filing
+    // a plan's second task while the loop started the first). The goal goes first, as it does where a person
+    // stops it or changes its caps.
+    if (goalId) await ctx.client.query("SELECT 1 FROM goals WHERE id = $1 FOR KEY SHARE", [goalId]);
     const references = opts.parentTaskId ? [...body.dependsOn, opts.parentTaskId] : body.dependsOn;
     if (references.length) {
       const found = new Set(
@@ -299,8 +325,8 @@ export async function createTask(
     );
     const number = num.rows[0]!.n;
     const inserted = await ctx.client.query<{ id: string }>(
-      `INSERT INTO tasks (company_id, project_id, department_id, number, title, description, assignee_kind, assignee_id, created_by_kind, created_by_id, declared_outputs, criteria, work_kind, parent_task_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
+      `INSERT INTO tasks (company_id, project_id, department_id, number, title, description, assignee_kind, assignee_id, created_by_kind, created_by_id, declared_outputs, criteria, work_kind, parent_task_id, goal_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
       [
         companyId,
         body.projectId,
@@ -316,6 +342,7 @@ export async function createTask(
         JSON.stringify(body.criteria),
         body.workKind ?? "build",
         opts.parentTaskId ?? null,
+        goalId,
       ],
     );
     const id = inserted.rows[0]!.id;

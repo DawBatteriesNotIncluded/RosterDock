@@ -186,6 +186,8 @@ describe("goals by heuristic (no model configured)", () => {
     };
     const child = await createTaskTool(deps, actor, { title: "Follow-up", assigneeHandle: "cody" });
     expect(child.parentTaskId).toBe(running.id);
+    // The follow-up serves the goal its parent serves.
+    expect(child.goalId).toBe(goal.id);
     // A fifth task is over the goal's cap of 4.
     await expect(createTaskTool(deps, actor, { title: "One too many" })).rejects.toThrow(/capped at 4 tasks/);
     void asRun;
@@ -200,7 +202,7 @@ describe("goals by heuristic (no model configured)", () => {
     expect(byHand.status).toBe(201);
   });
 
-  it("a goal's token cap becomes a lifetime budget on its project that dispatch respects", async () => {
+  it("a goal's token cap becomes a lifetime budget on the goal that dispatch respects", async () => {
     const { api, base } = await seedCompany(board, "g4@example.com");
     await team(api, base);
     const res = await api.post(`${base}/goals`, { text: "Do it cheaply.", caps: { tokens: 1000 } });
@@ -208,10 +210,11 @@ describe("goals by heuristic (no model configured)", () => {
     const budgets = (await api.get(`${base}/budgets`)).body;
     expect(budgets).toEqual([
       expect.objectContaining({
-        scopeKind: "project",
-        scopeId: res.body.projectId,
+        scopeKind: "goal",
+        scopeId: res.body.id,
         tokensLimit: 1000,
         window: "goal",
+        used: 0,
       }),
     ]);
     // Spend past the cap: the next task cannot start.
@@ -225,7 +228,8 @@ describe("goals by heuristic (no model configured)", () => {
     await api.post(`${base}/runs/${run.id}/stop`, {});
     const start = await api.post(`${base}/tasks/${first.id}/runs`, {});
     expect(start.status).toBe(409);
-    expect(start.body.error).toMatch(/project budget/);
+    expect(start.body.error).toMatch(/^the goal budget for Do it cheaply is spent: 1,100 of 1,000 tokens/);
+    expect((await api.get(`${base}/goals/${res.body.id}`)).body.spend.runTokens).toBe(1100);
     // Another project is not affected.
     const other = await addProject(api, base, "Unrelated");
     const free = (
@@ -253,7 +257,7 @@ describe("goals by heuristic (no model configured)", () => {
     expect(raised.body.spend.tokensCap).toBe(5000);
     let budgets = (await api.get(`${base}/budgets`)).body;
     expect(budgets).toEqual([
-      expect.objectContaining({ scopeId: goal.projectId, tokensLimit: 5000, window: "goal" }),
+      expect.objectContaining({ scopeKind: "goal", scopeId: goal.id, tokensLimit: 5000, window: "goal" }),
     ]);
     // Remove the token cap: the budget goes with it. Other caps stay.
     const freed = await api.patch(`${base}/goals/${goal.id}/caps`, { tokens: null });

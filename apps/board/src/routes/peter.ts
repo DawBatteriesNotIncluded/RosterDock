@@ -63,7 +63,7 @@ export function registerPeterRoutes(app: FastifyInstance, deps: PeterDeps, plann
     return out;
   });
 
-  // A person raises or lowers a goal's caps; the token cap is the project's lifetime budget.
+  // A person raises or lowers a goal's caps; the token cap is the goal's lifetime budget.
   app.patch(
     "/api/companies/:companyId/goals/:goalId/caps",
     { config: { action: "goal.caps" } },
