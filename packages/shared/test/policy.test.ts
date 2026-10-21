@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { classifyTool, effectiveMode, narrowerMode, toolGranted, verdictFor } from "../src/index.js";
+import {
+  classifyTool,
+  effectiveMode,
+  narrowerMode,
+  readsByName,
+  toolGranted,
+  verdictFor,
+} from "../src/index.js";
 
 describe("tool policy", () => {
   it("a toolbox line grants every tool unless it names some; then only those", () => {
@@ -89,5 +96,37 @@ describe("tool policy", () => {
       write: true,
       source: "catalog",
     });
+  });
+
+  it("a name reads only with a reading verb first and no second verb joined to it", () => {
+    // An export sends data somewhere or starts a job; a preview is often built or sent; check_in, check_out
+    // and a check run change state. None of them is a reading verb.
+    for (const name of [
+      "export_contacts",
+      "hubspot.export_contacts",
+      "export-report",
+      "preview_campaign",
+      "check_in",
+      "checkout",
+      "get_or_create_contact",
+      "find_and_replace",
+      "read-then-archive",
+      "list_and_delete_drafts",
+    ])
+      expect(classifyTool(name), name).toEqual({ write: true, source: "default" });
+    for (const name of [
+      "summarize_thread",
+      "lookup_owner",
+      "look_up_owner",
+      "browse_catalog",
+      "inspect_execution",
+      "count_deals",
+      "get_order_history",
+      "list_vendors",
+      "search_android",
+    ])
+      expect(classifyTool(name), name).toEqual({ write: false, source: "name" });
+    expect(readsByName("slack:read_channel")).toBe(true);
+    expect(readsByName("slack:export_channel")).toBe(false);
   });
 });
