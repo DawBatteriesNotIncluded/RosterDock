@@ -33,7 +33,8 @@ model output on their cluster.
 - **Policy only narrows.** A teammate's toolbox is the ceiling (a connection with a mode, and optionally
   only some of its tools: the rest are never listed to that teammate and refused if called); the
   department's write policy and the project's client policy tighten it and never widen it. Files import
-  grants only on connections the company already has.
+  grants only on connections the company already has. A grant is what a person saved: in the teammate's
+  editor each tool allowed or set to never is a change to save, kept until Save while the board updates.
   The department and the client are those of the teammate's own task: in a run, the run's task; outside
   one, a task assigned to the teammate. A tool call or listing that names any other task is refused, so
   no task lends its policy to another.

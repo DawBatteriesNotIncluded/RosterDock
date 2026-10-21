@@ -76,7 +76,15 @@ import { DELIVERABLE_LABEL, fmtBytes, fmtCpu, fmtTokens, otherFiles } from "../s
 import { WorkingNow } from "../src/views/WorkingNow.tsx";
 import { loginErrorText, LoginView } from "../src/views/Login.tsx";
 import { cellState, DepartmentsView, nextCellState } from "../src/views/DepartmentsView.tsx";
-import { EFFORT_CHOICES, TeammatesView } from "../src/views/TeammatesView.tsx";
+import {
+  draftDirty,
+  editorState,
+  EFFORT_CHOICES,
+  refreshed,
+  TeammatesView,
+  toolboxLines,
+  withGrant,
+} from "../src/views/TeammatesView.tsx";
 import { nextGrant, toolGrantedBy } from "../src/views/ToolboxEditor.tsx";
 import {
   approvalFixtures,
@@ -1995,6 +2003,37 @@ describe("toolbox grants", () => {
       mode: "off",
       picked: null,
     });
+  });
+  it("a tool picked or dropped is a change to save, and a refresh of the same teammate keeps it", () => {
+    const cody = connectionsFixture.teammates.find((t) => t.handle === "cody")!;
+    const hubspot = connectionsFixture.connections.find((c) => c.name === "hubspot")!;
+    const clean = editorState(cody);
+    expect(draftDirty(clean)).toBe(false);
+    // One read set to never: the mode stays "ask", only the names move.
+    const grant = { mode: clean.draft.toolbox.hubspot!, picked: clean.draft.picked.hubspot ?? null };
+    const dropped = nextGrant(grant, hubspot.tools, ["get_properties"], false);
+    expect(dropped).toEqual({ mode: "ask", picked: ["search_crm_objects", "manage_crm_objects"] });
+    const s = { ...clean, draft: withGrant(clean.draft, "hubspot", dropped) };
+    expect(draftDirty(s)).toBe(true);
+    expect(toolboxLines(s.draft)).toEqual([
+      { connection: "hubspot", mode: "ask", tools: ["search_crm_objects", "manage_crm_objects"] },
+    ]);
+    // Every event in the company fetches the teammates again: the same teammate in new objects. The draft stays.
+    expect(refreshed(s, structuredClone(cody))).toBe(s);
+    // Saved: the teammate comes back holding the grant, at a new time; nothing is left to save.
+    const saved = refreshed(s, {
+      ...cody,
+      toolbox: toolboxLines(s.draft),
+      updatedAt: "2026-09-12T05:00:00.000Z",
+    });
+    expect(draftDirty(saved)).toBe(false);
+    expect(saved.draft.picked.hubspot).toEqual(["search_crm_objects", "manage_crm_objects"]);
+    // Picking it back is no change after all; a connection never granted, set to never, saves nothing.
+    const back = nextGrant(dropped, hubspot.tools, ["get_properties"], true);
+    expect(draftDirty({ ...clean, draft: withGrant(s.draft, "hubspot", back) })).toBe(false);
+    expect(
+      draftDirty({ ...clean, draft: withGrant(clean.draft, "crm", { mode: "off", picked: null }) }),
+    ).toBe(false);
   });
 });
 
