@@ -5,7 +5,7 @@ import { renderToString } from "react-dom/server";
 import type { CompanyData } from "../src/api/types.ts";
 import { describe, expect, it } from "vitest";
 import { Shell } from "../src/components/Shell.tsx";
-import { Avatar, elapsedLabel, Thinking } from "../src/components/ui.tsx";
+import { Avatar, elapsedLabel, Thinking, Topbar } from "../src/components/ui.tsx";
 import { describeEvent, engineChoices, relativeTime, teammateStatus } from "../src/lib/format.ts";
 import {
   CreateDepartmentModal,
@@ -813,6 +813,11 @@ describe("views render with sample data", () => {
     expect(queue).toContain("In review");
 
     const detail = render(<ReviewsView {...base} selectedId={reviewFixture.id} initial={reviewFixture} />);
+    // The task's title gives way to the rest of the bar, whole on hover; the people can drop to faces.
+    expect(detail).toContain('class="topbar long"');
+    expect(detail).toContain(`<span class="title" title="${reviewFixture.taskTitle}">`);
+    expect(detail).toContain('class="name">Brody</span>');
+    expect(render(<Topbar title="Reviews" />)).toContain('<span class="title">Reviews</span>');
     expect(detail).toContain("2 files");
     expect(detail).toContain("workflows/vms-digest.json");
     expect(detail).toContain("docs/digest-requirements.md");
