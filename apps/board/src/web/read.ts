@@ -6,7 +6,7 @@
 // it at a time; the record of the call (audit) is the URL, where it ended up,
 // the status and the size, never what the page says or any header.
 
-import { domainsPhrase, hostOnList } from "@rosterdock/shared";
+import { domainsPhrase, hostOnList, redactRawSecrets } from "@rosterdock/shared";
 import { fetchPage } from "../reviews/sources.js";
 import type { WebReader } from "./transport.js";
 
@@ -47,20 +47,23 @@ export type WebReadOutcome =
 const SECRET_PARAM_RE =
   /^(?:.*(?:token|secret|passw(?:or)?d|pwd|api[-_]?key|apikey|credential|signature|auth|session).*|key|sig|code|sid|x-amz-.+)$/i;
 
-/** A URL as the record keeps it: no fragment, no credentials, and the values of secret-named parameters redacted. */
+/**
+ * A URL as the record keeps it: no fragment, no credentials, the values of secret-named parameters redacted,
+ * and any key-shaped string left in it (a token in the path) redacted too.
+ */
 export function auditUrl(raw: string): string {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    return raw.slice(0, 500);
+    return redactRawSecrets(raw.slice(0, 500));
   }
   url.hash = "";
   url.username = "";
   url.password = "";
   for (const name of [...new Set(url.searchParams.keys())])
     if (SECRET_PARAM_RE.test(name)) url.searchParams.set(name, "[redacted]");
-  return url.toString();
+  return redactRawSecrets(url.toString());
 }
 
 /** What the arguments ask for, or why they cannot be read. */

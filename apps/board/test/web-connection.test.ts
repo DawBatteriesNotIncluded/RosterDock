@@ -532,5 +532,9 @@ describe("what the record keeps of a URL", () => {
       "https://x.example.com/?access_token=%5Bredacted%5D&api_key=%5Bredacted%5D&key=%5Bredacted%5D&q=gong",
     );
     expect(auditUrl("not a url")).toBe("not a url");
+    // A made-up token in the path, in the shape of a real one.
+    expect(auditUrl("https://x.example.com/hooks/ghp_0123456789abcdefghijklmnopqrstuvwxyz/run")).toBe(
+      "https://x.example.com/hooks/[redacted]/run",
+    );
   });
 });
