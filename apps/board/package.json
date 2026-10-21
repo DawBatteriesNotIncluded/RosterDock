@@ -15,6 +15,7 @@
     "@anthropic-ai/sdk": "^0.132.1",
     "@fastify/cookie": "catalog:",
     "@fastify/cors": "catalog:",
+    "@fastify/rate-limit": "catalog:",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@rosterdock/shared": "workspace:*",
     "fastify": "catalog:",

@@ -25,6 +25,8 @@ export interface BoardConfig {
   cookieSecure: boolean;
   corsOrigin: string | null;
   sessionTtlSeconds: number;
+  /** Requests a minute one client address may make to each sign-in route (ROSTERDOCK_SIGNIN_RATE_LIMIT); 0: no limit. */
+  signInRateLimit: number;
   /** Shared secret the worker fleet presents to claim runs. Null disables claiming. */
   workerToken: string | null;
   reaperIntervalMs: number;
@@ -154,6 +156,15 @@ function hostOf(url: string): string {
   }
 }
 
+function signInRateLimitFrom(raw: string | undefined): number {
+  const n = Number(raw?.trim() || 60);
+  if (!Number.isInteger(n) || n < 0)
+    throw new Error(
+      `ROSTERDOCK_SIGNIN_RATE_LIMIT is requests a minute, a whole number (0 for no limit), not "${raw}"`,
+    );
+  return n;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BoardConfig {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -167,6 +178,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BoardConfig {
     cookieSecure: env.ROSTERDOCK_COOKIE_SECURE !== "0" && env.ROSTERDOCK_COOKIE_SECURE !== "false",
     corsOrigin: env.CORS_ORIGIN ?? null,
     sessionTtlSeconds: Number(env.ROSTERDOCK_SESSION_TTL_SECONDS ?? 30 * 24 * 3600),
+    signInRateLimit: signInRateLimitFrom(env.ROSTERDOCK_SIGNIN_RATE_LIMIT),
     workerToken: env.ROSTERDOCK_WORKER_TOKEN?.trim() || null,
     reaperIntervalMs: Number(env.ROSTERDOCK_REAPER_INTERVAL_MS ?? 15_000),
     runStaleAfterMs: Number(env.ROSTERDOCK_RUN_STALE_AFTER_MS ?? 60_000),

@@ -257,6 +257,17 @@ their own, each with its own database and workers.
 - TLS at the ingress; the cookie is marked Secure and the OIDC redirect uses the public URL.
 - Who may reach the web (the ingress and `networkPolicy.webIngressFrom`), and which email domains may
   sign in.
+- Rate limiting. The board limits only its sign-in routes (the dev login and the OpenID Connect start and
+  callback): `ROSTERDOCK_SIGNIN_RATE_LIMIT` requests a minute from one client address to each, 60 by default
+  (chart `board.signInRateLimit`, 0 for none), counted in each board replica's memory. Every other route takes
+  a session or a token, or is a cheap public read (health, readiness, the sign-in options, metrics), and a
+  limit across all of them belongs at the ingress (with ingress-nginx, the `limit-rps` and `limit-connections`
+  annotations, through `ingress.annotations`). The board takes a client's address from the proxies in front of
+  it (Fastify's `trustProxy`), the first entry of `X-Forwarded-For`, so the ingress must overwrite that header
+  with the address it sees, never append to one the client sent; otherwise a client names its own address and
+  leaves the sign-in limit behind. Behind a load balancer, have the ingress read the client's address from it
+  (PROXY protocol, or the balancer's header from the balancer's range only), or every client counts as the
+  balancer and shares one limit.
 - The model's behaviour. The platform bounds what a teammate can touch (its toolbox, the write policy, the
   client policy, the sandbox, the pool) and what it costs (budgets, drift alerts); it does not make the
   model right. Reviews and approvals are where a person sees the work.

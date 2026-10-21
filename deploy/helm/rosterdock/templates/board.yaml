@@ -70,6 +70,8 @@ spec:
               value: {{ ternary "1" "0" .Values.board.devLogin | quote }}
             - name: ROSTERDOCK_COOKIE_SECURE
               value: "1"
+            - name: ROSTERDOCK_SIGNIN_RATE_LIMIT
+              value: {{ .Values.board.signInRateLimit | quote }}
             {{- with .Values.board.companyCreators }}
             - name: ROSTERDOCK_COMPANY_CREATORS
               value: {{ join "," . | quote }}

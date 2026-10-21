@@ -102,6 +102,10 @@ board:
       key: ROSTERDOCK_OIDC_CLIENT_SECRET
   # The URL people reach the board at, for sign-in redirects. Empty: from the ingress host, else the request.
   publicUrl: ""
+  # Requests a minute one client address may make to each sign-in route (the dev login, the OIDC start and
+  # callback), counted per board replica (ROSTERDOCK_SIGNIN_RATE_LIMIT); 0 turns the limit off. Any wider
+  # limit belongs at the ingress, which must set X-Forwarded-For itself (docs/security.md).
+  signInRateLimit: 60
   # When a research review opens, the board fetches the public http(s) sources its documents cite and hands
   # the reviewer what they say (ROSTERDOCK_FETCH_SOURCES). false keeps the board off the web.
   fetchSources: true

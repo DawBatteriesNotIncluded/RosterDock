@@ -45,7 +45,16 @@ export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, 
     req.principal = principal;
   });
 
-  app.post("/api/auth/dev-login", { config: { public: true } }, async (req, reply) => {
+  // Signing in is what anyone may ask of the board before signing in, so each sign-in route takes
+  // ROSTERDOCK_SIGNIN_RATE_LIMIT requests a minute from one client address, counted per replica; 0: no limit.
+  const signIn = {
+    config: {
+      public: true,
+      rateLimit: config.signInRateLimit > 0 ? { max: config.signInRateLimit, timeWindow: 60_000 } : false,
+    },
+  };
+
+  app.post("/api/auth/dev-login", signIn, async (req, reply) => {
     if (!config.devLogin) throw new HttpError(404, "dev login is disabled");
     const body = parseBody(DevLoginSchema, req.body);
     const name = body.name ?? body.email.split("@")[0] ?? body.email;
@@ -72,7 +81,7 @@ export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, 
 
   // OpenID Connect: the browser goes to the provider with a state, a nonce and a PKCE challenge the
   // board recorded, and comes back to the callback with a code the board exchanges server to server.
-  app.get("/api/auth/oidc/start", { config: { public: true } }, async (req, reply) => {
+  app.get("/api/auth/oidc/start", signIn, async (req, reply) => {
     if (!config.oidc) throw new HttpError(404, "single sign-on is not configured");
     const base = publicBase(req);
     const returnTo = safeReturnTo((req.query as { returnTo?: unknown }).returnTo);
@@ -83,7 +92,7 @@ export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, 
     return reply.redirect(url, 302);
   });
 
-  app.get("/api/auth/oidc/callback", { config: { public: true } }, async (req, reply) => {
+  app.get("/api/auth/oidc/callback", signIn, async (req, reply) => {
     if (!config.oidc) throw new HttpError(404, "single sign-on is not configured");
     const base = publicBase(req);
     const q = req.query as { code?: string; state?: string; error?: string };
