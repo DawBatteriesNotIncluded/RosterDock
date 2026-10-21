@@ -521,6 +521,7 @@ export const monthlyFixture: MonthlyReport = {
     tokens: { input: 1_500_000, output: 60_000, cacheRead: 100_000, cacheWrite: 0, total: 1_660_000 },
     costMinorUnits: 41_250,
     runs: 9,
+    calls: 0,
     seatMinorUnits: 40_000,
     teammates: 4,
   },
@@ -533,6 +534,7 @@ export const monthlyFixture: MonthlyReport = {
       tokens: { input: 1_000_000, output: 40_000, cacheRead: 100_000, cacheWrite: 0, total: 1_140_000 },
       costMinorUnits: 30_000,
       runs: 6,
+      calls: 0,
     },
     {
       id: "p2",
@@ -542,6 +544,7 @@ export const monthlyFixture: MonthlyReport = {
       tokens: { input: 500_000, output: 20_000, cacheRead: 0, cacheWrite: 0, total: 520_000 },
       costMinorUnits: 11_250,
       runs: 3,
+      calls: 0,
     },
   ],
   byChargebackTag: [
@@ -551,6 +554,7 @@ export const monthlyFixture: MonthlyReport = {
       tokens: { input: 1_000_000, output: 40_000, cacheRead: 100_000, cacheWrite: 0, total: 1_140_000 },
       costMinorUnits: 30_000,
       runs: 6,
+      calls: 0,
     },
     {
       tag: null,
@@ -558,6 +562,7 @@ export const monthlyFixture: MonthlyReport = {
       tokens: { input: 500_000, output: 20_000, cacheRead: 0, cacheWrite: 0, total: 520_000 },
       costMinorUnits: 11_250,
       runs: 3,
+      calls: 0,
     },
   ],
   byDepartment: [
@@ -567,6 +572,7 @@ export const monthlyFixture: MonthlyReport = {
       tokens: { input: 1_500_000, output: 60_000, cacheRead: 100_000, cacheWrite: 0, total: 1_660_000 },
       costMinorUnits: 41_250,
       runs: 9,
+      calls: 0,
       seatMinorUnits: 40_000,
     },
   ],
@@ -580,6 +586,7 @@ export const monthlyFixture: MonthlyReport = {
       tokens: { input: 1_500_000, output: 60_000, cacheRead: 100_000, cacheWrite: 0, total: 1_660_000 },
       costMinorUnits: 41_250,
       runs: 9,
+      calls: 0,
       seatMinorUnits: 20_000,
     },
   ],
@@ -589,6 +596,7 @@ export const monthlyFixture: MonthlyReport = {
       tokens: { input: 1_500_000, output: 60_000, cacheRead: 100_000, cacheWrite: 0, total: 1_660_000 },
       costMinorUnits: 41_250,
       runs: 9,
+      calls: 0,
     },
   ],
   daily: [{ day: "2026-08-03", tokens: 1_660_000, costMinorUnits: 41_250 }],
@@ -604,6 +612,7 @@ export const costFixture: CostReport = {
     tokens: tokens(1_200_000, 90_000, 400_000),
     costMinorUnits: 41_250,
     runs: 9,
+    calls: 3,
     seatMinorUnits: 23_026,
   },
   forecast: { costMinorUnits: 68_750, seatMinorUnits: 23_026, tokens: 2_816_667 },
@@ -618,6 +627,7 @@ export const costFixture: CostReport = {
       tokens: tokens(900_000, 70_000, 320_000),
       costMinorUnits: 31_400,
       runs: 6,
+      calls: 0,
     },
     {
       id: id(11),
@@ -628,6 +638,7 @@ export const costFixture: CostReport = {
       tokens: tokens(300_000, 20_000, 80_000),
       costMinorUnits: 9_850,
       runs: 3,
+      calls: 0,
     },
   ],
   byProject: [
@@ -638,6 +649,7 @@ export const costFixture: CostReport = {
       tokens: tokens(1_000_000, 80_000, 350_000),
       costMinorUnits: 36_000,
       runs: 7,
+      calls: 0,
     },
     {
       id: id(31),
@@ -646,6 +658,7 @@ export const costFixture: CostReport = {
       tokens: tokens(200_000, 10_000, 50_000),
       costMinorUnits: 5_250,
       runs: 2,
+      calls: 0,
     },
   ],
   byTeammate: [
@@ -660,6 +673,7 @@ export const costFixture: CostReport = {
       tokens: tokens(700_000, 50_000, 250_000),
       costMinorUnits: 24_900,
       runs: 4,
+      calls: 0,
     },
     {
       id: id(23),
@@ -672,6 +686,7 @@ export const costFixture: CostReport = {
       tokens: tokens(300_000, 20_000, 80_000),
       costMinorUnits: 9_850,
       runs: 3,
+      calls: 0,
     },
     {
       id: id(20),
@@ -684,6 +699,7 @@ export const costFixture: CostReport = {
       tokens: tokens(200_000, 20_000, 70_000),
       costMinorUnits: 6_500,
       runs: 2,
+      calls: 3,
     },
   ],
   byModel: [
@@ -693,6 +709,7 @@ export const costFixture: CostReport = {
       tokens: tokens(1_000_000, 70_000, 330_000),
       costMinorUnits: 34_750,
       runs: 7,
+      calls: 0,
     },
     {
       model: "claude-opus-5",
@@ -700,6 +717,7 @@ export const costFixture: CostReport = {
       tokens: tokens(200_000, 20_000, 70_000),
       costMinorUnits: 6_500,
       runs: 2,
+      calls: 3,
     },
   ],
   bySeat: [{ key: "claude_code", teammates: 5, seatMinorUnits: 23_026 }],

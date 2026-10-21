@@ -28,7 +28,15 @@ import {
 } from "../src/views/ConnectionsPanel.tsx";
 import { BoardView } from "../src/views/BoardView.tsx";
 import { CompanyView } from "../src/views/CompanyView.tsx";
-import { CostsView, fourteenDays, modelLabel, money, MonthlyView, monthOf } from "../src/views/CostsView.tsx";
+import {
+  CostsView,
+  fourteenDays,
+  modelLabel,
+  money,
+  MonthlyView,
+  monthOf,
+  workCount,
+} from "../src/views/CostsView.tsx";
 import { characterRows, carpetOf, HAIR_STYLES, lookFor } from "../src/views/office/art.ts";
 import {
   lineDuration,
@@ -1524,12 +1532,18 @@ describe("pure helpers", () => {
     ])
       expect(html).toContain(s);
     expect(html).toContain("Last 14 days");
+    // Peter's planning calls count beside the runs, never as runs.
+    expect(html).toContain("9 runs · 3 planning calls · 3 teammates");
+    expect(html).toContain('2<div class="hint">3 planning calls</div>');
+    expect(html).toContain("2 runs · 3 planning calls");
+    expect(workCount({ runs: 1, calls: 0 })).toBe("1 run");
+    expect(workCount({ runs: 0, calls: 1 })).toBe("0 runs · 1 planning call");
     expect(html).toContain("Export CSV");
     expect(html).toContain('href="/api/companies/c1/costs/export.csv?window=week"');
     expect(html).toContain("Monthly report");
     // A stub teammate's runs read as the stub engine, never as the model the teammate names.
     const stubTokens = { input: 1200, output: 300, cacheRead: 0, cacheWrite: 0, total: 1500 };
-    const stub = { model: "stub", tokens: stubTokens, costMinorUnits: null, runs: 1 };
+    const stub = { model: "stub", tokens: stubTokens, costMinorUnits: null, runs: 1, calls: 0 };
     const withStub = render(
       <CostsView
         data={fixture}

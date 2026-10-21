@@ -13,6 +13,7 @@ import {
 } from "@rosterdock/shared";
 import { costFor } from "../budgets/cost.js";
 import { priceFor } from "../budgets/service.js";
+import { recordPlanningUsage } from "../budgets/usage.js";
 import type { Db, Queryable } from "../db/pool.js";
 import type { GitHubProvider } from "../git/github.js";
 import { HttpError, notFound } from "../http-error.js";
@@ -345,6 +346,17 @@ async function planClaimed(deps: PeterDeps, first: GoalRow): Promise<GoalRow> {
           user: plannerUserPrompt(refused ? { ...input, refused } : input),
           schema: PlanSchema,
           trace: { purpose: "plan", companyId: first.company_id, goalId: first.id },
+        });
+        // Costs and budgets count the call as it returns, whatever becomes of its plan.
+        await recordPlanningUsage(deps.db, {
+          companyId: first.company_id,
+          teammateId: manager.id,
+          purpose: "plan",
+          goalId: first.id,
+          projectId: first.project_id,
+          departmentId: first.department_id,
+          model: result.model || manager.model,
+          usage: result.usage,
         });
         usage = result.usage;
         if (result.output) {
@@ -765,6 +777,7 @@ export interface GoalSpend {
   planningTokens: number;
   planningCalls: number;
   totalTokens: number;
+  /** The runs and the planning, priced; null when nothing had a price. */
   costMinorUnits: number | null;
   currency: string | null;
   tokensCap: number | null;
@@ -778,11 +791,16 @@ export async function goalSpend(db: Queryable, goal: GoalRow): Promise<GoalSpend
     cache_read_tokens: string;
     cache_write_tokens: string;
     runs: string;
+    planning: boolean;
   }>(
     `SELECT u.model, sum(u.input_tokens)::text AS input_tokens, sum(u.output_tokens)::text AS output_tokens,
             sum(u.cache_read_tokens)::text AS cache_read_tokens, sum(u.cache_write_tokens)::text AS cache_write_tokens,
-            count(*)::text AS runs
-     FROM run_usage u JOIN tasks t ON t.id = u.task_id WHERE u.company_id = $1 AND t.goal_id = $2 GROUP BY u.model`,
+            count(*)::text AS runs, false AS planning
+     FROM run_usage u JOIN tasks t ON t.id = u.task_id WHERE u.company_id = $1 AND t.goal_id = $2 GROUP BY u.model
+     UNION ALL
+     SELECT model, sum(input_tokens)::text, sum(output_tokens)::text, sum(cache_read_tokens)::text,
+            sum(cache_write_tokens)::text, '0', true
+     FROM planning_usage WHERE company_id = $1 AND goal_id = $2 GROUP BY model`,
     [goal.company_id, goal.id],
   );
   let runTokens = 0;
@@ -796,8 +814,11 @@ export async function goalSpend(db: Queryable, goal: GoalRow): Promise<GoalSpend
       cacheReadTokens: Number(r.cache_read_tokens),
       cacheWriteTokens: Number(r.cache_write_tokens),
     };
-    runTokens += u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens;
-    runs += Number(r.runs);
+    // The planning's tokens are the goal's own running total, below; its rows price it by model.
+    if (!r.planning) {
+      runTokens += u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+      runs += Number(r.runs);
+    }
     const price = await priceFor(db, goal.company_id, r.model);
     const c = costFor(u, price);
     if (c !== null) {

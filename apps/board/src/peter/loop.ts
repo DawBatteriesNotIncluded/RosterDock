@@ -10,6 +10,7 @@
 // live writes stay gates.
 
 import { asSentence, blockerKind, type ActorRef, type EventRecord, type EventType } from "@rosterdock/shared";
+import { recordPlanningUsage } from "../budgets/usage.js";
 import type { EventBus } from "../events/bus.js";
 import { HttpError } from "../http-error.js";
 import { mutate } from "../mutate.js";
@@ -125,12 +126,13 @@ async function decideReplan(
   manager: Manager,
   ctx: FailureContext,
   goal: GoalRow | null,
-  subject: { companyId: string; taskId: string },
+  subject: { companyId: string; taskId: string; projectId: string; departmentId: string | null },
 ): Promise<Replan> {
   if (!(await modelAvailable(deps.model, subject.companyId))) return heuristicReplan(ctx);
   try {
+    const model = replanModel(ctx, manager.model);
     const result = await deps.model.complete({
-      model: replanModel(ctx, manager.model),
+      model,
       effort: manager.effort,
       system: replanSystemPrompt(),
       user: replanUserPrompt(ctx),
@@ -142,6 +144,18 @@ async function decideReplan(
         goalId: goal?.id ?? null,
         taskId: subject.taskId,
       },
+    });
+    // Costs and budgets count the call, a task outside any goal's too; the goal's card keeps its own total.
+    await recordPlanningUsage(deps.db, {
+      companyId: subject.companyId,
+      teammateId: manager.id,
+      purpose: "replan",
+      goalId: goal?.id ?? null,
+      taskId: subject.taskId,
+      projectId: subject.projectId,
+      departmentId: subject.departmentId,
+      model: result.model || model,
+      usage: result.usage,
     });
     if (goal) {
       await deps.db.query("UPDATE goals SET planning_usage = $2, updated_at = now() WHERE id = $1", [
@@ -259,7 +273,12 @@ async function replanTask(
     );
     return;
   }
-  const decision = await decideReplan(deps, manager, ctx, goal, { companyId, taskId: task.id });
+  const decision = await decideReplan(deps, manager, ctx, goal, {
+    companyId,
+    taskId: task.id,
+    projectId: task.project_id,
+    departmentId: task.department_id,
+  });
   if (decision.needsPerson) {
     await escalateTask(
       deps,

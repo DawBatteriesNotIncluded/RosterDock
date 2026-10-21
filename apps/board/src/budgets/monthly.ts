@@ -1,14 +1,16 @@
-// The monthly cost report and the CSV exports: projections of run_usage for one
-// company over a calendar month (or a budget window), priced with the table as
-// it stands now, grouped by project and its chargeback tag, department,
-// teammate and model. Seats are the monthly seat price of every teammate on a
-// seat-priced model or engine, not pro-rated: a seat costs the same idle.
+// The monthly cost report and the CSV exports: projections of the usage, the
+// runs' and the managers' own model calls (planning), for one company over a
+// calendar month (or a budget window), priced with the table as it stands now,
+// grouped by project and its chargeback tag, department, teammate and model.
+// Seats are the monthly seat price of every teammate on a seat-priced model or
+// engine, not pro-rated: a seat costs the same idle.
 
 import type { BudgetWindow } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
 import { costFor, usageModel, type ModelPrice } from "./cost.js";
 import type { CostLine, TokenTotals } from "./costs.js";
+import { USAGE_ROWS, type PlanningPurpose } from "./usage.js";
 
 export interface Bounds {
   from: Date;
@@ -81,14 +83,23 @@ async function priceTable(db: Queryable, companyId: string) {
 
 export interface UsageLine {
   createdAt: string;
-  runId: string;
-  taskNumber: number;
-  taskTitle: string;
+  /** A teammate's run, or what a manager's own model call was for. */
+  kind: "run" | PlanningPurpose;
+  /** The run; null for a manager's call. */
+  runId: string | null;
+  /** The run's task, or the task a call re-planned. */
+  taskNumber: number | null;
+  taskTitle: string | null;
+  /** The goal the run's task serves, or the goal a call planned. */
+  goalTitle: string | null;
+  /** A manager's calls on the line: one, or what a goal spent before they were counted one by one. */
+  calls: number;
   teammateId: string;
   teammateName: string;
   departmentId: string | null;
   departmentName: string | null;
-  projectId: string;
+  /** Null for a call that served no project (an org proposal). */
+  projectId: string | null;
   projectName: string;
   client: string;
   chargebackTag: string | null;
@@ -102,19 +113,22 @@ export interface UsageLine {
   costMinorUnits: number | null;
 }
 
-/** Every run's usage in the bounds, one line per run and model, with names for people. */
+/** Every run's and manager's call's usage in the bounds, one line per run and model or per call, with names. */
 export async function usageLines(db: Queryable, companyId: string, bounds: Bounds): Promise<UsageLine[]> {
   const { priceOf } = await priceTable(db, companyId);
   const rows = await db.query<{
     created_at: Date;
-    run_id: string;
-    number: number;
-    title: string;
+    kind: UsageLine["kind"];
+    run_id: string | null;
+    calls: number;
+    number: number | null;
+    title: string | null;
+    goal_title: string | null;
     teammate_id: string;
     teammate_name: string | null;
     department_id: string | null;
     department_name: string | null;
-    project_id: string;
+    project_id: string | null;
     project_name: string | null;
     client: string | null;
     chargeback_tag: string | null;
@@ -124,12 +138,14 @@ export async function usageLines(db: Queryable, companyId: string, bounds: Bound
     cache_read_tokens: string;
     cache_write_tokens: string;
   }>(
-    `SELECT u.created_at, u.run_id, t.number, t.title, u.teammate_id, m.name AS teammate_name,
+    `SELECT u.created_at, u.kind, u.run_id, u.calls, t.number, t.title, g.title AS goal_title,
+            u.teammate_id, m.name AS teammate_name,
             u.department_id, d.name AS department_name, u.project_id, p.name AS project_name, p.client,
             p.chargeback_tag, u.model, u.input_tokens::text, u.output_tokens::text,
             u.cache_read_tokens::text, u.cache_write_tokens::text
-     FROM run_usage u
-     JOIN tasks t ON t.id = u.task_id
+     FROM ${USAGE_ROWS} u
+     LEFT JOIN tasks t ON t.id = u.task_id
+     LEFT JOIN goals g ON g.id = coalesce(u.goal_id, t.goal_id)
      LEFT JOIN teammates m ON m.id = u.teammate_id
      LEFT JOIN departments d ON d.id = u.department_id
      LEFT JOIN projects p ON p.id = u.project_id
@@ -146,15 +162,18 @@ export async function usageLines(db: Queryable, companyId: string, bounds: Bound
     };
     return {
       createdAt: r.created_at.toISOString(),
+      kind: r.kind,
       runId: r.run_id,
       taskNumber: r.number,
       taskTitle: r.title,
+      goalTitle: r.goal_title,
+      calls: r.calls,
       teammateId: r.teammate_id,
       teammateName: r.teammate_name ?? "(removed)",
       departmentId: r.department_id,
       departmentName: r.department_name,
       projectId: r.project_id,
-      projectName: r.project_name ?? "(removed)",
+      projectName: r.project_id ? (r.project_name ?? "(removed)") : "",
       client: r.client ?? "",
       chargebackTag: r.chargeback_tag,
       model: r.model,
@@ -179,7 +198,18 @@ export function toCsv(header: string[], rows: unknown[][]): string {
 
 const money = (minor: number | null) => (minor === null ? "" : (minor / 100).toFixed(2));
 
-/** One line per run and model: who, what, for whom, how many tokens, what it cost. */
+/** The CSV's word for what a line is. */
+const KIND_LABEL: Record<UsageLine["kind"], string> = {
+  run: "run",
+  plan: "plan",
+  replan: "re-plan",
+  org: "org proposal",
+};
+
+/**
+ * One line per run and model, and per manager's call: who, what, for whom, how many tokens, what it cost.
+ * kind and goal close the line, so the columns before them stay where they were.
+ */
 export async function usageCsv(db: Queryable, companyId: string, bounds: Bounds): Promise<string> {
   const { currency } = await priceTable(db, companyId);
   const lines = await usageLines(db, companyId, bounds);
@@ -202,12 +232,14 @@ export async function usageCsv(db: Queryable, companyId: string, bounds: Bounds)
       "total_tokens",
       "cost",
       "currency",
+      "kind",
+      "goal",
     ],
     lines.map((l) => [
       l.createdAt,
-      l.runId,
-      `#${l.taskNumber}`,
-      l.taskTitle,
+      l.runId ?? "",
+      l.taskNumber === null ? "" : `#${l.taskNumber}`,
+      l.taskTitle ?? "",
       l.teammateName,
       l.departmentName ?? "",
       l.projectName,
@@ -221,6 +253,8 @@ export async function usageCsv(db: Queryable, companyId: string, bounds: Bounds)
       l.totalTokens,
       money(l.costMinorUnits),
       currency,
+      KIND_LABEL[l.kind],
+      l.goalTitle ?? "",
     ]),
   );
 }
@@ -254,7 +288,7 @@ function emptyTotals(): TokenTotals {
 }
 
 function line<T>(extra: T): CostLine & T {
-  return { tokens: emptyTotals(), costMinorUnits: null, runs: 0, ...extra };
+  return { tokens: emptyTotals(), costMinorUnits: null, runs: 0, calls: 0, ...extra };
 }
 
 function add(target: CostLine, l: UsageLine): void {
@@ -264,7 +298,8 @@ function add(target: CostLine, l: UsageLine): void {
   target.tokens.cacheWrite += l.cacheWriteTokens;
   target.tokens.total += l.totalTokens;
   if (l.costMinorUnits !== null) target.costMinorUnits = (target.costMinorUnits ?? 0) + l.costMinorUnits;
-  target.runs += 1;
+  if (l.kind === "run") target.runs += 1;
+  else target.calls += l.calls;
 }
 
 export async function monthlyReport(
@@ -328,7 +363,7 @@ export async function monthlyReport(
 
   for (const l of lines) {
     add(totals, l);
-    const project = byProject.get(l.projectId);
+    const project = l.projectId ? byProject.get(l.projectId) : undefined;
     if (project) add(project, l);
     let dept = byDepartment.get(l.departmentId);
     if (!dept) {
@@ -374,6 +409,7 @@ export async function monthlyReport(
     t.tokens.total += p.tokens.total;
     if (p.costMinorUnits !== null) t.costMinorUnits = (t.costMinorUnits ?? 0) + p.costMinorUnits;
     t.runs += p.runs;
+    t.calls += p.calls;
   }
   const byTokens = <T extends CostLine>(a: T, b: T) => b.tokens.total - a.tokens.total;
   return {

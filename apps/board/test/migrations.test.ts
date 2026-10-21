@@ -173,3 +173,109 @@ describe("0036_stub_usage", () => {
     expect(await costOf(realRun)).toBe(45);
   });
 });
+
+describe("0039_planning_usage", () => {
+  it("carries what goals and org proposals spent planning into usage Costs and budgets read", async () => {
+    await migrate(pool, await migrationsUpTo("0039_planning_usage.sql", false));
+    const one = async <T extends pg.QueryResultRow>(sql: string, params: unknown[] = []) =>
+      (await pool.query<T>(sql, params)).rows[0]!;
+    const company = (
+      await one<{ id: string }>("INSERT INTO companies (name) VALUES ('Planned') RETURNING id")
+    ).id;
+    const project = (
+      await one<{ id: string }>(
+        "INSERT INTO projects (company_id, name) VALUES ($1, 'Digest') RETURNING id",
+        [company],
+      )
+    ).id;
+    const peter = (
+      await one<{ id: string }>(
+        `INSERT INTO teammates (company_id, name, handle, role, engine, model)
+         VALUES ($1, 'Peter', 'peter', 'project manager', 'claude_code', 'claude-opus-5-5') RETURNING id`,
+        [company],
+      )
+    ).id;
+    const person = "00000000-0000-4000-8000-000000000001";
+    const goal = async (title: string, planner: string | null, usage: object, plannedAt: string | null) =>
+      (
+        await one<{ id: string }>(
+          `INSERT INTO goals (company_id, project_id, opened_project, text, title, planner, planning_usage, planned_at,
+                              created_at, created_by_kind, created_by_id)
+           VALUES ($1, $2, false, $3, $3, $4, $5, $6, '2026-09-20T09:00:00Z', 'user', $7) RETURNING id`,
+          [company, project, title, planner, JSON.stringify(usage), plannedAt, person],
+        )
+      ).id;
+    // Planned by the model; planned by role after the model's plans were refused; never planned with one.
+    const byModel = await goal(
+      "By model",
+      "model:claude-opus-5",
+      { inputTokens: 1690, outputTokens: 940, calls: 1 },
+      "2026-09-21T10:00:00Z",
+    );
+    const refused = await goal(
+      "Refused",
+      "heuristic (the model's plan was refused: task 1 names @nobody)",
+      { inputTokens: 3000, outputTokens: 800, cacheReadTokens: 200, calls: 2 },
+      null,
+    );
+    await goal("By role", "heuristic", {}, "2026-09-21T10:00:00Z");
+    await pool.query(
+      `INSERT INTO drafts (company_id, kind, brief, proposal, planner, usage, created_by_kind, created_by_id, created_at)
+       VALUES ($1, 'org', 'Staff it', '{}', 'model:claude-opus-5', $2, 'teammate', $3, '2026-09-22T08:00:00Z'),
+              ($1, 'audit', '', '{}', 'audit', '{}', 'teammate', $3, '2026-09-22T08:00:00Z')`,
+      [company, JSON.stringify({ inputTokens: 2100, outputTokens: 700, calls: 1 }), peter],
+    );
+
+    expect((await migrate(pool, await migrationsUpTo("0039_planning_usage.sql", true))).applied).toEqual([
+      "0039_planning_usage.sql",
+    ]);
+
+    const rows = (
+      await pool.query(
+        `SELECT purpose, goal_id, project_id, teammate_id, model, calls, input_tokens::int, output_tokens::int,
+                cache_read_tokens::int, created_at
+         FROM planning_usage WHERE company_id = $1 ORDER BY created_at, purpose`,
+        [company],
+      )
+    ).rows;
+    expect(rows).toEqual([
+      // Still waiting on its plan when the model was refused: dated when it was opened, on Peter's model.
+      {
+        purpose: "plan",
+        goal_id: refused,
+        project_id: project,
+        teammate_id: peter,
+        model: "claude-opus-5-5",
+        calls: 2,
+        input_tokens: 3000,
+        output_tokens: 800,
+        cache_read_tokens: 200,
+        created_at: new Date("2026-09-20T09:00:00Z"),
+      },
+      {
+        purpose: "plan",
+        goal_id: byModel,
+        project_id: project,
+        teammate_id: peter,
+        model: "claude-opus-5",
+        calls: 1,
+        input_tokens: 1690,
+        output_tokens: 940,
+        cache_read_tokens: 0,
+        created_at: new Date("2026-09-21T10:00:00Z"),
+      },
+      {
+        purpose: "org",
+        goal_id: null,
+        project_id: null,
+        teammate_id: peter,
+        model: "claude-opus-5",
+        calls: 1,
+        input_tokens: 2100,
+        output_tokens: 700,
+        cache_read_tokens: 0,
+        created_at: new Date("2026-09-22T08:00:00Z"),
+      },
+    ]);
+  });
+});

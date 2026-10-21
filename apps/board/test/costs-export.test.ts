@@ -135,6 +135,8 @@ describe("costs export and the monthly report", () => {
       "total_tokens",
       "cost",
       "currency",
+      "kind",
+      "goal",
     ]);
     expect(rows).toHaveLength(3);
     const line1 = rows.find((r) => r[1] === r1)!;
@@ -149,6 +151,8 @@ describe("costs export and the monthly report", () => {
       "1001000",
       "2.41",
       "GBP",
+      "run",
+      "",
     ]);
     expect(line1[2]).toBe(`#${t1.number}`);
     expect(line1[4]).toBe("Cody");

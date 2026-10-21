@@ -793,6 +793,8 @@ export interface CostLine {
   tokens: TokenTotals;
   costMinorUnits: number | null;
   runs: number;
+  /** A manager's own model calls in the line: planning a goal, a re-plan note, an org proposal. */
+  calls: number;
 }
 
 export interface BudgetLine {
