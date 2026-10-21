@@ -13,6 +13,9 @@ import type { PlannerStatus } from "../src/peter/planners.js";
 import type { StylePack } from "../src/styles/catalog.js";
 import { migrate } from "../src/db/migrate.js";
 
+/** What a name resolves to in a test that does not say: an address the board's guard takes as public. */
+export const PUBLIC_TEST_ADDRESS = "93.184.215.14";
+
 const ADMIN_URL =
   process.env.ROSTERDOCK_TEST_ADMIN_URL ?? "postgres://rosterdock:rosterdock@localhost:5432/postgres";
 
@@ -163,7 +166,8 @@ export async function startTestBoard(
     oidcFetch?: typeof fetch;
     otlpFetch?: typeof fetch;
     storageFetch?: typeof fetch;
-    sourcesFetch?: typeof fetch;
+    webFetch?: typeof fetch;
+    webResolve?: (host: string) => Promise<string[]>;
     smtp?: SmtpOptions;
     env?: NodeJS.ProcessEnv;
   } = {},
@@ -204,8 +208,9 @@ export async function startTestBoard(
     // Nor the build's own copies: a test that wants some names its directory.
     stylesVendorDir: opts.stylesVendorDir ?? null,
     ...(opts.storageFetch ? { storageFetch: opts.storageFetch } : {}),
-    // Nor the web: a research source a test does not fake answers nothing.
-    sourcesFetch: opts.sourcesFetch ?? (async () => new Response("no web in this test", { status: 503 })),
+    // Nor the web: a page a test does not fake answers nothing, and a name it does not resolve is public.
+    webFetch: opts.webFetch ?? (async () => new Response("no web in this test", { status: 503 })),
+    webResolve: opts.webResolve ?? (async () => [PUBLIC_TEST_ADDRESS]),
     ...(opts.approvalExecutor ? { approvalExecutor: opts.approvalExecutor } : {}),
     // Never the real fetch: a board without a fake MCP server gets one that answers nothing.
     mcpFetch:

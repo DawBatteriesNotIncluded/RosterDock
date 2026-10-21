@@ -250,7 +250,13 @@ export function registerDepartmentRoutes(app: FastifyInstance, db: Db): void {
           await ctx.emit(
             "department.updated",
             { kind: "department", id },
-            { name: dept.name, writePolicy: dept.write_policy, changes: Object.keys(body) },
+            {
+              name: dept.name,
+              writePolicy: dept.write_policy,
+              changes: Object.keys(body),
+              // The web sites its runs may read, when the change sets the sandbox.
+              ...(body.sandbox ? { webDomains: body.sandbox.webDomains ?? null } : {}),
+            },
           );
         }
         if (body.leadTeammateId !== undefined) {

@@ -1,11 +1,13 @@
 // Client policies: what each project's client lets any teammate do with each
 // connection. A matrix of projects by connections; a cell is the cap for that
 // pair (or "as granted" to say nothing). Policy only narrows: a cap never
-// widens a toolbox.
+// widens a toolbox. With the web connection, a column of the web sites each
+// client lets it read, which narrows the company's list the same way.
 import { useState } from "react";
 import type { ToolMode } from "@rosterdock/shared";
 import type { CompanyData, Project } from "../api/types.ts";
 import { Button, Pill } from "../components/ui.tsx";
+import { DomainsField } from "./WebDomains.tsx";
 
 export interface ClientPoliciesPanelProps {
   data: CompanyData;
@@ -24,10 +26,22 @@ export function capFor(policy: Project["clientPolicy"], connection: string): Too
   return policy.caps[connection] ?? "";
 }
 
+/** A policy that narrows something: a default, a cap, or a list of web sites. */
+export function policyNarrows(policy: Project["clientPolicy"]): boolean {
+  return !!(policy.default || Object.keys(policy.caps).length || policy.webDomains?.length);
+}
+
+/** The policy with this list of web sites; an empty one says nothing and is dropped. */
+export function withWebDomains(policy: Project["clientPolicy"], domains: string[]): Project["clientPolicy"] {
+  const { webDomains: _, ...rest } = policy;
+  return domains.length ? { ...rest, webDomains: domains } : rest;
+}
+
 export function ClientPoliciesPanel(p: ClientPoliciesPanelProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const connections = p.data.connections;
+  const web = connections.find((c) => c.kind === "web");
   const set = async (
     project: Project,
     patch: (policy: Project["clientPolicy"]) => Project["clientPolicy"],
@@ -69,6 +83,9 @@ export function ClientPoliciesPanel(p: ClientPoliciesPanelProps) {
           What each project's client allows with each connection. A cap here only narrows a teammate's
           toolbox; it never widens it. "As granted" says nothing. The default applies to connections without a
           cap.
+          {web
+            ? ` Web sites narrows what ${web.name} may read for that client's work to these domains and the sites under them; empty says nothing.`
+            : ""}
         </span>
       </div>
       {error ? <Pill tone="bad">{error}</Pill> : null}
@@ -87,6 +104,7 @@ export function ClientPoliciesPanel(p: ClientPoliciesPanelProps) {
                   {c.name}
                 </th>
               ))}
+              {web ? <th>Web sites</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -120,20 +138,29 @@ export function ClientPoliciesPanel(p: ClientPoliciesPanelProps) {
                     )}
                   </td>
                 ))}
+                {web ? (
+                  <td>
+                    <DomainsField
+                      label={`${pr.name} web sites`}
+                      value={pr.clientPolicy.webDomains}
+                      placeholder="as the company's"
+                      disabled={!p.canEdit || busy === pr.id}
+                      onSave={(domains) => set(pr, (pol) => withWebDomains(pol, domains))}
+                    />
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
         </table>
       )}
-      {p.canEdit &&
-      p.data.projects.some((pr) => pr.clientPolicy.default || Object.keys(pr.clientPolicy.caps).length) ? (
+      {p.canEdit && p.data.projects.some((pr) => policyNarrows(pr.clientPolicy)) ? (
         <div>
           <Button
             size="sm"
             onClick={() => {
               for (const pr of p.data.projects)
-                if (pr.clientPolicy.default || Object.keys(pr.clientPolicy.caps).length)
-                  void set(pr, () => ({ default: null, caps: {} }));
+                if (policyNarrows(pr.clientPolicy)) void set(pr, () => ({ default: null, caps: {} }));
             }}
           >
             Clear every cap

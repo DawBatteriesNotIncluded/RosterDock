@@ -273,10 +273,68 @@ their own, each with its own database and workers.
   cluster the same store is a directory of files (`ROSTERDOCK_SECRET_STORE=file:<dir>`); without either, no
   connection authorises by OAuth.
 - When a research review opens, the board fetches the public http(s) links the documents cite so the reviewer
-  can read them. Literal addresses, localhost and internal-looking names are refused on every hop, a source
-  gets five seconds and half a megabyte, and only text is kept; what a page says reaches the reviewer as
-  quoted material. `ROSTERDOCK_FETCH_SOURCES=0` (chart `board.fetchSources: false`) keeps the board off the
-  web.
+  can read them. Literal addresses, localhost and internal-looking names are refused on every hop, and so is a
+  name that resolves to any address that is not public: loopback, private, link-local (where cloud metadata
+  lives), unique-local, shared and the other special-purpose ranges, an IPv4 written as IPv6 included. The
+  board connects only to the addresses it checked, so a name cannot pass the check with one address and send
+  the connection to another. A source gets five seconds and half a megabyte, only text is kept, secret-shaped
+  strings in it are redacted, and what a page says reaches the reviewer as quoted material.
+  `ROSTERDOCK_FETCH_SOURCES=0` (chart `board.fetchSources: false`) keeps the board off the web.
+
+## Reading the web
+
+- **The web connection** is the board's own fetch. An owner or admin adds it under Settings > Connections (a
+  company has one) and grants it in a teammate's toolbox like any connection. Its one tool, `fetch`, reads a
+  page and never writes: the broker takes it as a read whatever its row says, nobody can make it a write, and
+  nothing it does is proposed or approved. The board fetches; the worker never does.
+- **What it can reach.** http and https pages at public addresses, nothing else. A URL with credentials in it,
+  a literal address, localhost or an internal-looking name is refused. The name is resolved and every address
+  it gets must be public: loopback, private, link-local (where cloud metadata lives), unique-local, shared
+  (carrier-grade NAT) and the other special-purpose ranges are refused, an IPv4 written as IPv6 by its IPv4.
+  The board connects only to the addresses it checked, so a name cannot pass the check with one address and
+  send the connection to another. Every redirect hop is checked the same way, three at most. An address is
+  judged by its range alone: where a cluster gives pods or services globally routable IPv6 addresses, or
+  translates through a NAT64 prefix of its own, those look public to the board, so narrow
+  `networkPolicy.board.egressTo` there. A page gets 15 seconds (looking its names up included) and 1 MB, only
+  text is read, HTML is turned into text by the converter the research review uses (one pass, whatever the
+  page holds), secret-shaped strings in it are redacted, and a call returns 30,000 characters of it at most.
+- **Which sites.** The web connection may carry a list of domains, each with the sites under it; without one
+  it reads any public site. A department (its sandbox's `webDomains`) and a project's client policy
+  (`webDomains`) may each name a list, and a list only narrows: a page must be on every list there is, on
+  every hop. A client policy that caps the connection at off switches it off for that client's work.
+- **What it records.** Every page the broker lets a teammate ask for is a `tool.called` event, appended in
+  its own transaction when the fetch ends: the teammate, the task, the run, the URL and where its redirects
+  ended (without the fragment or credentials, and with the values of secret-named query parameters such as
+  `token`, `key` or `X-Amz-Signature` redacted, 2,000 characters at most), the status, the bytes read and why
+  it failed, a redirect named the same way. A refused address or site is recorded the same way. Never what
+  the page says, and never a header beyond a non-text page's media type. The run's own log keeps the start of
+  each tool call's arguments as the engine sent them, as it does for every tool, so a URL shows there as
+  asked.
+- What a page says reaches the teammate as material for its task, and the brief says it is not
+  instructions. A page can still try to talk a model into something; the toolbox, the department's write
+  policy and approvals bound what the teammate can do about it.
+- `ROSTERDOCK_FETCH_SOURCES=0` (chart `board.fetchSources: false`) keeps the board off the web: the web
+  connection fetches nothing and its check says why. The research review's source check is the board's own,
+  not a teammate's: it reads the links a document cites through the same guard, whatever a company's list
+  says.
+- **A web tool a company brings** (search, a browser, a fetch server: the catalog's Web entries, or any MCP
+  server or OpenAPI service) is a connection like any other. The broker decides each call and records each
+  read with its argument names; what the tool fetches, and from where, is the tool's. A hosted search
+  service fetches from its own network. A stdio server runs in the board pod as the board, so a fetcher or a
+  browser there reaches what the board reaches: the cluster, the board's own port and, with
+  `board.oauth.enabled`, the API server. The reference fetch server refuses private addresses by default but
+  checks a name before it connects, not as it connects, so a name that changes its answer between the two
+  gets through; a browser's origin lists are not a boundary at all. Run those as a service of their own,
+  with a network policy that reaches public addresses only, and connect over HTTP.
+- **The engines' own web tools** bypass the board. Claude Code's WebFetch and WebSearch run only when the
+  operator lists them in the worker's tool list (`ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`, chart
+  `worker.claudeAllowedTools`), and a department's list only narrows that. Codex keeps its own web search (a
+  cached index; live, with network for its commands, under `danger-full-access`) unless the department's list
+  leaves out WebSearch (Workers run model output, above). WebFetch fetches from the worker pod, and what it
+  reaches is what the pod reaches (with `networkPolicy.enabled` the default fleet reaches public HTTPS only,
+  every private range excluded); a web search runs at the model's provider. None of it has the board's
+  address check, a site list or a `tool.called` record: the run log shows the URL or query asked, like any
+  tool input, and the brief tells the teammate it has them.
 
 ## What you own
 

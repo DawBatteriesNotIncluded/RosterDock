@@ -31,8 +31,10 @@ import { queueNameForPool } from "@rosterdock/shared";
 import type { RunQueue } from "../queue.js";
 import { costFor, totalTokens, usageModel } from "../budgets/cost.js";
 import { alertOnBudgets, assertWithinBudgets, priceFor } from "../budgets/service.js";
-import { effectiveToolbox } from "../broker/policy.js";
+import { effectiveToolbox, webNarrowingReason, webScope } from "../broker/policy.js";
 import { narrowingReason } from "../broker/policy.js";
+import { WEB_FETCH_TOOL } from "../web/read.js";
+import { webCatalogEntry } from "../mcp/catalog.js";
 import {
   listChecks,
   listComments,
@@ -544,6 +546,8 @@ export async function buildRunSpec(
   db: Queryable,
   run: RunRow,
   store: ObjectStore | null = null,
+  /** Whether the board reads the web (ROSTERDOCK_FETCH_SOURCES); off, the brief says the web connection reads nothing. */
+  opts: { web?: boolean } = {},
 ): Promise<RunSpec> {
   const task = (await db.query<TaskForRun>("SELECT * FROM tasks WHERE id = $1", [run.task_id])).rows[0];
   if (!task) throw notFound("task");
@@ -730,6 +734,26 @@ export async function buildRunSpec(
         diff,
       };
   }
+  const toolbox = await effectiveToolbox(db, {
+    companyId: run.company_id,
+    teammateId: run.teammate_id,
+    departmentId: task.department_id,
+    projectId: task.project_id,
+  });
+  // The web connection, when the teammate holds it on this task with its fetch on.
+  const webGrant = toolbox.find(
+    (e) =>
+      e.connection.kind === "web" &&
+      e.connection.enabled &&
+      e.mode !== "off" &&
+      e.tools.some((t) => t.name === WEB_FETCH_TOOL && !t.off),
+  );
+  const webSites = webGrant
+    ? await webScope(db, webGrant.connection, {
+        departmentId: task.department_id,
+        projectId: task.project_id,
+      })
+    : null;
   return {
     version: 1,
     runId: run.id,
@@ -781,14 +805,7 @@ export async function buildRunSpec(
     review,
     rework,
     approvals,
-    tools: (
-      await effectiveToolbox(db, {
-        companyId: run.company_id,
-        teammateId: run.teammate_id,
-        departmentId: task.department_id,
-        projectId: task.project_id,
-      })
-    ).map((e) => ({
+    tools: toolbox.map((e) => ({
       connection: e.connection.name,
       mode: e.mode,
       narrowed: narrowingReason(e, department?.name ?? null, project.client),
@@ -797,6 +814,31 @@ export async function buildRunSpec(
       writes: e.tools.filter((t) => t.write && !t.off).map((t) => t.name),
       off: e.tools.filter((t) => t.off).map((t) => t.name),
     })),
+    web: {
+      fetch:
+        webGrant && webSites
+          ? {
+              connection: webGrant.connection.name,
+              domains: webSites.domains,
+              narrowed: webNarrowingReason(webSites, department?.name ?? null, project.client),
+            }
+          : null,
+      offline: opts.web === false,
+      // Connections from the catalog's web tools, as the teammate holds them on this task.
+      tools: toolbox.flatMap((e) => {
+        const entry = webCatalogEntry(e.connection.catalog_id);
+        if (!entry || !e.connection.enabled || e.mode === "off") return [];
+        return [
+          {
+            connection: e.connection.name,
+            name: entry.name,
+            mode: e.mode,
+            reads: e.tools.filter((t) => !t.write && !t.off).map((t) => t.name),
+            writes: e.tools.filter((t) => t.write && !t.off).map((t) => t.name),
+          },
+        ];
+      }),
+    },
   };
 }
 
@@ -814,7 +856,7 @@ export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["completed", "failed
 export async function claimRun(
   db: Db,
   input: { runId: string; jobId: string; workerId: string },
-  opts: { staleAfterMs: number; store?: ObjectStore | null } = { staleAfterMs: 60_000 },
+  opts: { staleAfterMs: number; store?: ObjectStore | null; web?: boolean } = { staleAfterMs: 60_000 },
 ): Promise<ClaimResult> {
   const first = await loadRun(db, input.runId);
   const { result } = await mutate(
@@ -854,7 +896,7 @@ export async function claimRun(
         throw new HttpError(409, "job id does not match this run", { status: run.status, jobMismatch: true });
       }
       const attempt = run.status === "interrupted" ? run.attempt + 1 : run.attempt;
-      const spec = await buildRunSpec(ctx.client, { ...run, attempt }, opts.store ?? null);
+      const spec = await buildRunSpec(ctx.client, { ...run, attempt }, opts.store ?? null, { web: opts.web });
       const hash = runSpecHash(spec);
       const updated = await ctx.client.query<RunRow>(
         `UPDATE runs SET status = 'running', attempt = $2, job_id = COALESCE(job_id, $3), worker_id = $4, started_at = COALESCE(started_at, now()),

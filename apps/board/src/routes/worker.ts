@@ -62,7 +62,11 @@ export function registerWorkerRoutes(
     if (typeof presented !== "string" || !safeEqual(presented, config.workerToken))
       throw new HttpError(401, "worker token required");
     const body = parseBody(WorkerClaimSchema, req.body);
-    const claimed = await claimRun(db, body, { staleAfterMs: config.runStaleAfterMs, store });
+    const claimed = await claimRun(db, body, {
+      staleAfterMs: config.runStaleAfterMs,
+      store,
+      web: config.fetchSources,
+    });
     reply.code(201);
     return {
       run: runToJson(claimed.run),
@@ -76,7 +80,7 @@ export function registerWorkerRoutes(
   app.get("/api/worker/runs/:runId", { config: {} }, async (req) => {
     const runId = requireRunToken(req);
     const run = await loadRun(db, runId);
-    const spec = await buildRunSpec(db, run, store);
+    const spec = await buildRunSpec(db, run, store, { web: config.fetchSources });
     return { run: runToJson(run), pack: renderRunPack(spec), spec };
   });
 

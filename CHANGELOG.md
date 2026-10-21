@@ -35,6 +35,11 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
   names those images (`.github/workflows/release.yml`). Run by hand, it is a dry run that pushes nothing.
 - The web image carries the licence of every package bundled into the UI, each with its text, in
   `third-party-licenses.txt`, which it also serves at `/third-party-licenses.txt`.
+- Web access for teammates, through the board. The web connection (Settings > Connections > Web) reads public
+  pages for the teammates granted it: every address a name resolves to is checked and the board connects to
+  no other, a company's list of sites narrowed by a department and a client, every page an event. The
+  catalog has search, browser and fetch servers a company may run instead (Brave Search, Tavily, Exa,
+  Playwright, the MCP reference fetch server), and the brief tells each teammate which web tools it has.
 
 ### Changed
 

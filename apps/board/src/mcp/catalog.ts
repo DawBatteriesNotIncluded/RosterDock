@@ -26,6 +26,13 @@ export interface CatalogEntry {
   writes: string[];
 }
 
+/**
+ * The catalog's web tools (search, a browser, a fetch server): a teammate's brief names a connection added
+ * from one of these as a web tool. The board's own web connection is not in the catalog (Settings >
+ * Connections > Web).
+ */
+export const WEB_CATEGORY = "Web";
+
 export const CONNECTOR_CATALOG: CatalogEntry[] = [
   {
     id: "hubspot",
@@ -164,8 +171,114 @@ export const CONNECTOR_CATALOG: CatalogEntry[] = [
       "push_files",
     ],
   },
+  // Web tools a company may already run: search with an API key, a real browser, a fetch server. Each is a
+  // connection like any other; none has the web connection's address guard or site list (docs/operator.md,
+  // Web access for teammates). Versions are pinned as published on 2026-10-21; a stdio command runs only once
+  // the operator lists that exact line.
+  {
+    id: "brave-search",
+    name: "Brave Search",
+    description: "Web, news, image, video and local search through the Brave Search API. Every tool reads.",
+    category: WEB_CATEGORY,
+    kind: "mcp",
+    transport: "stdio",
+    commandExample: "npx -y @brave/brave-search-mcp-server@2.1.4",
+    authEnvExample: "BRAVE_API_KEY",
+    docsUrl: "https://github.com/brave/brave-search-mcp-server",
+    reads: [
+      "brave_web_search",
+      "brave_local_search",
+      "brave_place_search",
+      "brave_image_search",
+      "brave_video_search",
+      "brave_news_search",
+      "brave_summarizer",
+      "brave_llm_context",
+    ],
+    writes: [],
+  },
+  {
+    id: "tavily",
+    name: "Tavily",
+    description: "Search, extract, crawl and map the web through Tavily's hosted server. Every tool reads.",
+    category: WEB_CATEGORY,
+    kind: "mcp",
+    transport: "http",
+    urlExample: "https://mcp.tavily.com/mcp",
+    commandExample: "npx -y tavily-mcp@0.2.22",
+    authEnvExample: "TAVILY_API_KEY",
+    docsUrl: "https://github.com/tavily-ai/tavily-mcp",
+    reads: ["tavily_search", "tavily_extract", "tavily_crawl", "tavily_map", "tavily_research"],
+    writes: [],
+  },
+  {
+    id: "exa",
+    name: "Exa",
+    description: "Search the web and read pages through Exa's hosted server. Every tool listed reads.",
+    category: WEB_CATEGORY,
+    kind: "mcp",
+    transport: "http",
+    urlExample: "https://mcp.exa.ai/mcp",
+    commandExample: "npx -y exa-mcp-server@3.4.2",
+    authEnvExample: "EXA_API_KEY",
+    docsUrl: "https://github.com/exa-labs/exa-mcp-server",
+    reads: ["web_search_exa", "web_fetch_exa", "web_search_advanced_exa"],
+    writes: [],
+  },
+  {
+    id: "playwright",
+    name: "Playwright browser",
+    description:
+      "A real browser, for pages that need one. Snapshots and screenshots read; navigating, clicking and typing write until a person says otherwise.",
+    category: WEB_CATEGORY,
+    kind: "mcp",
+    transport: "http",
+    urlExample: "http://playwright-mcp:8931/mcp",
+    commandExample: "npx -y @playwright/mcp@0.0.83 --headless --isolated --browser chromium",
+    docsUrl: "https://github.com/microsoft/playwright-mcp",
+    reads: [
+      "browser_snapshot",
+      "browser_take_screenshot",
+      "browser_console_messages",
+      "browser_network_requests",
+      "browser_network_request",
+      "browser_find",
+    ],
+    writes: [
+      "browser_navigate",
+      "browser_navigate_back",
+      "browser_click",
+      "browser_type",
+      "browser_fill_form",
+      "browser_select_option",
+      "browser_press_key",
+      "browser_file_upload",
+      "browser_handle_dialog",
+      "browser_evaluate",
+      "browser_run_code_unsafe",
+    ],
+  },
+  {
+    id: "fetch",
+    name: "Fetch (MCP reference server)",
+    description:
+      "A page as markdown. Python, run with uv where the board runs; the board's own web connection reads pages with its address guard, site lists and a record of each.",
+    category: WEB_CATEGORY,
+    kind: "mcp",
+    transport: "stdio",
+    commandExample: "uvx mcp-server-fetch@2026.10.19",
+    docsUrl: "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
+    reads: ["fetch"],
+    writes: [],
+  },
 ];
 
 export function catalogEntry(id: string | null | undefined): CatalogEntry | null {
   return id ? (CONNECTOR_CATALOG.find((e) => e.id === id) ?? null) : null;
+}
+
+/** The catalog's web tool a connection was added from, or null. */
+export function webCatalogEntry(id: string | null | undefined): CatalogEntry | null {
+  const entry = catalogEntry(id);
+  return entry?.category === WEB_CATEGORY ? entry : null;
 }

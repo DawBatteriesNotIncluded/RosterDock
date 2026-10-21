@@ -51,6 +51,8 @@ export function toolGranted(entry: Pick<ToolboxEntry, "tools"> | null | undefine
 export interface ClientPolicy {
   default?: ToolMode | null;
   caps?: Record<string, ToolMode>;
+  /** The web domains the client lets the web connection read (web.ts); only narrows. */
+  webDomains?: string[] | null;
 }
 
 /** What a department's write policy allows a tool to do: readonly departments read only. */

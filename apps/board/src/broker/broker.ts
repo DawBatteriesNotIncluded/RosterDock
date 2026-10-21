@@ -16,7 +16,14 @@ import type { McpClientDeps } from "../mcp/client.js";
 import { connectionByName, loadConnection, type ConnectionRow } from "../mcp/connections.js";
 import { mutate } from "../mutate.js";
 import { loadTask } from "../tasks/service.js";
-import { effectiveToolbox, narrowingReason, type EffectiveConnection } from "./policy.js";
+import { WEB_FETCH_TOOL } from "../web/read.js";
+import {
+  effectiveToolbox,
+  narrowingReason,
+  webNarrowingReason,
+  webScope,
+  type EffectiveConnection,
+} from "./policy.js";
 
 export class BrokerRefusal extends Error {}
 
@@ -77,6 +84,9 @@ export function classifyOn(
   tool: string,
 ): { write: boolean; known: boolean; off: boolean } {
   const listed = (connection.tools ?? []).find((t) => t.name === tool);
+  // The web connection's one tool reads, whatever its row says; it has no other.
+  if (connection.kind === "web")
+    return { write: false, known: tool === WEB_FETCH_TOOL, off: listed?.off === true };
   if (listed) return { write: listed.write, known: true, off: listed.off === true };
   if (connection.discovered_at) return { write: true, known: false, off: false };
   const entry = catalogEntry(connection.catalog_id);
@@ -112,7 +122,22 @@ export async function listTools(deps: BrokerDeps, actor: BrokerActor) {
     departmentId: task.department_id,
     projectId: task.project_id,
   });
-  return effective.map((e) => describeConnection(e, departmentName, clientName));
+  return Promise.all(
+    effective.map(async (e) => {
+      if (e.connection.kind !== "web") return describeConnection(e, departmentName, clientName);
+      const web = await webScope(deps.db, e.connection, {
+        departmentId: task.department_id,
+        projectId: task.project_id,
+      });
+      return {
+        ...describeConnection(e, departmentName, clientName),
+        // The sites its fetch may read on this task; null for any public site.
+        domains: web.domains,
+        domainsNarrowed: webNarrowingReason(web, departmentName, clientName),
+        ...(deps.mcp.web ? {} : { offline: "this board is kept off the web by its operator" }),
+      };
+    }),
+  );
 }
 
 export function describeConnection(
@@ -122,6 +147,7 @@ export function describeConnection(
 ) {
   return {
     connection: e.connection.name,
+    kind: e.connection.kind,
     enabled: e.connection.enabled,
     mode: e.mode,
     granted: e.granted,
@@ -163,7 +189,7 @@ export async function callTool(
     throw new BrokerRefusal(`${connection.name} is not in your toolbox; ask a person to grant it`);
   if (!connection.enabled) throw new BrokerRefusal(`${connection.name} is switched off by a person`);
   const { write, known, off } = classifyOn(connection, input.tool);
-  if (!known && connection.discovered_at)
+  if (!known && (connection.discovered_at || connection.kind === "web"))
     throw new BrokerRefusal(
       `${input.tool} is not a tool on ${connection.name}; board_list_tools has the list`,
     );
@@ -212,9 +238,19 @@ export async function callTool(
         : `This exact write is already proposed and waiting for a person. Do not propose it again; hand over and stop.`,
     };
   }
-  // A read: call it now, record it.
+  // A read: call it now, record it. The web connection reads only the sites this task may.
+  const web =
+    connection.kind === "web"
+      ? await webScope(deps.db, connection, { departmentId: task.department_id, projectId: task.project_id })
+      : null;
   const startMs = Date.now();
-  const outcome = await callConnectionTool(connection, deps.mcp, input.tool, input.arguments);
+  const outcome = await callConnectionTool(
+    connection,
+    deps.mcp,
+    input.tool,
+    input.arguments,
+    web ? { webDomains: web.domains } : undefined,
+  );
   const result = outcome.ok ? redactResult(outcome.result) : null;
   // Inside a run the read joins the run's trace when the run ends; outside one it is a trace of its own.
   if (!actor.runId && deps.tracer)
@@ -256,6 +292,8 @@ export async function callTool(
         ok: outcome.ok,
         error: outcome.ok ? null : outcome.error,
         argumentKeys: Object.keys(input.arguments ?? {}),
+        // The web connection's record of the page: where, what status, how much. Never what it says.
+        ...(outcome.audit ?? {}),
       },
     );
   });
@@ -282,6 +320,8 @@ export function brokerExecutor(deps: BrokerDeps): ApprovalExecutor {
       };
     if (!connection.enabled)
       return { ok: false, error: `${connection.name} is switched off; nothing was sent` };
+    if (connection.kind === "web")
+      return { ok: false, error: `${connection.name} only reads; there is nothing to send` };
     if (classifyOn(connection, approval.tool).off)
       return {
         ok: false,

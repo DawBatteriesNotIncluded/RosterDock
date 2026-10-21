@@ -9,6 +9,7 @@ import { codexReach, type CodexReach } from "@rosterdock/shared";
 import {
   buildArgs,
   codexControls,
+  codexWebNote,
   createCodexEngine,
   errorText,
   parseCodexStream,
@@ -324,6 +325,60 @@ process.exit(1);`,
       },
     });
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it("tells the teammate when Codex keeps its own web search or network, which do not go through the board", async () => {
+    const open = { write: true, network: true, webSearch: true };
+    expect(codexWebNote("workspace-write", open)).toContain(
+      "This worker also leaves Codex its own web search, from a cached index. They reach the web outside the board",
+    );
+    expect(codexWebNote("danger-full-access", open)).toContain(
+      "leaves Codex its own web search and commands that reach the network.",
+    );
+    expect(codexWebNote("danger-full-access", { ...open, network: false })).toContain(
+      "its own web search, from a cached index.",
+    );
+    expect(codexWebNote("workspace-write", { ...open, webSearch: false })).toBeNull();
+    expect(codexWebNote("read-only", { write: false, network: true, webSearch: false })).toBeNull();
+    // The brief Codex reads carries it.
+    const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-codex-web-"));
+    const replay = path.join(dir, "replay.mjs");
+    await writeFile(
+      replay,
+      `import { readFile, writeFile } from "node:fs/promises";
+const chunks = [];
+for await (const c of process.stdin) chunks.push(c);
+await writeFile(process.env.PROMPT_PATH, Buffer.concat(chunks));
+process.stdout.write(await readFile(process.env.FIXTURE_PATH, "utf8"));`,
+      "utf8",
+    );
+    const prompt = async (allowedTools: string[] | null) => {
+      await createCodexEngine({
+        bin: process.execPath,
+        sandbox: "workspace-write",
+        prefixArgs: [replay],
+      }).run({
+        workdir: dir,
+        pack: "# Research task",
+        model: "m",
+        signal: new AbortController().signal,
+        emit: () => {},
+        onUsage: () => {},
+        env: {
+          PROMPT_PATH: path.join(dir, "prompt.txt"),
+          FIXTURE_PATH: path.join(fixtures, "codex-success.jsonl"),
+        },
+        allowedTools,
+        mcp: null,
+      });
+      return readFile(path.join(dir, "prompt.txt"), "utf8");
+    };
+    try {
+      expect(await prompt(null)).toContain("# Research task\n\n## Your engine's own web tools");
+      expect(await prompt(["Bash", "Read(./**)", "Write(./**)"])).not.toContain("own web tools");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("runs Codex as the department's tool list narrows it, and says how in the run log", async () => {

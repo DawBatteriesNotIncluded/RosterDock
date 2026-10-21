@@ -50,7 +50,7 @@ const web: typeof fetch = async (input) =>
 beforeAll(async () => {
   board = await startTestBoard(
     { gitlabToken: "glpat-test" },
-    { githubFetch: github.fetch, gitlabFetch: gitlab.fetch, sourcesFetch: web },
+    { githubFetch: github.fetch, gitlabFetch: gitlab.fetch, webFetch: web },
   );
   baseUrl = await board.app.listen({ host: "127.0.0.1", port: 0 });
 });

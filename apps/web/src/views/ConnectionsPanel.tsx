@@ -4,7 +4,8 @@
 // confirm a tool only the server calls read-only; switch it off; remove it.
 // Credentials are env var NAMES, never values; a connection may instead
 // authorise by OAuth, when the board has a secret store, and its tokens live
-// there.
+// there. The web connection is the board's own fetch: added here once, with
+// the company's list of web domains on its card.
 import { Activity, KeyRound, Plug, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import type { CreateConnectionInput, CreateOpenApiConnectionInput } from "@rosterdock/shared";
@@ -18,6 +19,7 @@ import type {
 } from "../api/types.ts";
 import { Button, Field, Pill, Tip } from "../components/ui.tsx";
 import { relativeTime } from "../lib/format.ts";
+import { DomainsField, domainsPhrase, parseDomains, webDomainsOf } from "./WebDomains.tsx";
 
 export interface ConnectionsPanelProps {
   connections: Connection[];
@@ -28,7 +30,12 @@ export interface ConnectionsPanelProps {
   createOpenApiConnection(input: CreateOpenApiConnectionInput): Promise<Connection>;
   updateConnection(
     id: string,
-    input: { enabled?: boolean; tools?: { name: string; write?: boolean; off?: boolean }[] },
+    input: {
+      enabled?: boolean;
+      tools?: { name: string; write?: boolean; off?: boolean }[];
+      /** The web connection's list of web domains; empty for any public site. */
+      domains?: string[] | null;
+    },
   ): Promise<Connection>;
   discoverConnection(id: string): Promise<Connection>;
   checkConnection(id: string): Promise<Connection>;
@@ -62,6 +69,8 @@ export function checkLine(c: Connection): string | null {
   if (!k) return null;
   const when = relativeTime(k.at);
   if (!k.ok) return `Check failed ${when}: ${k.error ?? "no answer"}`;
+  // Nothing is asked of the web connection: the board reads the web itself, or its operator keeps it off.
+  if (c.kind === "web") return `Checked ${when} · the board reads the web`;
   const parts = [`Checked ${when} · answered in ${k.latencyMs} ms`];
   if (c.kind === "mcp") {
     parts.push(`${k.tools.seen} tool${k.tools.seen === 1 ? "" : "s"} listed`);
@@ -93,6 +102,8 @@ function sourceNote(t: ConnectionTool): string {
 }
 
 export function connectionSummary(c: Connection): string {
+  if (c.kind === "web")
+    return `Web · the board's own fetch · reads ${domainsPhrase(webDomainsOf(c))}${c.tools.some((t) => t.off) ? " · fetch switched off" : ""}`;
   const reads = c.tools.filter((t) => !t.write && !t.off).length;
   const writes = c.tools.filter((t) => t.write && !t.off).length;
   const off = c.tools.filter((t) => t.off).length;
@@ -556,6 +567,70 @@ function AddOpenApiForm({
   );
 }
 
+/** The web connection: the board's own fetch, one per company, with the company's list of web domains. */
+export function AddWebForm({
+  existing,
+  offline,
+  onCreate,
+}: {
+  existing: Connection | undefined;
+  /** The operator keeps this board off the web. */
+  offline: boolean;
+  /** Resolves true when the connection was made; the form then clears. */
+  onCreate(input: CreateConnectionInput): Promise<boolean>;
+}) {
+  const [name, setName] = useState("web");
+  const [domains, setDomains] = useState("");
+  const [busy, setBusy] = useState(false);
+  const parsed = parseDomains(domains);
+  const submit = async (ev: FormEvent) => {
+    ev.preventDefault();
+    if (!name.trim() || parsed.bad !== null) return;
+    setBusy(true);
+    try {
+      if (await onCreate({ name: name.trim(), kind: "web", domains: parsed.domains })) setDomains("");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="hint">
+        The board reads public web pages for the teammates you grant it to: http and https only, every address
+        checked, every page recorded in Activity (the address, the status, the size, never what it says).
+        Teammates call it as a read; it never writes. A department and a client can narrow its sites, never
+        widen them.
+        {offline ? " This board's operator keeps it off the web, so for now it reads no page." : ""}
+      </span>
+      {existing ? (
+        <span className="hint">
+          This company has its web connection: {existing.name}. Its sites are on its card above.
+        </span>
+      ) : (
+        <form className="fields" onSubmit={submit}>
+          <Field label="Name" hint="Toolboxes use it">
+            <input value={name} onChange={(e) => setName(e.target.value)} style={{ width: 120 }} />
+          </Field>
+          <Field label="Sites" hint="Domains, each with the sites under it; empty for any public site">
+            <input
+              value={domains}
+              onChange={(e) => setDomains(e.target.value)}
+              placeholder="gong.io, developers.hubspot.com"
+              className="mono"
+              style={{ width: 280 }}
+            />
+          </Field>
+          {parsed.bad !== null ? <Pill tone="bad">{`${parsed.bad} is not a domain`}</Pill> : null}
+          <Button type="submit" variant="primary" disabled={busy || !name.trim() || parsed.bad !== null}>
+            <Plug size={14} />
+            <span>Add the web connection</span>
+          </Button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 /** Company secrets: the names a value was set for, and a form to set or replace one. Never a value. */
 function SecretsSection({
   canEdit,
@@ -737,7 +812,8 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>(p.initialCatalog ?? []);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
-  const [kind, setKind] = useState<"mcp" | "openapi">("mcp");
+  const [kind, setKind] = useState<"mcp" | "openapi" | "web">("mcp");
+  const web = p.connections.find((c) => c.kind === "web");
   useEffect(() => {
     if (p.initialCatalog) return;
     void p.loadCatalog().then(setCatalog, (err: Error) => setError(err.message));
@@ -783,7 +859,7 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
               </button>
               <Pill tone={c.enabled ? "ok" : "muted"}>{c.enabled ? "on" : "off"}</Pill>
               <span className="text-[12px] text-muted">{connectionSummary(c)}</span>
-              {c.authEnvName ? (
+              {c.kind === "web" ? null : c.authEnvName ? (
                 <Tip text="Credential by name">
                   <span className="tool">{c.authEnvName}</span>
                 </Tip>
@@ -850,6 +926,26 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
                 onConfirm={(names) => wrap(() => p.updateConnection(c.id, confirmAsRead(names)))()}
               />
             ) : null}
+            {c.kind === "web" ? (
+              <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                <span className="text-muted">Sites</span>
+                {p.canEdit ? (
+                  <DomainsField
+                    label={`${c.name} sites`}
+                    value={webDomainsOf(c)}
+                    placeholder="any public site"
+                    onSave={(domains) => wrap(() => p.updateConnection(c.id, { domains }))()}
+                  />
+                ) : (
+                  <span>{domainsPhrase(webDomainsOf(c))}</span>
+                )}
+                {p.features?.web === false ? (
+                  <span style={{ color: "var(--warn-ink)" }}>
+                    This board&apos;s operator keeps it off the web: it reads no page.
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
             {open === c.id ? (
               <div className="chips">
                 {c.tools.map((t) => (
@@ -915,8 +1011,17 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
             >
               OpenAPI service
             </Button>
+            <Button size="sm" variant={kind === "web" ? "primary" : "ghost"} onClick={() => setKind("web")}>
+              Web, built in
+            </Button>
           </div>
-          {kind === "mcp" ? (
+          {kind === "web" ? (
+            <AddWebForm
+              existing={web}
+              offline={p.features?.web === false}
+              onCreate={(i) => wrap(() => p.createConnection(i))()}
+            />
+          ) : kind === "mcp" ? (
             <AddMcpForm
               catalog={catalog}
               oauthOffered={!!p.features?.oauth}
