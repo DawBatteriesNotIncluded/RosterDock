@@ -1,20 +1,24 @@
 // The PM loop. One pass over a company: plan goals still waiting, start the
 // tasks whose dependencies are done, re-plan failed runs (twice, then
 // escalate), restart authors a review sent back, escalate reviews that go
-// round and round, chase teammates that keep others waiting, rebalance load,
-// and close goals whose every task is Done, with what they cost. Runs on a
-// timer and on the events it cares about. Deterministic: the model only
-// writes the re-plan note when Peter has one. Escalation is the goal turning
-// amber; nothing else reaches a person. Merges and live writes stay gates.
+// round and round, chase teammates that keep others waiting, tell a person
+// about a wait only a person can end, rebalance load, and close goals whose
+// every task is Done, with what they cost. Runs on a timer and on the events
+// it cares about. Deterministic: the model only writes the re-plan note when
+// Peter has one. Escalation is the goal turning amber (a task outside any open
+// goal gets Peter's note instead); nothing else reaches a person. Merges and
+// live writes stay gates.
 
 import { asSentence, blockerKind, type ActorRef, type EventRecord, type EventType } from "@rosterdock/shared";
 import type { EventBus } from "../events/bus.js";
 import { HttpError } from "../http-error.js";
 import { mutate } from "../mutate.js";
-import { chasePass, type ChaseOptions } from "../runs/chase.js";
+import { chasePass, DEFAULT_CHASE_OPTIONS, type ChaseOptions } from "../runs/chase.js";
 import { dispatchRun, type RunRow } from "../runs/service.js";
 import { artifactText } from "../storage/artifacts.js";
 import { postMessage, TASK_SELECT, type TaskRow } from "../tasks/service.js";
+import { teammateNamed } from "../tasks/waiting.js";
+import { BLOCKER_CODES, blockerFor, type BlockerRecord } from "@rosterdock/shared";
 import { escalateGoal, goalSpend, planGoal, startReadyTasks, type GoalRow, type PeterDeps } from "./goals.js";
 import { addUsage } from "./model.js";
 import {
@@ -28,7 +32,7 @@ import {
   type FailureContext,
   type Replan,
 } from "./replan.js";
-import { managerFor, managerForTask, type Manager } from "./seat.js";
+import { companyManager, managerFor, managerForTask, type Manager } from "./seat.js";
 import { modelAvailable } from "./planners.js";
 
 /** A teammate with this many open tasks hands the extra ones to a colleague of the same role. */
@@ -152,16 +156,19 @@ async function decideReplan(
   return heuristicReplan(ctx);
 }
 
+/** Blockers that are not a run's: waits on a dependency, a teammate, a person or an approval. */
+const NOT_RUN_BLOCKERS = BLOCKER_CODES.filter((c) => blockerKind(c) !== "run");
+
 async function replanFailures(deps: PeterDeps, companyId: string, out: PassResult): Promise<void> {
-  // Teammate tasks blocked by a run (not waiting on a teammate, a dependency or an approval), with no live run.
+  // Teammate tasks blocked by a run (not waiting on a dependency, a teammate, a person or an approval), with no live run.
   const failed = await deps.db.query<TaskRow>(
     `${TASK_SELECT} WHERE t.company_id = $1 AND t.status = 'blocked' AND t.assignee_kind = 'teammate'
-       AND t.blocker->>'code' NOT IN ('dependencies_unresolved', 'waiting_on_teammate', 'approval_required')
+       AND NOT (t.blocker->>'code' = ANY($2::text[]))
        AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.status IN ('queued', 'running', 'interrupted'))
        AND EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.kind = 'task' AND r.status IN ('failed', 'blocked'))
        AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = t.goal_id AND g.status IN ('stopped', 'done'))
      ORDER BY t.updated_at LIMIT 20`,
-    [companyId],
+    [companyId, NOT_RUN_BLOCKERS],
   );
   for (const task of failed.rows) {
     if (!task.blocker || blockerKind(task.blocker.code) !== "run") continue;
@@ -321,7 +328,8 @@ async function escalateTask(
   reason: string,
   out: PassResult,
 ): Promise<void> {
-  if (goal) {
+  // A goal that closed is not reopened by a task filed in its project afterwards.
+  if (goal && goal.status !== "done" && goal.status !== "stopped") {
     if (goal.status === "needs_you" && goal.attention === reason) return;
     await escalateGoal(deps, goal, manager, reason);
     out.escalated.push({ goalId: goal.id, reason });
@@ -404,6 +412,124 @@ async function tendReviews(deps: PeterDeps, companyId: string, out: PassResult):
     } catch {
       // Still cannot start: the next pass tries again; a budget blocker escalates through replanFailures once the task is blocked.
     }
+  }
+}
+
+// --- 5. Waits only a person can end: told to a person, once per wait ---------
+
+class MovedMeanwhile extends Error {}
+
+/** Why a wait on a teammate is a person's now, or null while the teammate may still answer. */
+async function unanswered(
+  deps: PeterDeps,
+  task: TaskRow & { last_chased_at: Date | null },
+  manager: Manager,
+  peter: Manager | null,
+  windowMs: number,
+): Promise<{ why: string; waitingOn: BlockerRecord["waitingOn"] } | null> {
+  const waiting = task.blocker?.waitingOn;
+  const since = Date.now() - windowMs;
+  const blockedLong = task.updated_at.getTime() < since;
+  const target = waiting?.kind === "teammate" ? await teammateNamed(deps.db, task.company_id, waiting) : null;
+  if (!target) {
+    if (!blockedLong) return null;
+    const why = waiting
+      ? `@${(waiting.name ?? waiting.id).replace(/^@/, "")} is not a teammate here, so a person has to answer.`
+      : "It names no teammate, so a person has to answer.";
+    return { why, waitingOn: undefined };
+  }
+  const waitingOn = { kind: "teammate" as const, id: target.id, name: target.handle };
+  // Nobody chases the manager or Peter: past the window, the wait is a person's.
+  if (target.id === manager.id || target.id === peter?.id) {
+    if (!blockedLong) return null;
+    return {
+      why: `@${target.handle} manages this work and nobody chases a manager, so a person has to answer.`,
+      waitingOn,
+    };
+  }
+  // Chased for this wait (the chase came after the blocker), and still no answer a window later.
+  const chased = task.last_chased_at;
+  if (!chased || chased < task.updated_at || chased.getTime() >= since) return null;
+  const minutes = Math.round((Date.now() - chased.getTime()) / 60_000);
+  return {
+    why: `@${target.handle} has not answered in the ${minutes} minutes since ${manager.name} chased, so a person has to step in.`,
+    waitingOn,
+  };
+}
+
+/**
+ * A task waiting on a person is told to one, once per wait: its goal turns
+ * amber, or, outside any open goal, Peter says so on the task. A wait on a
+ * teammate becomes a wait on a person when nobody can chase that teammate (no
+ * such teammate, the task's manager, Peter) and the chase window has passed,
+ * or when the teammate has not answered within the window after the chase.
+ * The goal stays amber until a person unblocks the task (resumeGoals).
+ */
+async function escalateWaits(
+  deps: PeterDeps,
+  companyId: string,
+  out: PassResult,
+  windowMs: number,
+): Promise<void> {
+  // A wait on a person is told once: Peter's mark (last_chased_at) newer than the blocker. A task whose own
+  // run is still going waits for it to end: the run may finish the task after all.
+  const waits = await deps.db.query<TaskRow & { last_chased_at: Date | null }>(
+    `${TASK_SELECT} WHERE t.company_id = $1 AND t.status = 'blocked'
+       AND (t.blocker->>'code' = 'waiting_on_teammate'
+         OR (t.blocker->>'code' = 'waiting_on_person' AND (t.last_chased_at IS NULL OR t.last_chased_at < t.updated_at)))
+       AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.kind = 'task' AND r.status IN ('queued', 'running', 'interrupted'))
+       AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = t.goal_id AND g.status = 'stopped')
+     ORDER BY t.updated_at LIMIT 50`,
+    [companyId],
+  );
+  const peter = await companyManager(deps.db, companyId);
+  for (const task of waits.rows) {
+    const manager = await actorFor(deps, companyId, task);
+    if (!manager || !task.blocker) continue;
+    let blocker = task.blocker;
+    if (blocker.code === "waiting_on_teammate") {
+      const gone = await unanswered(deps, task, manager, peter, windowMs);
+      if (!gone) continue;
+      blocker = blockerFor("waiting_on_person", {
+        what: blocker.what,
+        why: gone.why,
+        // A late answer from that teammate still restarts the task (routing).
+        ...(gone.waitingOn ? { waitingOn: gone.waitingOn } : {}),
+      });
+      const next = blocker;
+      try {
+        await mutate(deps.db, companyId, { kind: "teammate", id: manager.id }, async (ctx) => {
+          const res = await ctx.client.query(
+            "UPDATE tasks SET blocker = $2, updated_at = now() WHERE id = $1 AND status = 'blocked' AND blocker->>'code' = 'waiting_on_teammate'",
+            [task.id, JSON.stringify(next)],
+          );
+          if (!res.rowCount) throw new MovedMeanwhile();
+          await ctx.emit(
+            "task.blocked",
+            { kind: "task", id: task.id },
+            { number: task.number, title: task.title, blocker: next },
+          );
+        });
+      } catch (err) {
+        // Answered or unblocked between the read and now: nothing to tell.
+        if (err instanceof MovedMeanwhile) continue;
+        throw err;
+      }
+    }
+    const what = blocker.what
+      .trim()
+      .replace(/[.\s]+$/, "")
+      .slice(0, 300);
+    await escalateTask(
+      deps,
+      companyId,
+      manager,
+      await goalOf(deps, task.goal_id),
+      task,
+      `#${task.number} ${task.title} is waiting on a person: ${what}. ${blocker.why}`,
+      out,
+    );
+    await deps.db.query("UPDATE tasks SET last_chased_at = now() WHERE id = $1", [task.id]);
   }
 }
 
@@ -557,6 +683,7 @@ export async function peterPass(
   await resumeGoals(deps, companyId, out);
   await rebalance(deps, companyId, out);
   out.started = await startReadyTasks(deps, companyId, null);
+  await escalateWaits(deps, companyId, out, opts.chase?.blockedForMs ?? DEFAULT_CHASE_OPTIONS.blockedForMs);
   out.chased = (await chasePass(deps.db, deps.queue, { ...opts.chase, companyId })).chased.length;
   await closeGoals(deps, companyId, out);
   return out;

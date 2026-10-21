@@ -15,7 +15,14 @@ import type {
 import { Avatar, Button, Dot, Segs, Topbar } from "../components/ui.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { cn } from "../lib/cn.ts";
-import { actorInfo, blockerLine, isOpenTask, relativeTime, STATUS_LABEL } from "../lib/format.ts";
+import {
+  actorInfo,
+  blockerLine,
+  blockerNeedsYou,
+  isOpenTask,
+  relativeTime,
+  STATUS_LABEL,
+} from "../lib/format.ts";
 import { ApprovalCard, sortApprovals } from "./ApprovalsView.tsx";
 import { OutputsPanel, RunPanel } from "./RunPanel.tsx";
 
@@ -81,8 +88,8 @@ function StatusLine({ t, data }: { t: Task; data: CompanyData }) {
     );
   if (t.status === "blocked")
     return (
-      <span className={cn("status", t.blocker?.code === "approval_required" ? "warn" : "bad")}>
-        <Dot tone={t.blocker?.code === "approval_required" ? "warn" : "bad"} />
+      <span className={cn("status", blockerNeedsYou(t.blocker) ? "warn" : "bad")}>
+        <Dot tone={blockerNeedsYou(t.blocker) ? "warn" : "bad"} />
         {blockerLine(t)}
       </span>
     );

@@ -159,6 +159,16 @@ describe("board MCP server", () => {
     expect(blocked.status).toBe("blocked");
     expect(blocked.blocker.code).toBe("waiting_on_teammate");
     expect(blocked.blocker.waitingOn.name).toBe("ricky");
+    // A handle that is no teammate here (a role, a person) waits on a person, who Peter tells.
+    const onPerson = text(
+      await client.callTool({
+        name: "board_set_blocker",
+        arguments: { reason: "Need web fetch access granted.", waitingOnHandle: "@manager" },
+      }),
+    );
+    expect(onPerson.blocker.code).toBe("waiting_on_person");
+    expect(onPerson.blocker.what).toBe("Need web fetch access granted.");
+    expect(onPerson.blocker.waitingOn).toBeUndefined();
 
     const reviewed = text(
       await client.callTool({

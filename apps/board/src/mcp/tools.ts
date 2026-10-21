@@ -47,6 +47,7 @@ import {
   TASK_SELECT,
   type TaskRow,
 } from "../tasks/service.js";
+import { teammateNamed } from "../tasks/waiting.js";
 
 export interface ToolActor {
   companyId: string;
@@ -299,9 +300,9 @@ export async function setBlockerTool(
 ) {
   guard(input);
   const task = await resolveTask(deps, actor, input.task);
-  const waiting = input.waitingOnHandle
-    ? await teammateByHandle(deps, actor.companyId, input.waitingOnHandle)
-    : null;
+  const handle = input.waitingOnHandle?.trim().replace(/^@/, "").toLowerCase() || null;
+  // A handle that is no teammate here (a person, a role) leaves the task waiting on a person.
+  const waiting = handle ? await teammateNamed(deps.db, actor.companyId, { id: handle, name: handle }) : null;
   if (waiting) {
     // The ask goes on the task so the teammate gets a turn and the answer has a place to land.
     const ask = await postMessage(
@@ -321,11 +322,11 @@ export async function setBlockerTool(
     task.id,
     {
       status: "blocked",
-      blocker: waiting
+      blocker: handle
         ? {
             code: "waiting_on_teammate",
             what: input.reason,
-            waitingOn: { kind: "teammate", id: waiting.id, name: waiting.handle },
+            waitingOn: { kind: "teammate", id: waiting?.id ?? handle, name: waiting?.handle ?? handle },
           }
         : { code: "unknown", what: input.reason },
     },

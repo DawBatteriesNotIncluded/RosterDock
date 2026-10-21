@@ -4,12 +4,13 @@
 //
 // Carried over from the v1 prototype. The governance ladder codes
 // (kill_switch, governance_level) are gone with the ladder. `waiting_on_teammate`
-// is new: the Blocked column's three reasons are dependency, waiting on a
-// teammate, and waiting on an approval.
+// is new: the Blocked column's reasons are dependency, waiting on a teammate,
+// waiting on a person, and waiting on an approval.
 
 export const BLOCKER_CODES = [
   "dependencies_unresolved",
   "waiting_on_teammate",
+  "waiting_on_person",
   "approval_required",
   "missing_config",
   "missing_secret_ref",
@@ -26,7 +27,7 @@ export const BLOCKER_CODES = [
 export type BlockerCode = (typeof BLOCKER_CODES)[number];
 
 /** What the board shows: the manager-facing grouping of a blocker. */
-export type BlockerKind = "dependency" | "teammate" | "approval" | "run";
+export type BlockerKind = "dependency" | "teammate" | "person" | "approval" | "run";
 
 export interface BlockerRecord {
   code: BlockerCode;
@@ -55,6 +56,12 @@ const DEFAULTS: Record<BlockerCode, Omit<BlockerRecord, "code">> = {
     what: "The task is waiting on another teammate.",
     why: "The assignee asked a teammate a question or needs their output before continuing.",
     resolution: "Answer on the task, or ask the named teammate to.",
+    retrySafe: true,
+  },
+  waiting_on_person: {
+    what: "The task is waiting on a person.",
+    why: "The assignee needs what only a person can give: an answer, access, a credential or a decision.",
+    resolution: "Give it what it asks for, answering on the task, then unblock it.",
     retrySafe: true,
   },
   approval_required: {
@@ -147,13 +154,15 @@ export function isBlockerCode(value: unknown): value is BlockerCode {
   return typeof value === "string" && (BLOCKER_CODES as readonly string[]).includes(value);
 }
 
-/** The Blocked column groups blockers into three manager-facing reasons plus "run". */
+/** The Blocked column groups blockers into four manager-facing reasons plus "run". */
 export function blockerKind(code: BlockerCode): BlockerKind {
   switch (code) {
     case "dependencies_unresolved":
       return "dependency";
     case "waiting_on_teammate":
       return "teammate";
+    case "waiting_on_person":
+      return "person";
     case "approval_required":
       return "approval";
     default:

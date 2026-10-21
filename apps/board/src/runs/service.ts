@@ -50,6 +50,7 @@ import {
   type RunSpec,
 } from "./pack.js";
 import { houseStyleFor } from "../styles/service.js";
+import { settleWaitingOn } from "../tasks/waiting.js";
 import { dependenciesForBrief } from "./outputs.js";
 
 export const RUN_TOKEN_TTL_SECONDS = 8 * 3600;
@@ -1210,7 +1211,7 @@ export async function completeRun(
       )
     ).rows[0]!;
     // A blocker the teammate already set on the board (who they wait on) wins over the generic one.
-    const blocker =
+    const reported =
       status === "failed"
         ? blockerFromInput(
             input.blocker,
@@ -1224,6 +1225,8 @@ export async function completeRun(
                 : blockerFor("unknown", { what: input.summary ?? "The teammate declared the task blocked." }),
             )
           : null;
+    // "@manager" in a blocked note is no teammate: the task waits on a person, not on nobody.
+    const blocker = reported ? await settleWaitingOn(ctx.client, run.company_id, reported) : null;
     const updated = await ctx.client.query<RunRow>(
       `UPDATE runs SET status = $2, finished_at = now(), summary = $3, error = $4, usage = $5, blocker = $6,
          duration_ms = COALESCE($7, EXTRACT(EPOCH FROM (now() - COALESCE(started_at, queued_at))) * 1000)::int,

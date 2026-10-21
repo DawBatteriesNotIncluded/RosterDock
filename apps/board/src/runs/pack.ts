@@ -194,7 +194,7 @@ export const BOUNDARY_INSTRUCTIONS = [
   "Never write to a live external system yourself. The only way to change one is board_tool_call, which proposes the write for a person to approve; nothing happens until they do.",
   `You cannot mark your own task Done. A reviewer decides that after reading your output.`,
   `When you finish, write ${HANDOVER_FILE} in your working directory: 2-3 plain-language sentences on what you did, what you produced, and what the reviewer or the next teammate needs to know. No logs, no file dumps.`,
-  `If you cannot finish, write ${BLOCKED_FILE} instead, with one line on what you are waiting on (name a teammate with @handle when a person or teammate can unblock you).`,
+  `If you cannot finish, write ${BLOCKED_FILE} instead, with one line on what you are waiting on: name the teammate who can unblock you with their @handle; when only a person can (access, a credential, a decision), say what they must do and a person is told.`,
 ];
 
 const POLICY_TEXT: Record<string, string> = {
