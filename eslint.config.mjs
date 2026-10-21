@@ -26,4 +26,24 @@ export default tseslint.config(
     files: ["**/*.test.ts", "**/*.test.tsx", "**/test/**", "**/scripts/**"],
     rules: { "no-console": "off", "@typescript-eslint/no-explicit-any": "off" },
   },
+  {
+    // The browser takes only types from the shared package's index: its code carries zod and node:crypto,
+    // and a value imported from it left the page blank. Browser-safe modules have entries of their own.
+    files: ["apps/web/src/**"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@rosterdock/shared",
+              allowTypeImports: true,
+              message:
+                "Import types only; take values from @rosterdock/shared/events or @rosterdock/shared/text.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 );

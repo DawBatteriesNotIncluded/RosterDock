@@ -243,7 +243,9 @@ describe("approvals", () => {
     expect(t.replans).toBe(1);
     const runs = (await api.get(`${base}/tasks/${task.id}/runs`)).body as { id: string; note: string }[];
     expect(runs[0]!.note).toContain("rejected proposal");
-    expect(runs[0]!.note).toContain("Do not propose that write again");
+    // The note ends in its own full stop: quoted once, never "list..".
+    expect(runs[0]!.note).toContain("use the existing active list. Do not propose that write again");
+    expect(runs[0]!.note).not.toContain("..");
     const next = await workerClaim(board, runs[0]!.id);
     expect(next.pack).toContain("rejected: Not a static list; use the existing active list.");
     // A second pass changes nothing.

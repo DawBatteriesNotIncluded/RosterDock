@@ -13,6 +13,10 @@
     "./events": {
       "types": "./dist/events.d.ts",
       "default": "./dist/events.js"
+    },
+    "./text": {
+      "types": "./dist/text.d.ts",
+      "default": "./dist/text.js"
     }
   },
   "scripts": {

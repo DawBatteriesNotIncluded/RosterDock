@@ -7,7 +7,7 @@
 // writes the re-plan note when Peter has one. Escalation is the goal turning
 // amber; nothing else reaches a person. Merges and live writes stay gates.
 
-import { blockerKind, type ActorRef, type EventRecord, type EventType } from "@rosterdock/shared";
+import { asSentence, blockerKind, type ActorRef, type EventRecord, type EventType } from "@rosterdock/shared";
 import type { EventBus } from "../events/bus.js";
 import { HttpError } from "../http-error.js";
 import { mutate } from "../mutate.js";
@@ -246,7 +246,7 @@ async function replanTask(
       manager,
       goal,
       task,
-      `#${task.number} ${task.title} failed ${task.replans + 1} times; the last error: ${ctx.error ?? "none"}. It stays blocked until you look.`,
+      `#${task.number} ${task.title} failed ${task.replans + 1} times; the last error: ${asSentence(ctx.error ?? "none")} It stays blocked until you look.`,
       out,
     );
     return;

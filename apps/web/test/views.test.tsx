@@ -456,10 +456,25 @@ describe("views render with sample data", () => {
     expect(html).toContain("Cody · n8n engineer · Engineering");
     expect(html).toContain("#144");
     expect(html).toContain("sha256 9f2c4d1a0b7e");
-    // The decided card fades and carries the note.
+    // The decided card fades and carries the note, which ends the sentence with its own full stop.
     expect(html).toContain("approval decided");
-    expect(html).toContain("Not until the first digest is approved.");
-    expect(html).toContain("Nothing was sent; Peter re-plans the task.");
+    expect(html).toContain(
+      "Not until the first digest is approved. Nothing was sent; Peter re-plans the task.",
+    );
+    expect(html).not.toContain("approved..");
+    const failed = render(
+      <ApprovalsView
+        data={{
+          ...approvalsFixture,
+          approvals: [{ ...approvalFixtures[0]!, status: "failed", error: "HubSpot answered HTTP 429." }],
+        }}
+        canDecide
+        onApprove={asyncNoop}
+        onReject={asyncNoop}
+        onOpenTask={noop}
+      />,
+    );
+    expect(failed).toContain("but the send failed: HubSpot answered HTTP 429.</span>");
     expect(sortApprovals(approvalFixtures)[0]!.status).toBe("pending");
     expect(APPROVAL_LABEL.executed).toBe("Approved · executed");
     // A replaced proposal fades, says what replaced it, and offers no decision.

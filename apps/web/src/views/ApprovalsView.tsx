@@ -4,6 +4,8 @@
 // them and the teammate continues; reject leaves a note and Peter re-plans.
 // Pending cards first; decided ones fade with their outcome.
 import { useState } from "react";
+// The text helpers alone, not the package's index: that carries zod and node:crypto into the bundle.
+import { asSentence } from "@rosterdock/shared/text";
 import type { Approval, CompanyData } from "../api/types.ts";
 import { Avatar, Button, Empty, Pill, Topbar } from "../components/ui.tsx";
 import { cn } from "../lib/cn.ts";
@@ -157,9 +159,11 @@ export function ApprovalCard({
           {a.status === "superseded"
             ? `Replaced by a newer proposal of the same write${a.target ? ` (${a.target})` : ""} before anyone decided it. Nothing was sent; decide the newer one.`
             : a.status === "rejected"
-              ? `Rejected${a.decidedAt ? ` ${relativeTime(a.decidedAt)}` : ""}${a.note ? `: ${a.note}` : ""}. Nothing was sent; Peter re-plans the task.`
+              ? `${asSentence(`Rejected${a.decidedAt ? ` ${relativeTime(a.decidedAt)}` : ""}${a.note ? `: ${a.note}` : ""}`)} Nothing was sent; Peter re-plans the task.`
               : a.status === "failed"
-                ? `Approved${a.note ? ` (${a.note})` : ""}, but the send failed: ${a.error ?? "no reason recorded"}.`
+                ? asSentence(
+                    `Approved${a.note ? ` (${a.note})` : ""}, but the send failed: ${a.error ?? "no reason recorded"}`,
+                  )
                 : a.status === "executed"
                   ? `Approved${a.note ? ` (${a.note})` : ""} and executed${a.executedAt ? ` ${relativeTime(a.executedAt)}` : ""}; ${name} continues with the answer in their pack.`
                   : "Approved; sending."}
