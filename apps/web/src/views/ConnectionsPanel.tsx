@@ -1,13 +1,21 @@
 // Connections: the external systems this company can reach, on the Settings
 // page. Add one from the catalog, by URL or command, or from an OpenAPI spec
 // with an allowlist; discover its tools; flip a tool between read and write;
-// switch it off; remove it. Credentials are env var NAMES, never values; a
-// connection may instead authorise by OAuth, when the board has a secret
-// store, and its tokens live there.
+// confirm a tool only the server calls read-only; switch it off; remove it.
+// Credentials are env var NAMES, never values; a connection may instead
+// authorise by OAuth, when the board has a secret store, and its tokens live
+// there.
 import { Activity, KeyRound, Plug, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import type { CreateConnectionInput, CreateOpenApiConnectionInput } from "@rosterdock/shared";
-import type { CatalogEntry, CompanySecret, Connection, Features, OpenApiScan } from "../api/types.ts";
+import type {
+  CatalogEntry,
+  CompanySecret,
+  Connection,
+  ConnectionTool,
+  Features,
+  OpenApiScan,
+} from "../api/types.ts";
 import { Button, Field, Pill, Tip } from "../components/ui.tsx";
 import { relativeTime } from "../lib/format.ts";
 
@@ -61,6 +69,27 @@ export function checkLine(c: Connection): string | null {
     if (k.tools.missing.length) parts.push(`${k.tools.missing.length} gone: ${k.tools.missing.join(", ")}`);
   }
   return parts.join(" · ");
+}
+
+/**
+ * The tools only the server calls read-only: neither their names nor the catalog say they read, so they are
+ * writes, and each call waits for approval, until a person confirms them. A tool switched off waits for nothing.
+ */
+export function heldReads(c: Connection): ConnectionTool[] {
+  return c.tools.filter((t) => t.source === "unconfirmed" && t.write && !t.off);
+}
+
+/** Confirming tools as reads: a person's classification of each, which discovery keeps. */
+export function confirmAsRead(names: string[]): { tools: { name: string; write: boolean }[] } {
+  return { tools: names.map((name) => ({ name, write: false })) };
+}
+
+/** What classified a tool, for its tooltip. */
+function sourceNote(t: ConnectionTool): string {
+  if (t.source === "person") return "set by a person";
+  if (t.source === "unconfirmed")
+    return "only the server calls it read-only; a write until a person confirms it";
+  return t.source;
 }
 
 export function connectionSummary(c: Connection): string {
@@ -639,6 +668,71 @@ function SecretsSection({
   );
 }
 
+/** A connection's tools only the server calls read-only, each with a person's confirmation to give. */
+function HeldReads({
+  connection,
+  held,
+  canEdit,
+  onConfirm,
+}: {
+  connection: string;
+  held: ConnectionTool[];
+  canEdit: boolean;
+  onConfirm(names: string[]): Promise<unknown>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const confirm = async (names: string[]) => {
+    setBusy(true);
+    try {
+      await onConfirm(names);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const one = held.length === 1;
+  return (
+    <div className="flex flex-col gap-1.5 rounded-[6px] border border-border px-2.5 py-2 text-[12px]">
+      <span>
+        <span className="font-semibold">
+          {connection} says {one ? "this tool only reads" : `these ${held.length} tools only read`}.
+        </span>{" "}
+        <span className="text-muted">
+          Neither {one ? "its name" : "their names"} nor the catalog says so, so a call to{" "}
+          {one ? "it" : "one"} waits for approval as a write until{" "}
+          {canEdit ? "you confirm" : "an owner or admin confirms"} it reads.
+          {canEdit ? " Confirm a tool once you are sure it changes nothing." : ""}
+        </span>
+      </span>
+      <div className="chips">
+        {held.map((t) => (
+          <span
+            key={t.name}
+            className="flex items-center gap-1.5 rounded-[6px] border border-border px-2 py-1"
+            title={t.description || undefined}
+          >
+            <span className="mono">{t.name}</span>
+            {canEdit ? (
+              <button
+                className="link"
+                aria-label={`Confirm ${t.name} as read`}
+                disabled={busy}
+                onClick={() => void confirm([t.name])}
+              >
+                Confirm as read
+              </button>
+            ) : null}
+          </span>
+        ))}
+        {canEdit && !one ? (
+          <Button size="sm" disabled={busy} onClick={() => void confirm(held.map((t) => t.name))}>
+            Confirm all {held.length} as reads
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function ConnectionsPanel(p: ConnectionsPanelProps) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>(p.initialCatalog ?? []);
   const [error, setError] = useState<string | null>(null);
@@ -748,13 +842,21 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
                 {checkLine(c)}
               </span>
             ) : null}
+            {heldReads(c).length ? (
+              <HeldReads
+                connection={c.name}
+                held={heldReads(c)}
+                canEdit={p.canEdit}
+                onConfirm={(names) => wrap(() => p.updateConnection(c.id, confirmAsRead(names)))()}
+              />
+            ) : null}
             {open === c.id ? (
               <div className="chips">
                 {c.tools.map((t) => (
                   <span key={t.name} className="chips" style={{ gap: 2 }}>
                     <button
                       className="tool"
-                      title={`${t.description || t.name}${t.source === "person" ? " · set by a person" : ` · ${t.source}`}${t.off ? " · switched off by a person; refused for every teammate" : p.canEdit ? ". Click to flip." : ""}`}
+                      title={`${t.description || t.name} · ${sourceNote(t)}${t.off ? " · switched off by a person; refused for every teammate" : p.canEdit ? ". Click to flip." : ""}`}
                       disabled={!p.canEdit || !!t.off}
                       onClick={wrap(() =>
                         p.updateConnection(c.id, { tools: [{ name: t.name, write: !t.write }] }),

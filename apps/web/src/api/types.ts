@@ -256,7 +256,8 @@ export interface ConnectionTool {
   name: string;
   description: string;
   write: boolean;
-  source: "annotation" | "catalog" | "name" | "default" | "person" | "method";
+  /** What classified it. "unconfirmed": only the server calls it read-only, so it writes until a person confirms it. */
+  source: "annotation" | "catalog" | "name" | "default" | "person" | "method" | "unconfirmed";
   /** Switched off by a person: refused for every teammate, whatever the toolbox grants. */
   off?: boolean;
 }
