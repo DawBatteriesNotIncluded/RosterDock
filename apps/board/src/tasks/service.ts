@@ -17,6 +17,7 @@ import { assertActorInCompany, describeActor } from "../actors.js";
 import type { Db, Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate, type MutationContext } from "../mutate.js";
+import { settleWaitingOn } from "./waiting.js";
 
 export interface TaskRow {
   id: string;
@@ -491,7 +492,7 @@ export async function moveTask(
     if (body.status === "blocked") {
       const actorName = (await describeActor(ctx.client, companyId, actor))?.name ?? "a teammate";
       const blocker = body.blocker
-        ? blockerFromInput(body.blocker)
+        ? await settleWaitingOn(ctx.client, companyId, blockerFromInput(body.blocker))
         : blockerFor("unknown", { what: `Blocked by ${actorName}. Tell the team why in the conversation.` });
       await setBlocked(ctx, task, blocker);
     } else {

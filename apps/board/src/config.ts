@@ -31,7 +31,10 @@ export interface BoardConfig {
   workerToken: string | null;
   reaperIntervalMs: number;
   runStaleAfterMs: number;
-  /** A task blocked on a teammate for longer than this is chased (by Peter's loop). */
+  /**
+   * A task blocked on a teammate for longer than this is chased (by Peter's loop), once; this long after the
+   * chase, or past it when nobody can be chased, the wait goes to a person.
+   */
   chaseBlockedForMs: number;
   /** Connections per replica: the board's pool and the queue's pool each get this many. */
   dbPoolMax: number;

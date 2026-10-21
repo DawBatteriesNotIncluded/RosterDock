@@ -159,11 +159,17 @@ export function standingDrift(t: Teammate, events: EventRecord[], now: number = 
   });
 }
 
+/** A blocker only a person can end: a write to approve, or a wait on a person. Amber, never red. */
+export function blockerNeedsYou(b: Pick<NonNullable<Task["blocker"]>, "code"> | null | undefined): boolean {
+  return b?.code === "approval_required" || b?.code === "waiting_on_person";
+}
+
 /** Blocked card line, in manager language. */
 export function blockerLine(task: Task): string {
   const b = task.blocker;
   if (!b) return "Blocked";
   if (b.code === "approval_required") return "Needs your approval";
+  if (b.code === "waiting_on_person") return "Needs you";
   if (b.waitingOn?.name) return `Waiting on ${b.waitingOn.kind === "teammate" ? "@" : ""}${b.waitingOn.name}`;
   return b.what;
 }
@@ -259,7 +265,7 @@ export function describeEvent(
       };
     case "task.blocked": {
       const b = p(ev).blocker as { code?: string; what?: string } | undefined;
-      const attention = b?.code === "approval_required";
+      const attention = b?.code === "approval_required" || b?.code === "waiting_on_person";
       return {
         text: `${n} is blocked: ${b?.what ?? "no reason given"}`,
         attention,

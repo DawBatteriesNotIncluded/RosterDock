@@ -1,6 +1,7 @@
 // Headless smoke: every view renders to HTML with sample data and shows the
 // things the prototype shows. No DOM, no network.
-import { EVENT_TYPES } from "@rosterdock/shared";
+import { blockerFor, EVENT_TYPES } from "@rosterdock/shared";
+import { blockerLine, blockerNeedsYou } from "../src/lib/format.ts";
 import { renderToString } from "react-dom/server";
 import type { CompanyData } from "../src/api/types.ts";
 import { describe, expect, it } from "vitest";
@@ -1156,6 +1157,30 @@ describe("pure helpers", () => {
       t.status === "blocked" ? { ...t, status: "cancelled" as const } : t,
     );
     expect(teammateStatus(fixture.teammates[3]!, dropped).text).not.toMatch(/^Blocked/);
+  });
+
+  it("a task waiting on a person is amber and needs you: on its card, its department and in the feed", () => {
+    const onTeammate = fixture.tasks.find((t) => t.status === "blocked")!;
+    expect(blockerLine(onTeammate)).toBe("Waiting on @brody");
+    expect(blockerNeedsYou(onTeammate.blocker)).toBe(false);
+    const blocker = blockerFor("waiting_on_person", {
+      what: "Blocked: waiting on @manager to grant web fetch access.",
+      why: "@manager is not a teammate here, so a person has to answer.",
+    });
+    const onPerson = { ...onTeammate, blocker };
+    expect(blockerLine(onPerson)).toBe("Needs you");
+    expect(blockerNeedsYou(onPerson.blocker)).toBe(true);
+    const data = { ...fixture, tasks: fixture.tasks.map((t) => (t.id === onPerson.id ? onPerson : t)) };
+    expect(render(<CompanyView data={fixture} {...companyProps} />)).not.toContain("waiting on you");
+    expect(render(<CompanyView data={data} {...companyProps} />)).toContain(
+      "2 teammates · 0 working · waiting on you",
+    );
+    const ev = fixture.events.find((e) => e.type === "task.blocked")!;
+    expect(describeEvent(ev, fixture).attention).toBe(false);
+    expect(describeEvent({ ...ev, payload: { number: 140, blocker } }, fixture)).toMatchObject({
+      text: "#140 is blocked: Blocked: waiting on @manager to grant web fetch access.",
+      attention: true,
+    });
   });
 
   it("relative time and event sentences", () => {

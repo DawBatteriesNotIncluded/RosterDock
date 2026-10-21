@@ -62,6 +62,13 @@ var name in Settings) and a row in the Approvals or Company page:
 | Peter proposes … / audited …               | The Company page: accept or decline the draft.                                                           |
 | … runs cost 3× their usual                 | The teammate's page and their last runs; a bigger model, a bigger task, or a loop. Nothing stopped.      |
 
+A task waiting on a person is amber on the board, "Needs you", and turns its goal amber (a task outside any
+open goal gets Peter's "Needs a person" note on it instead). A teammate's blocker names who it waits on by
+handle; a name that is no teammate here (`@manager`, someone's first name) is a person. A wait on the task's
+manager, on Peter or on a teammate that no longer exists goes to a person once `ROSTERDOCK_CHASE_BLOCKED_FOR_MS`
+(10 min) has passed, and so does a wait on a teammate who has not answered that long after Peter chased them
+(he chases once). Give the task what it asks for, then **Unblock** it: its goal carries on.
+
 A teammate's pull request (a merge request on GitLab) is one commit on the branch `rosterdock/task-12`,
 titled `Task 12: <the task's title>`. Its body names the round, the reviewer who approved it, the checks and
 the diff's sha256. The board never writes a bare `#12`: the git host would link that to the repository's

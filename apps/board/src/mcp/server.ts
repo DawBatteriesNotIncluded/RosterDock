@@ -164,7 +164,7 @@ export function createBoardMcpServer(deps: ToolDeps, actor: ToolActor): McpServe
     "board_set_blocker",
     {
       description:
-        "Mark a task blocked with a reason. Name the teammate who can unblock it with waitingOnHandle so they are asked.",
+        "Mark a task blocked with a reason. Name the teammate who can unblock it with waitingOnHandle so they are asked. A handle that is no teammate (a person, a role) leaves the task waiting on a person, who is told.",
       inputSchema: {
         task: taskRef,
         reason: z.string().min(1).max(1000),
