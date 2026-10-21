@@ -110,8 +110,10 @@ describe("the tool broker", () => {
     const { client, claimed, task } = await setup(api, base, "read");
     expect(claimed.pack).toContain("## Your tools");
     expect(claimed.pack).toContain("- hubspot (read only)");
-    expect(claimed.pack).toContain("reads: search_crm_objects, get_properties, whoami");
-    expect(claimed.pack).toContain("writes (refused here): manage_crm_objects, run_report");
+    // whoami: the server calls it read-only, but neither its name nor the catalog does, so it waits for a person.
+    expect(claimed.pack).toContain(
+      "reads: search_crm_objects, get_properties · writes (refused here): manage_crm_objects, run_report, whoami",
+    );
     expect(claimed.pack).toContain("board_tool_call");
 
     const listed = text(await client.callTool({ name: "board_list_tools", arguments: {} }));
@@ -128,7 +130,7 @@ describe("the tool broker", () => {
       get_properties: "run",
       manage_crm_objects: "refuse",
       run_report: "refuse",
-      whoami: "run",
+      whoami: "refuse",
     });
 
     mcp.calls.length = 0;
@@ -310,7 +312,7 @@ describe("the tool broker", () => {
     ).body;
     const otherRun = (await api.post(`${base}/tasks/${other.id}/runs`, {})).body;
     const otherPack = (await workerClaim(board, otherRun.id)).pack;
-    expect(otherPack).toContain("reads: search_crm_objects, whoami");
+    expect(otherPack).toContain("reads: search_crm_objects · writes");
     expect(otherPack).toContain("switched off by a person, do not call: get_properties");
     // The whole connection switched off by a person.
     await api.patch(`${base}/connections/${hubspot.id}`, { enabled: false });
@@ -409,6 +411,39 @@ describe("the tool broker", () => {
     expect(failed.body.status).toBe("failed");
     expect(failed.body.error).toContain("unauthorized");
     expect(mcp.calls).toHaveLength(1);
+  });
+
+  it("a tool only the server calls read-only is proposed until a person confirms it reads; a teammate cannot", async () => {
+    const { api, base } = await seedCompany(board, "br8@example.com");
+    const { client, claimed, hubspot } = await setup(api, base, "ask");
+    const whoami = {
+      connection: "hubspot",
+      tool: "whoami",
+      arguments: {},
+      title: "Look up who the HubSpot credential belongs to",
+      why: "The list should be owned by the account that builds it.",
+    };
+    mcp.calls.length = 0;
+    const held = text(await client.callTool({ name: "board_tool_call", arguments: whoami }));
+    expect(held.value.kind).toBe("proposed");
+    expect(mcp.calls).toHaveLength(0);
+    // The teammate cannot confirm it for itself: managing a connection is a person's.
+    const confirm = { tools: [{ name: "whoami", write: false }] };
+    expect((await claimed.api.patch(`${base}/connections/${hubspot.id}`, confirm)).status).toBe(403);
+    expect((await api.patch(`${base}/connections/${hubspot.id}`, confirm)).status).toBe(200);
+    const listed = text(await client.callTool({ name: "board_list_tools", arguments: {} }));
+    expect(listed.value[0].tools.find((t: any) => t.name === "whoami")).toMatchObject({
+      write: false,
+      verdict: "run",
+    });
+    const ran = text(
+      await client.callTool({
+        name: "board_tool_call",
+        arguments: { ...whoami, title: undefined, why: undefined },
+      }),
+    );
+    expect(ran.value.kind).toBe("result");
+    expect(mcp.calls).toEqual([{ name: "whoami", arguments: {} }]);
   });
 
   it("an approved write on a tool a person switched off since it was proposed is not sent", async () => {

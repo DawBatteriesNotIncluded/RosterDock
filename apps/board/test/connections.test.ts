@@ -115,7 +115,8 @@ describe("connections", () => {
     expect(byName.manage_crm_objects).toMatchObject({ write: true, source: "annotation" });
     expect(byName.get_properties).toMatchObject({ write: false, source: "catalog" });
     expect(byName.run_report).toMatchObject({ write: true, source: "default" });
-    expect(byName.whoami).toMatchObject({ write: false, source: "annotation" });
+    // Labelled read-only by the server, but neither its name nor the catalog says it reads: held for a person.
+    expect(byName.whoami).toMatchObject({ write: true, source: "unconfirmed" });
     expect(byName.run_report!.description).toContain("saved report");
     expect(discovered.body.discoveredAt).not.toBeNull();
     // The credential travelled as a header, by value resolved from the NAME, and never into the row or events.
@@ -126,7 +127,8 @@ describe("connections", () => {
     expect(JSON.stringify(events)).not.toContain("fixture-token");
     const ev = events.find((e) => e.type === "connection.updated");
     expect(ev?.payload.discovered).toBe(5);
-    expect(ev?.payload.writes).toEqual(["manage_crm_objects", "run_report"]);
+    expect(ev?.payload.writes).toEqual(["manage_crm_objects", "run_report", "whoami"]);
+    expect(ev?.payload.unconfirmed).toEqual(["whoami"]);
 
     // A person reclassifies run_report as a read; the next discovery keeps their word.
     const patched = await api.patch(`${base}/connections/${created.body.id}`, {
@@ -148,13 +150,13 @@ describe("connections", () => {
     });
     expect(off.body.tools.find((t: { name: string }) => t.name === "whoami")).toMatchObject({
       off: true,
-      write: false,
-      source: "annotation",
+      write: true,
+      source: "unconfirmed",
     });
     const rediscovered = await api.post(`${base}/connections/${created.body.id}/discover`, {});
     expect(rediscovered.body.tools.find((t: { name: string }) => t.name === "whoami")).toMatchObject({
       off: true,
-      source: "annotation",
+      source: "unconfirmed",
     });
     const offEvent = (await api.get(`${base}/events?limit=10`)).body.find(
       (e: { type: string; payload: any }) => e.type === "connection.updated" && e.payload.switchedOff?.length,
@@ -441,5 +443,50 @@ describe("connections", () => {
       { name: "find_and_merge_duplicates", description: "", write: true, source: "default" },
       ...kept.slice(3),
     ]);
+  });
+
+  it("a person confirms a tool only the server calls read-only: their word, recorded as theirs, outlives discovery", async () => {
+    const { api, base, owner } = await seedCompany(board, "cn7@example.com");
+    const conn = (
+      await api.post(`${base}/connections`, {
+        name: "crm",
+        url: "https://mcp.hubspot.test/mcp",
+        authEnvName: "HUBSPOT_MCP_TOKEN",
+      })
+    ).body;
+    type Tool = { name: string; write: boolean; source: string };
+    const toolOf = (body: { tools: Tool[] }, name: string) => body.tools.find((t) => t.name === name);
+    const recent = async () =>
+      (await api.get(`${base}/events?limit=5`)).body as {
+        type: string;
+        actor: unknown;
+        payload: Record<string, unknown>;
+      }[];
+    // No catalog entry: the label holds where the name reads, and whoami waits for a person.
+    const discovered = (await api.post(`${base}/connections/${conn.id}/discover`, {})).body;
+    expect(toolOf(discovered, "search_crm_objects")).toMatchObject({ write: false, source: "annotation" });
+    expect(toolOf(discovered, "whoami")).toMatchObject({ write: true, source: "unconfirmed" });
+
+    const confirmed = await api.patch(`${base}/connections/${conn.id}`, {
+      tools: [{ name: "whoami", write: false }],
+    });
+    expect(confirmed.status).toBe(200);
+    expect(toolOf(confirmed.body, "whoami")).toMatchObject({ write: false, source: "person" });
+    expect((await recent()).find((e) => e.type === "connection.updated")).toMatchObject({
+      actor: { kind: "user", id: owner.userId },
+      payload: { name: "crm", confirmed: ["whoami"], reclassified: ["whoami"] },
+    });
+    // A person's word wins over the server's labels either way; flipping a tool that was not held confirms nothing.
+    await api.patch(`${base}/connections/${conn.id}`, {
+      tools: [{ name: "search_crm_objects", write: true }],
+    });
+    expect((await recent()).find((e) => e.type === "connection.updated")?.payload).toMatchObject({
+      reclassified: ["search_crm_objects"],
+      confirmed: [],
+    });
+    const again = (await api.post(`${base}/connections/${conn.id}/discover`, {})).body;
+    expect(toolOf(again, "whoami")).toMatchObject({ write: false, source: "person" });
+    expect(toolOf(again, "search_crm_objects")).toMatchObject({ write: true, source: "person" });
+    expect((await recent()).find((e) => e.type === "connection.updated")?.payload.unconfirmed).toEqual([]);
   });
 });

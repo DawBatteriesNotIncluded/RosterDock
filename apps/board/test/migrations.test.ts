@@ -173,3 +173,98 @@ describe("0036_stub_usage", () => {
     expect(await costOf(realRun)).toBe(45);
   });
 });
+
+describe("0037_read_only_label", () => {
+  it("holds a tool kept as a read on a server's read-only label alone as a write, and keeps every other word", async () => {
+    await migrate(pool, await migrationsUpTo("0037_read_only_label.sql", false));
+    const company = (
+      await pool.query<{ id: string }>("INSERT INTO companies (name) VALUES ('Labels') RETURNING id")
+    ).rows[0]!.id;
+    const old = "2026-10-01T00:00:00.000Z";
+    const connection = async (name: string, catalogId: string | null, kind: string, tools: unknown[]) =>
+      (
+        await pool.query<{ id: string }>(
+          `INSERT INTO connections (company_id, name, catalog_id, kind, url, tools, discovered_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'https://mcp.example.test/mcp', $5, $6, $6) RETURNING id`,
+          [company, name, catalogId, kind, JSON.stringify(tools), old],
+        )
+      ).rows[0]!.id;
+    const tool = (name: string, write: boolean, source: string, more: Record<string, unknown> = {}) => ({
+      name,
+      description: "",
+      write,
+      source,
+      ...more,
+    });
+    const github = [
+      // The label alone: GitHub's server calls these read-only and neither the name nor the catalog agrees.
+      tool("issue_read", false, "annotation", { description: "Read an issue" }),
+      tool("pull_request_read", false, "annotation", { off: true }),
+      // A second sign: the name reads, or the catalog lists it as a read.
+      tool("list_branches", false, "annotation"),
+      tool("get_issue", false, "annotation"),
+      // A tool the catalog knows writes, labelled read-only by the server.
+      tool("merge_pull_request", false, "annotation"),
+      // The server's word that it writes, a person's, the catalog's and the default stay.
+      tool("create_issue", true, "annotation"),
+      tool("issue_comments", false, "person"),
+      tool("search_code", false, "catalog"),
+      tool("get_or_create_label", true, "default"),
+    ];
+    const slack = [
+      tool("slack_read_channel", false, "annotation"),
+      tool("slack_send_message", false, "annotation"),
+      tool("slack_whoami", false, "annotation"),
+    ];
+    // No catalog entry: the catalog's word belongs to the connector a connection was added from.
+    const crm = [
+      tool("crm:read_notes", false, "annotation"),
+      tool("slack_read_channel", false, "annotation"),
+    ];
+    const openapi = [tool("list_contacts", false, "method"), tool("create_contact", true, "method")];
+    const ids = {
+      github: await connection("github", "github", "mcp", github),
+      slack: await connection("slack", "slack", "mcp", slack),
+      crm: await connection("crm", null, "mcp", crm),
+      openapi: await connection("books", null, "openapi", openapi),
+      clean: await connection("gong", "gong", "mcp", [tool("list_calls", false, "annotation")]),
+    };
+
+    expect((await migrate(pool, await migrationsUpTo("0037_read_only_label.sql", true))).applied).toEqual([
+      "0037_read_only_label.sql",
+    ]);
+
+    const row = async (id: string) =>
+      (
+        await pool.query<{ tools: unknown[]; updated_at: Date }>(
+          "SELECT tools, updated_at FROM connections WHERE id = $1",
+          [id],
+        )
+      ).rows[0]!;
+    const held = { write: true, source: "unconfirmed" };
+    expect((await row(ids.github)).tools).toEqual([
+      { ...github[0], ...held },
+      { ...github[1], ...held },
+      github[2],
+      github[3],
+      { ...github[4], write: true, source: "catalog" },
+      ...github.slice(5),
+    ]);
+    expect((await row(ids.slack)).tools).toEqual([
+      slack[0],
+      { ...slack[1], write: true, source: "catalog" },
+      { ...slack[2], ...held },
+    ]);
+    expect((await row(ids.crm)).tools).toEqual([crm[0], { ...crm[1], ...held }]);
+    // A connection with nothing to hold is left as it was, its update time too.
+    for (const [id, tools] of [
+      [ids.openapi, openapi],
+      [ids.clean, [tool("list_calls", false, "annotation")]],
+    ] as const) {
+      const r = await row(id);
+      expect(r.tools).toEqual(tools);
+      expect(r.updated_at.toISOString()).toBe(old);
+    }
+    expect((await row(ids.github)).updated_at.toISOString()).not.toBe(old);
+  });
+});
