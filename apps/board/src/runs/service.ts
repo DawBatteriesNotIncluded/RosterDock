@@ -34,6 +34,7 @@ import { alertOnBudgets, assertWithinBudgets, priceFor } from "../budgets/servic
 import { effectiveToolbox, webNarrowingReason, webScope } from "../broker/policy.js";
 import { narrowingReason } from "../broker/policy.js";
 import { WEB_FETCH_TOOL } from "../web/read.js";
+import { webCatalogEntry } from "../mcp/catalog.js";
 import {
   listChecks,
   listComments,
@@ -823,6 +824,20 @@ export async function buildRunSpec(
             }
           : null,
       offline: opts.web === false,
+      // Connections from the catalog's web tools, as the teammate holds them on this task.
+      tools: toolbox.flatMap((e) => {
+        const entry = webCatalogEntry(e.connection.catalog_id);
+        if (!entry || !e.connection.enabled || e.mode === "off") return [];
+        return [
+          {
+            connection: e.connection.name,
+            name: entry.name,
+            mode: e.mode,
+            reads: e.tools.filter((t) => !t.write && !t.off).map((t) => t.name),
+            writes: e.tools.filter((t) => t.write && !t.off).map((t) => t.name),
+          },
+        ];
+      }),
     },
   };
 }

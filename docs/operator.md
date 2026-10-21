@@ -166,6 +166,38 @@ governs. The web is one too.
   Connections > Client policies), never wider. An address that is not public is refused whatever a list says
   (`docs/security.md`, Reading the web). With `ROSTERDOCK_FETCH_SOURCES=0` the board stays off the web, and
   the connection's Check says so.
+- **A web tool you already have.** Search, a real browser or a fetch server you run is a connection like any
+  other: add it under Settings > Connections (an MCP server over HTTP or stdio, or an OpenAPI service),
+  discover its tools, grant it in toolboxes. The catalog has the common ones, versions pinned, and the brief
+  names a connection added from one of them as a web tool: Brave Search, Tavily, Exa, the Playwright browser
+  and the MCP reference fetch server. Their reads run and are recorded like any connection's (the tool and
+  its argument names); the web connection's address checks and site lists are not theirs. A key goes by
+  name, as a company secret (Settings > Connections > Secrets) or a name the board shares: Tavily and Exa
+  are hosted and take it as a bearer (`TAVILY_API_KEY`, `EXA_API_KEY` at `https://mcp.tavily.com/mcp` and
+  `https://mcp.exa.ai/mcp`); Brave Search runs on the board and gets `BRAVE_API_KEY` in its environment.
+- **A stdio server runs inside the board pod**, as the board, so it starts only once `board.stdioCommands`
+  lists its exact line: `npx -y @brave/brave-search-mcp-server@2.1.4`, `npx -y tavily-mcp@0.2.22`,
+  `npx -y exa-mcp-server@3.4.2`. The reference fetch server is Python (`uvx mcp-server-fetch@2026.10.19`),
+  and the board image carries no uv, so it suits a board you run yourself; the web connection does its job
+  with the board's guard and a record of each page. A browser or a fetcher inside the board pod reaches
+  what the board reaches, the cluster included (`docs/security.md`), so run one as a service of its own and
+  connect over HTTP.
+- **The Playwright browser** as a service: the `mcr.microsoft.com/playwright/mcp` image, or
+  `npx -y @playwright/mcp@0.0.83 --headless --isolated --browser chromium --port 8931 --host 0.0.0.0` with
+  `--allowed-hosts` naming the service, in a pod whose network policy reaches public addresses only; then a
+  connection to `http://<service>:8931/mcp`. Snapshots and screenshots read; navigating, clicking and typing
+  are writes, as the server marks them, so under a read grant the browser can only look at the page it is on.
+  To let teammates move between pages without asking, a person flips `browser_navigate` and
+  `browser_navigate_back` to read on the connection's card; clicks and typing stay writes, proposed for a
+  person.
+- **The engines' own web tools.** List WebFetch and WebSearch in `ROSTERDOCK_CLAUDE_ALLOWED_TOOLS` (chart
+  `worker.claudeAllowedTools`, or a pool's) and a department's sandbox may keep them for Claude Code. Codex
+  keeps its own web search unless the department's list leaves out WebSearch. The brief tells the teammate
+  what it has. They reach the web outside the board: no address check of the board's, no site list, no
+  record of each page (the run log shows the URL or query the engine asked for, as it shows every tool).
+  WebFetch fetches from the worker pod, so what it reaches is what the pod reaches; a web search runs at the
+  model's provider. Prefer the web connection; where you use WebFetch, give its department a pool whose
+  egress is public HTTPS only.
 
 ## Upgrades and backups
 

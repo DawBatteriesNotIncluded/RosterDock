@@ -195,7 +195,9 @@ worker:
   # with the rules it uses them under. A department's sandbox only narrows it: a tool listed there and not
   # here is left out of the run. Empty: the worker's
   # default, Read, Write, Edit, Glob and Grep inside the workspace. A department that needs the web
-  # (WebSearch, WebFetch) gets it from a pool that lists them. Codex runs in its own sandbox instead.
+  # (WebSearch, WebFetch) gets it from a pool that lists them; those reach the web outside the board's
+  # address checks, site lists and records, so prefer a company's web connection (docs/operator.md, Web
+  # access for teammates). Codex runs in its own sandbox instead.
   claudeAllowedTools: []
   # More environment for the worker container, as Kubernetes env entries, for the settings with no value of
   # their own above (docs/operator.md, Environment reference): ROSTERDOCK_RUN_REPO_TESTS ("0" turns the

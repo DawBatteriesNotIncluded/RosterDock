@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { auditUrl } from "../src/web/read.js";
+import { CONNECTOR_CATALOG, WEB_CATEGORY } from "../src/mcp/catalog.js";
 import {
   addProject,
   addTeammate,
@@ -331,6 +332,7 @@ describe("the web connection", () => {
         narrowed: "narrowed by the Research department's list and the client Globex's list",
       },
       offline: false,
+      tools: [],
     });
     expect(claimed.pack).toContain(
       "Sites you may read: only help.gong.io and the sites under it (narrowed by the Research department's list and the client Globex's list).",
@@ -443,6 +445,77 @@ describe("the web connection", () => {
     const refused = await third.api.post(`${third.base}/templates/import`, widened);
     expect(refused.body.notes).toContain("connection w2: not a domain is not a web domain; skipped");
     expect(web.kind).toBe("web");
+  });
+});
+
+describe("web tools a company brings", () => {
+  it("the catalog's web entries pin a version, name their credential by NAME and know their reads", () => {
+    const web = CONNECTOR_CATALOG.filter((e) => e.category === WEB_CATEGORY);
+    expect(web.map((e) => e.id)).toEqual(["brave-search", "tavily", "exa", "playwright", "fetch"]);
+    for (const e of web) {
+      // A command runs only as the operator lists it, so it names one exact version.
+      if (e.commandExample) expect(e.commandExample, e.id).toMatch(/@\d+\.\d+\.\d+(?:\s|$)/);
+      if (e.urlExample) expect(e.urlExample, e.id).toMatch(/^https?:\/\/[^\s]+\/mcp$/);
+      if (e.authEnvExample) expect(e.authEnvExample, e.id).toMatch(/^[A-Z][A-Z0-9_]*$/);
+      expect(e.reads.length, e.id).toBeGreaterThan(0);
+      expect(
+        e.reads.filter((r) => e.writes.includes(r)),
+        e.id,
+      ).toEqual([]);
+      expect(e.docsUrl, e.id).toMatch(/^https:\/\/github\.com\//);
+    }
+    // A hosted search service takes its key as a bearer, so it travels by NAME like any connection's.
+    expect(web.find((e) => e.id === "tavily")).toMatchObject({
+      transport: "http",
+      authEnvExample: "TAVILY_API_KEY",
+    });
+  });
+
+  it("a web tool added from the catalog and granted is named in the brief as a web tool", async () => {
+    const { api, base } = await seedCompany(board, "wc8@example.com");
+    const tavily = await api.post(`${base}/connections`, {
+      name: "tavily",
+      catalogId: "tavily",
+      url: "https://mcp.tavily.test/mcp",
+      authEnvName: "TAVILY_API_KEY",
+    });
+    expect(tavily.status).toBe(201);
+    expect(tavily.body.tools.map((t: { name: string; write: boolean }) => [t.name, t.write])).toEqual([
+      ["tavily_search", false],
+      ["tavily_extract", false],
+      ["tavily_crawl", false],
+      ["tavily_map", false],
+      ["tavily_research", false],
+    ]);
+    const cody = await addTeammate(api, base, "Cody", "researcher");
+    await api.patch(`${base}/teammates/${cody.id}`, { toolbox: [{ connection: "tavily", mode: "read" }] });
+    const project = await addProject(api, base);
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Who sells call recording",
+        assignee: { kind: "teammate", id: cody.id },
+        workKind: "research",
+      })
+    ).body;
+    const run = (await api.post(`${base}/tasks/${task.id}/runs`, {})).body;
+    const claimed = await workerClaim(board, run.id);
+    expect(claimed.spec.web).toEqual({
+      fetch: null,
+      offline: false,
+      tools: [
+        {
+          connection: "tavily",
+          name: "Tavily",
+          mode: "read",
+          reads: ["tavily_search", "tavily_extract", "tavily_crawl", "tavily_map", "tavily_research"],
+          writes: [],
+        },
+      ],
+    });
+    expect(claimed.pack).toContain("The company gave you these web tools");
+    expect(claimed.pack).toContain("- tavily (Tavily) · reads: tavily_search");
+    expect(claimed.pack).not.toContain("No web tool is in your toolbox");
   });
 });
 

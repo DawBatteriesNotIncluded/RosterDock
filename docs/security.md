@@ -312,6 +312,24 @@ their own, each with its own database and workers.
   connection fetches nothing and its check says why. The research review's source check is the board's own,
   not a teammate's: it reads the links a document cites through the same guard, whatever a company's list
   says.
+- **A web tool a company brings** (search, a browser, a fetch server: the catalog's Web entries, or any MCP
+  server or OpenAPI service) is a connection like any other. The broker decides each call and records each
+  read with its argument names; what the tool fetches, and from where, is the tool's. A hosted search
+  service fetches from its own network. A stdio server runs in the board pod as the board, so a fetcher or a
+  browser there reaches what the board reaches: the cluster, the board's own port and, with
+  `board.oauth.enabled`, the API server. The reference fetch server refuses private addresses by default but
+  checks a name before it connects, not as it connects, so a name that changes its answer between the two
+  gets through; a browser's origin lists are not a boundary at all. Run those as a service of their own,
+  with a network policy that reaches public addresses only, and connect over HTTP.
+- **The engines' own web tools** bypass the board. Claude Code's WebFetch and WebSearch run only when the
+  operator lists them in the worker's tool list (`ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`, chart
+  `worker.claudeAllowedTools`), and a department's list only narrows that. Codex keeps its own web search (a
+  cached index; live, with network for its commands, under `danger-full-access`) unless the department's list
+  leaves out WebSearch (Workers run model output, above). WebFetch fetches from the worker pod, and what it
+  reaches is what the pod reaches (with `networkPolicy.enabled` the default fleet reaches public HTTPS only,
+  every private range excluded); a web search runs at the model's provider. None of it has the board's
+  address check, a site list or a `tool.called` record: the run log shows the URL or query asked, like any
+  tool input, and the brief tells the teammate it has them.
 
 ## What you own
 
