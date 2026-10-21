@@ -220,8 +220,10 @@ their own, each with its own database and workers.
   a department it belongs to.
 - Claude Code starts with no settings file (`--setting-sources` empty): not the operator's, and not the
   cloned repository's `.claude/settings.json`, so a repository cannot allow itself a tool or add a hook.
-  Codex starts with `--ignore-user-config` and its ChatGPT apps and plugins off, so a worker signed in to
-  ChatGPT brings none of that account's connectors into a run.
+  Codex starts with `--ignore-user-config` and `--ignore-rules`, so no rules file in its home or the
+  repository lets a command out of its sandbox (a rule that allows a command runs it unsandboxed), and with
+  its ChatGPT apps and plugins off, so a worker signed in to ChatGPT brings none of that account's
+  connectors into a run.
 - After the engine, the worker runs the repository's own `test` script in the workspace
   (`ROSTERDOCK_RUN_REPO_TESTS`, on by default), once the diff is captured. That script is the
   repository's code and the run may have rewritten it, so it gets PATH, HOME, the temp directory, the

@@ -107,6 +107,7 @@ describe("invocation", () => {
       "--skip-git-repo-check",
       "--ephemeral",
       "--ignore-user-config",
+      "--ignore-rules",
       "--color",
       "never",
       "-c",
@@ -217,7 +218,7 @@ const chunks = [];
 for await (const c of process.stdin) chunks.push(c);
 const prompt = Buffer.concat(chunks).toString("utf8");
 const args = process.argv.slice(2);
-const must = ["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--model", "gpt-5-codex", "--output-last-message", "-"];
+const must = ["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--model", "gpt-5-codex", "--output-last-message", "-"];
 const cfg = args.filter((a, i) => args[i - 1] === "-c");
 if (!cfg.includes('mcp_servers.rosterdock.url="http://board.test/api/mcp"') || !cfg.includes('mcp_servers.rosterdock.bearer_token_env_var="ROSTERDOCK_RUN_TOKEN"') || process.env.ROSTERDOCK_RUN_TOKEN !== "run-token") { process.stderr.write("stub: mcp not wired"); process.exit(8); }
 if (!cfg.includes("features.apps=false") || !cfg.includes("features.plugins=false")) { process.stderr.write("stub: an MCP server besides the board's"); process.exit(7); }

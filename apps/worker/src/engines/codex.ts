@@ -2,11 +2,11 @@
 // scripts/hermes-codex-worker.mjs and moved to the JSONL event stream so the
 // board shows what the teammate is doing while it runs. The run pack is the
 // entire prompt; nothing from the operator's own Codex setup leaks in
-// (--ignore-user-config, --ephemeral, approvals off, ChatGPT apps and plugins
-// off, the sandbox from the worker's config as the department's tool list
-// narrows it). Codex's final message is written as the handover, so the board
-// always has one. The board MCP server is passed as config, the run token by
-// env var NAME (never on the command line).
+// (--ignore-user-config, --ignore-rules, --ephemeral, approvals off, ChatGPT
+// apps and plugins off, the sandbox from the worker's config as the
+// department's tool list narrows it). Codex's final message is written as the
+// handover, so the board always has one. The board MCP server is passed as
+// config, the run token by env var NAME (never on the command line).
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -116,6 +116,8 @@ export function buildArgs(
     "--skip-git-repo-check",
     "--ephemeral",
     "--ignore-user-config",
+    // No exec-policy rules file in its home or the repository: an `allow` rule runs a command outside the sandbox.
+    "--ignore-rules",
     "--color",
     "never",
     ...(mcp
