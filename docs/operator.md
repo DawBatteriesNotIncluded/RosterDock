@@ -39,7 +39,8 @@ board, Postgres and, by default, public HTTPS for the model API and the git host
   the monthly report by chargeback tag, and the CSVs for finance. Budgets alert at 80% and 100%. A Claude
   Code run that is stopped or hits its time limit counts what its messages reported (the output of the
   last one may be short); Codex reports tokens only at the end, so a stopped Codex run counts none, and
-  its run log says so.
+  its run log says so. A run on the stub engine counts under the stub, whatever model its teammate names:
+  it called none, so it has no price.
 - **Drift.** A teammate whose runs suddenly cost or take far more than their own usual, or whose work is
   sent back far more often, raises one alert per day: in Activity, in the notifications, on their page.
   Nothing stops; open their recent runs and reviews and decide. What counts as "far more" is the

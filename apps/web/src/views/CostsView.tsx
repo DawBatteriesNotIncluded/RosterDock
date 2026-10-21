@@ -4,9 +4,15 @@
 import { useEffect, useState } from "react";
 import type { BudgetWindow, CompanyData, CostReport, MonthlyReport } from "../api/types.ts";
 import { Avatar, Empty, Pill, Segs, Topbar } from "../components/ui.tsx";
+import { ENGINE_LABEL } from "../lib/format.ts";
 import { fmtTokens } from "./RunPanel.tsx";
 
 export type CostMode = "api" | "seat";
+
+/** A model as Costs names it: the stub's runs by the engine's own name, since they call no model. */
+export function modelLabel(model: string): string {
+  return model === "stub" ? (ENGINE_LABEL.stub ?? model) : model;
+}
 
 export function money(minorUnits: number | null, currency: string): string {
   if (minorUnits === null) return "—";
@@ -190,7 +196,8 @@ export function MonthlyView(p: {
               {r.byTeammate.map((t) => (
                 <tr key={t.id}>
                   <td>
-                    <span className="font-semibold">{t.name}</span> <span className="hint">· {t.model}</span>
+                    <span className="font-semibold">{t.name}</span>{" "}
+                    <span className="hint">· {modelLabel(t.model)}</span>
                     <div className="hint">
                       {fmtTokens(t.tokens.total)} tokens · {runs(t.runs)}
                     </div>
@@ -208,7 +215,7 @@ export function MonthlyView(p: {
               {r.byModel.map((m) => (
                 <tr key={m.model}>
                   <td>
-                    <span className="mono font-semibold">{m.model}</span>
+                    <span className="mono font-semibold">{modelLabel(m.model)}</span>
                     <div className="hint">{fmtTokens(m.tokens.total)} tokens</div>
                   </td>
                   <td className="mono text-right">{money(m.costMinorUnits, cur)}</td>
@@ -480,7 +487,7 @@ export function CostsView(p: CostsViewProps) {
                     ? report.byModel.map((m) => (
                         <tr key={m.model}>
                           <td>
-                            <span className="font-semibold">{m.model}</span>
+                            <span className="font-semibold">{modelLabel(m.model)}</span>
                             <div className="hint">
                               {m.teammates} teammate{m.teammates === 1 ? "" : "s"} ·{" "}
                               {fmtTokens(m.tokens.total)} tokens · {m.runs} run
@@ -548,7 +555,7 @@ export function CostsView(p: CostsViewProps) {
                             </span>
                           </span>
                         </td>
-                        <td>{mode === "api" ? m.model : (t?.engine ?? m.engine)}</td>
+                        <td>{mode === "api" ? modelLabel(m.model) : (t?.engine ?? m.engine)}</td>
                         <td className="mono text-right">{fmtTokens(m.tokens.input)}</td>
                         <td className="mono text-right">{fmtTokens(m.tokens.output)}</td>
                         <td className="mono text-right">

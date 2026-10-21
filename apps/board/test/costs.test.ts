@@ -161,6 +161,46 @@ describe("cost report", () => {
     expect((await api.post(`${base}/prices/list`, {})).body).toEqual({ added: [], unknown: ["gpt-6-astra"] });
   });
 
+  it("a stub run counts under the stub, not the model its teammate names, and has no price", async () => {
+    // Seen on a live board: a stub teammate on claude-sonnet-5-5 had its runs listed and priced as that model.
+    const { api, base } = await seedCompany(board, "c-stub@example.com");
+    const stubby = await addTeammate(api, base, "Stubby");
+    await api.patch(`${base}/teammates/${stubby.id}`, { engine: "stub", model: "claude-sonnet-5-5" });
+    await api.put(`${base}/prices`, {
+      model: "claude-sonnet-5-5",
+      currency: "GBP",
+      inputPerMillion: 240,
+      outputPerMillion: 1200,
+    });
+    const project = await addProject(api, base);
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "a",
+        assignee: { kind: "teammate", id: stubby.id },
+      })
+    ).body;
+    await runToCompletion(api, base, task.id, { inputTokens: 1200, outputTokens: 300 });
+
+    const r = (await api.get(`${base}/costs?window=week`)).body;
+    expect(
+      r.byModel.map((m: any) => [m.model, m.teammates, m.runs, m.tokens.total, m.costMinorUnits]),
+    ).toEqual([["stub", 1, 1, 1500, null]]);
+    expect(r.byTeammate.find((m: any) => m.id === stubby.id)).toMatchObject({
+      model: "stub",
+      engine: "stub",
+      costMinorUnits: null,
+    });
+    expect(r.totals.costMinorUnits).toBeNull();
+    const [run] = (await api.get(`${base}/tasks/${task.id}/runs`)).body as any[];
+    expect(run.costMinorUnits).toBeNull();
+    const month = (await api.get(`${base}/costs/monthly`)).body;
+    expect(month.byModel.map((m: any) => m.model)).toEqual(["stub"]);
+    expect(month.byTeammate.find((m: any) => m.id === stubby.id).model).toBe("stub");
+    // Filling list prices asks nobody to price the stub.
+    expect((await api.post(`${base}/prices/list`, {})).body.unknown).not.toContain("stub");
+  });
+
   it("an empty company reports zeros, no budget and no seats", async () => {
     const { api, base } = await seedCompany(board, "c2@example.com");
     const r = (await api.get(`${base}/costs`)).body;

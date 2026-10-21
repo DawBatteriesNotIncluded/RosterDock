@@ -8,7 +8,7 @@
 
 import type { BudgetWindow } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
-import { costFor, type ModelPrice } from "./cost.js";
+import { costFor, usageModel, type ModelPrice } from "./cost.js";
 
 export interface TokenTotals {
   input: number;
@@ -238,7 +238,7 @@ export async function costReport(
         id: t.id,
         name: t.name,
         handle: t.handle,
-        model: t.model,
+        model: usageModel(t.engine, t.model),
         engine: t.engine,
         departmentName: dept
           ? (departments.rows.find((d) => d.id === dept.department_id)?.name ?? null)
@@ -306,7 +306,7 @@ export async function costReport(
       d.teammates += 1;
       d.seatMinorUnits += mate.seatMinorUnits;
     }
-    const m = byModel.get(t.model);
+    const m = byModel.get(usageModel(t.engine, t.model));
     if (m) m.teammates += 1;
     const seat = seatFor(t.model, t.engine);
     const key = seat?.key ?? `${t.engine} (no seat price)`;

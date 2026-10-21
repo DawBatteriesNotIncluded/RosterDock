@@ -103,3 +103,73 @@ describe("0033_task_goal", () => {
     ]);
   });
 });
+
+describe("0036_stub_usage", () => {
+  it("moves a stub run's usage off its teammate's model and drops the price it was given", async () => {
+    await migrate(pool, await migrationsUpTo("0036_stub_usage.sql", false));
+    const one = async <T extends pg.QueryResultRow>(sql: string, params: unknown[] = []) =>
+      (await pool.query<T>(sql, params)).rows[0]!;
+    const company = (await one<{ id: string }>("INSERT INTO companies (name) VALUES ('Stubs') RETURNING id"))
+      .id;
+    const project = (
+      await one<{ id: string }>("INSERT INTO projects (company_id, name) VALUES ($1, 'Demo') RETURNING id", [
+        company,
+      ])
+    ).id;
+    const person = "00000000-0000-4000-8000-000000000001";
+    const task = (
+      await one<{ id: string }>(
+        `INSERT INTO tasks (company_id, project_id, number, title, created_by_kind, created_by_id)
+         VALUES ($1, $2, 1, 'A task', 'user', $3) RETURNING id`,
+        [company, project, person],
+      )
+    ).id;
+    // One teammate on the stub, one on Claude Code, both naming the same model.
+    const mate = async (name: string, engine: string) =>
+      (
+        await one<{ id: string }>(
+          `INSERT INTO teammates (company_id, name, handle, role, engine, model)
+           VALUES ($1, $2, lower($2), 'Engineer', $3, 'claude-sonnet-5-5') RETURNING id`,
+          [company, name, engine],
+        )
+      ).id;
+    const run = async (teammate: string, engine: string) => {
+      const id = (
+        await one<{ id: string }>(
+          `INSERT INTO runs (company_id, task_id, teammate_id, engine, model, status, cost_minor_units, created_by_kind, created_by_id)
+           VALUES ($1, $2, $3, $4, 'claude-sonnet-5-5', 'completed', 45, 'user', $5) RETURNING id`,
+          [company, task, teammate, engine, person],
+        )
+      ).id;
+      await pool.query(
+        `INSERT INTO run_usage (company_id, run_id, task_id, teammate_id, project_id, model, input_tokens, output_tokens, cost_minor_units)
+         VALUES ($1, $2, $3, $4, $5, 'claude-sonnet-5-5', 1200, 300, 45)`,
+        [company, id, task, teammate, project],
+      );
+      return id;
+    };
+    const stubRun = await run(await mate("Stubby", "stub"), "stub");
+    const realRun = await run(await mate("Cody", "claude_code"), "claude_code");
+
+    expect((await migrate(pool, await migrationsUpTo("0036_stub_usage.sql", true))).applied).toEqual([
+      "0036_stub_usage.sql",
+    ]);
+
+    const usageOf = (id: string) =>
+      one("SELECT model, input_tokens::int, cost_minor_units::int FROM run_usage WHERE run_id = $1", [id]);
+    const costOf = async (id: string) =>
+      (
+        await one<{ cost: number | null }>("SELECT cost_minor_units::int AS cost FROM runs WHERE id = $1", [
+          id,
+        ])
+      ).cost;
+    expect(await usageOf(stubRun)).toEqual({ model: "stub", input_tokens: 1200, cost_minor_units: null });
+    expect(await costOf(stubRun)).toBeNull();
+    expect(await usageOf(realRun)).toEqual({
+      model: "claude-sonnet-5-5",
+      input_tokens: 1200,
+      cost_minor_units: 45,
+    });
+    expect(await costOf(realRun)).toBe(45);
+  });
+});

@@ -27,7 +27,7 @@ import {
 } from "../src/views/ConnectionsPanel.tsx";
 import { BoardView } from "../src/views/BoardView.tsx";
 import { CompanyView } from "../src/views/CompanyView.tsx";
-import { CostsView, fourteenDays, money, MonthlyView, monthOf } from "../src/views/CostsView.tsx";
+import { CostsView, fourteenDays, modelLabel, money, MonthlyView, monthOf } from "../src/views/CostsView.tsx";
 import { characterRows, carpetOf, HAIR_STYLES, lookFor } from "../src/views/office/art.ts";
 import {
   lineDuration,
@@ -1494,6 +1494,29 @@ describe("pure helpers", () => {
     expect(html).toContain("Export CSV");
     expect(html).toContain('href="/api/companies/c1/costs/export.csv?window=week"');
     expect(html).toContain("Monthly report");
+    // A stub teammate's runs read as the stub engine, never as the model the teammate names.
+    const stubTokens = { input: 1200, output: 300, cacheRead: 0, cacheWrite: 0, total: 1500 };
+    const stub = { model: "stub", tokens: stubTokens, costMinorUnits: null, runs: 1 };
+    const withStub = render(
+      <CostsView
+        data={fixture}
+        initial={{
+          ...costFixture,
+          byTeammate: [{ ...costFixture.byTeammate[0]!, ...stub, name: "Stubby", engine: "stub" }],
+          byModel: [{ ...stub, teammates: 1 }],
+        }}
+        loadCosts={async () => costFixture}
+        loadMonthly={async () => monthlyFixture}
+        usageCsvUrl={(w) => `/api/companies/c1/costs/export.csv?window=${w}`}
+        chargebackCsvUrl={(m) => `/api/companies/c1/costs/monthly.csv?month=${m}`}
+        onOpenTeammate={noop}
+        onOpenProject={noop}
+        onOpenSettings={noop}
+      />,
+    );
+    expect((withStub.match(/Stub \(no model\)/g) ?? []).length).toBe(2);
+    expect(withStub).not.toContain("claude-sonnet-5");
+    expect(modelLabel("claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
     const monthly = render(
       <MonthlyView
         month="2026-08"

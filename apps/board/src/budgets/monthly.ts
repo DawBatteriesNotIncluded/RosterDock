@@ -7,7 +7,7 @@
 import type { BudgetWindow } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
-import { costFor, type ModelPrice } from "./cost.js";
+import { costFor, usageModel, type ModelPrice } from "./cost.js";
 import type { CostLine, TokenTotals } from "./costs.js";
 
 export interface Bounds {
@@ -317,7 +317,7 @@ export async function monthlyReport(
         id: t.id,
         name: t.name,
         handle: t.handle,
-        model: t.model,
+        model: usageModel(t.engine, t.model),
         engine: t.engine,
         seatMinorUnits: seatFor(t.model, t.engine),
       }),

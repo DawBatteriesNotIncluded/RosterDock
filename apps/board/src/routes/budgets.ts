@@ -2,6 +2,7 @@
 import { BudgetInputSchema, ModelPriceInputSchema } from "@rosterdock/shared";
 import type { FastifyInstance } from "fastify";
 import { BUDGET_WINDOWS, type BudgetWindow } from "@rosterdock/shared";
+import { STUB_MODEL } from "../budgets/cost.js";
 import { costReport } from "../budgets/costs.js";
 import { monthBounds, monthlyCsv, monthlyReport, usageCsv, windowBounds } from "../budgets/monthly.js";
 import { usedInWindow, type BudgetRow } from "../budgets/service.js";
@@ -205,7 +206,8 @@ export function registerBudgetRoutes(app: FastifyInstance, db: Db): void {
       [req.companyId],
     );
     const fill = used.rows.map((r) => listPriceFor(r.model)).filter((p) => p !== null);
-    const unknown = used.rows.map((r) => r.model).filter((m) => !listPriceFor(m));
+    // The stub calls no model, so it has no price to look up or to ask a person for.
+    const unknown = used.rows.map((r) => r.model).filter((m) => m !== STUB_MODEL && !listPriceFor(m));
     if (!fill.length) return { added: [], unknown };
     const { result } = await mutate(db, req.companyId, req.principal.actor, async (ctx) => {
       const added: string[] = [];
