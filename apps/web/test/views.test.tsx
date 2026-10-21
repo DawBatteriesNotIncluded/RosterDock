@@ -1947,6 +1947,63 @@ describe("pure helpers", () => {
     );
     expect(office).toContain("Daniel · 1 to approve");
   });
+
+  it("a rejected write leaves the task saying so, and owners and admins can cancel it from the status menu", () => {
+    const stale = fixture.tasks.find((t) => t.status === "blocked")!;
+    const rejected = {
+      ...stale,
+      blocker: {
+        code: "approval_rejected" as const,
+        what: "Stub write: create_note on notes (notes · create_note) was rejected: written once already.",
+        why: "Nothing was sent and nothing waits for a decision any more.",
+        resolution:
+          "Start it again with a note on what to do instead of that write, reassign it, or cancel it.",
+        retrySafe: false,
+      },
+    };
+    const data = { ...fixture, tasks: fixture.tasks.map((t) => (t.id === stale.id ? rejected : t)) };
+    const props = {
+      projectId: "all" as const,
+      departmentId: "all" as const,
+      selectedTaskId: stale.id,
+      onFilterProject: noop,
+      onFilterDepartment: noop,
+      onSelectTask: noop,
+      onNewTask: noop,
+      onMove: asyncNoop,
+      onRefuseDone: noop,
+      onOpenReview: noop,
+      onAssign: asyncNoop,
+      onSetDepartment: asyncNoop,
+      loadMessages: async () => [],
+      onPostMessage: asyncNoop,
+      loadRuns: async () => [],
+      loadRun: async () => {
+        throw new Error("not in this test");
+      },
+      loadArtifacts: async () => [],
+      loadArtifact: async () => {
+        throw new Error("not in this test");
+      },
+      onStartRun: asyncNoop,
+      onStopRun: asyncNoop,
+    };
+    const cancel = '<option value="cancelled">Cancelled</option>';
+    const owner = render(<BoardView data={data} {...props} canCancel onCancel={asyncNoop} />);
+    // The card and the drawer tell what happened: no approval to give, nothing waiting.
+    expect(owner).toContain("was rejected: written once already.");
+    expect(owner).toContain("Nothing was sent and nothing waits for a decision any more.");
+    expect(owner).not.toContain("Needs your approval");
+    expect(owner).toContain(cancel);
+    // Nobody else is offered it, and a task in review is its reviewer's to decide.
+    expect(render(<BoardView data={data} {...props} />)).not.toContain(cancel);
+    const inReview = fixture.tasks.find((t) => t.status === "review")!;
+    expect(
+      render(
+        <BoardView data={data} {...props} selectedTaskId={inReview.id} canCancel onCancel={asyncNoop} />,
+      ),
+    ).not.toContain(cancel);
+  });
 });
 
 describe("toolbox grants", () => {

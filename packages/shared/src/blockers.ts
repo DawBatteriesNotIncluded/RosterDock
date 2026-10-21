@@ -11,6 +11,7 @@ export const BLOCKER_CODES = [
   "dependencies_unresolved",
   "waiting_on_teammate",
   "approval_required",
+  "approval_rejected",
   "missing_config",
   "missing_secret_ref",
   "transport_unreachable",
@@ -64,6 +65,14 @@ const DEFAULTS: Record<BlockerCode, Omit<BlockerRecord, "code">> = {
     retrySafe: false,
     resumeInstructions:
       "Decide the approval; do not start the task again, a second run would propose the same write again.",
+  },
+  approval_rejected: {
+    what: "A person rejected the write the teammate proposed.",
+    why: "Nothing was sent and nothing waits for a decision any more.",
+    resolution: "Start it again with a note on what to do instead of that write, reassign it, or cancel it.",
+    retrySafe: false,
+    resumeInstructions:
+      "Start it again with a note saying what to do instead; started as it is, it may propose the same write.",
   },
   missing_config: {
     what: "The engine is not set up.",
@@ -155,6 +164,7 @@ export function blockerKind(code: BlockerCode): BlockerKind {
     case "waiting_on_teammate":
       return "teammate";
     case "approval_required":
+    case "approval_rejected":
       return "approval";
     default:
       return "run";

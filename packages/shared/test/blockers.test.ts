@@ -33,6 +33,7 @@ describe("blocker taxonomy", () => {
     expect(blockerKind("dependencies_unresolved")).toBe("dependency");
     expect(blockerKind("waiting_on_teammate")).toBe("teammate");
     expect(blockerKind("approval_required")).toBe("approval");
+    expect(blockerKind("approval_rejected")).toBe("approval");
     expect(blockerKind("timeout")).toBe("run");
     expect(blockerKind("unknown")).toBe("run");
   });

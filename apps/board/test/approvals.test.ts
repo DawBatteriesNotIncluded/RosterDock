@@ -233,7 +233,12 @@ describe("approvals", () => {
     expect(res.body.status).toBe("rejected");
     let t = (await api.get(`${base}/tasks/${task.id}`)).body;
     expect(t.status).toBe("blocked");
-    expect(t.blocker.code).toBe("approval_required");
+    // The task says what happened: nothing waits for a decision any more.
+    expect(t.blocker.code).toBe("approval_rejected");
+    expect(t.blocker.what).toBe(
+      'Create a HubSpot list "Q3 warm accounts" (hubspot · create_list) was rejected: Not a static list; use the existing active list.',
+    );
+    expect(t.blocker.waitingOn).toBeUndefined();
 
     const pass = await peterPass(deps(), companyId);
     expect(pass.replanned).toHaveLength(1);
@@ -263,10 +268,68 @@ describe("approvals", () => {
     expect(first.body.status).toBe("executed");
     expect(first.body.restarted.runId).toBeNull();
     expect(first.body.restarted.reason).toContain("still wait");
-    expect((await api.get(`${base}/tasks/${task.id}`)).body.status).toBe("blocked");
+    const waiting = (await api.get(`${base}/tasks/${task.id}`)).body;
+    expect(waiting.status).toBe("blocked");
+    // It waits on the one still waiting, not on the one decided.
+    expect(waiting.blocker.waitingOn).toEqual({
+      kind: "approval",
+      id: b.approval.id,
+      name: b.approval.title,
+    });
     const second = await api.post(`${base}/approvals/${b.approval.id}/approve`, {});
     expect(second.body.restarted.runId).toBeTruthy();
     expect((await api.get(`${base}/tasks/${task.id}`)).body.status).toBe("doing");
+  });
+
+  it("a rejection with another proposal waiting leaves the task on that one; the last one rejected ends the wait", async () => {
+    const { api, base } = await seedCompany(board, "ap8@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const { task, run, claimed } = await runningTask(api, base, cody.id);
+    const a = await proposeApproval(board.db, task.companyId, proposal(task.id, run.id, cody.id, "List A"));
+    const b = await proposeApproval(board.db, task.companyId, proposal(task.id, run.id, cody.id, "List B"));
+    await workerComplete(board, claimed.token, run.id, { status: "completed" });
+    expect((await api.get(`${base}/tasks/${task.id}`)).body.blocker.waitingOn.id).toBe(a.approval.id);
+    await api.post(`${base}/approvals/${a.approval.id}/reject`, { note: "Not A." });
+    let t = (await api.get(`${base}/tasks/${task.id}`)).body;
+    expect(t.blocker.code).toBe("approval_required");
+    expect(t.blocker.waitingOn.id).toBe(b.approval.id);
+    expect(t.blocker.what).toBe('Waiting for approval: Create a HubSpot list "List B" (hubspot).');
+    await api.post(`${base}/approvals/${b.approval.id}/reject`, {});
+    t = (await api.get(`${base}/tasks/${task.id}`)).body;
+    expect(t.status).toBe("blocked");
+    expect(t.blocker.code).toBe("approval_rejected");
+    expect(t.blocker.what).toBe('Create a HubSpot list "List B" (hubspot · create_list) was rejected.');
+  });
+
+  it("a task filed after its project's goal closed is outside it, so a rejection there is re-planned", async () => {
+    // As on the end-to-end run: a person filed a task into the project a finished goal had opened.
+    const { api, base, companyId } = await seedCompany(board, "ap9@example.com");
+    await addTeammate(api, base, "Ricky", "researcher");
+    await addTeammate(api, base, "Brody", "requirements");
+    const cody = await addTeammate(api, base, "Cody");
+    const goal = (await api.post(`${base}/goals`, { text: "A Friday digest of Gong calls in Slack." })).body;
+    await board.db.query("UPDATE goals SET status = 'done', closed_at = now() WHERE id = $1", [goal.id]);
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: goal.projectId,
+        title: "Approval test: propose a note to the notes service",
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    expect(task.goalId).toBeNull();
+    const run = (await api.post(`${base}/tasks/${task.id}/runs`, {})).body;
+    const claimed = await workerClaim(board, run.id);
+    const { approval } = await proposeApproval(board.db, companyId, proposal(task.id, run.id, cody.id));
+    await workerComplete(board, claimed.token, run.id, { status: "completed" });
+    await api.post(`${base}/approvals/${approval.id}/reject`, { note: "Written once already." });
+    const t = (await api.get(`${base}/tasks/${task.id}`)).body;
+    expect(t.blocker.code).toBe("approval_rejected");
+    expect(t.blocker.what).toMatch(/was rejected: Written once already\.$/);
+    const pass = await peterPass(deps(), companyId);
+    expect(pass.replanned.map((r) => r.taskId)).toEqual([task.id]);
+    expect((await api.get(`${base}/tasks/${task.id}`)).body.status).toBe("doing");
+    // The closed goal is not reopened.
+    expect((await api.get(`${base}/goals/${goal.id}`)).body.status).toBe("done");
   });
 
   it("refuses a proposal that carries a credential value", async () => {
