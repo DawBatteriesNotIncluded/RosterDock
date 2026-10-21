@@ -163,9 +163,10 @@ governs. The web is one too.
   how to read a page; each page they read is a line in Activity (the URL, the status, the size, never what
   it says). Leave its domains empty for any public site, or list the ones it may read: a department narrows
   that list from its sandbox (`webDomains`), a project's client from its client policy (Settings >
-  Connections > Client policies), never wider. An address that is not public is refused whatever a list says
-  (`docs/security.md`, Reading the web). With `ROSTERDOCK_FETCH_SOURCES=0` the board stays off the web, and
-  the connection's Check says so.
+  Connections > Client policies), never wider. Over the API, a PATCH replaces a department's sandbox and a
+  project's client policy whole, so send their web sites with the rest. An address that is not public is
+  refused whatever a list says (`docs/security.md`, Reading the web). With `ROSTERDOCK_FETCH_SOURCES=0` the
+  board stays off the web, and the connection's Check says so.
 - **A web tool you already have.** Search, a real browser or a fetch server you run is a connection like any
   other: add it under Settings > Connections (an MCP server over HTTP or stdio, or an OpenAPI service),
   discover its tools, grant it in toolboxes. The catalog has the common ones, versions pinned, and the brief

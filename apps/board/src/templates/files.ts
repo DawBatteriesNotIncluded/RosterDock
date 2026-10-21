@@ -232,8 +232,13 @@ export async function importTemplates(
         );
         continue;
       }
-      // A list the file names is kept as it is or not at all: dropping what is not a domain would widen it.
+      // A list the file names is kept as it is or not at all: dropping what is not a domain, or reading a
+      // list that is not one as none, would widen it.
       const listed = (c.manifest as { domains?: unknown } | null)?.domains;
+      if (listed !== undefined && listed !== null && !Array.isArray(listed)) {
+        report.notes.push(`connection ${c.name}: its web domains are not a list; skipped`);
+        continue;
+      }
       const bad = Array.isArray(listed)
         ? listed.findIndex((d) => typeof d !== "string" || !normalizeDomain(d))
         : -1;

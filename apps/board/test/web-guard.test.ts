@@ -275,6 +275,57 @@ describe("one page through the guard", () => {
     expect(leak.text).toBe("key: [redacted]");
   });
 
+  it("names a redirect hop as the record keeps a URL, and quotes no more of a header than its media type", async () => {
+    const { reader } = web(
+      {
+        "https://docs.example.com/creds": () =>
+          new Response(null, {
+            status: 302,
+            headers: { location: "https://alice:hunter2@docs.example.com/next" },
+          }),
+        "https://docs.example.com/code": () =>
+          new Response(null, {
+            status: 302,
+            headers: {
+              location: "https://elsewhere.example.net/cb?code=AUTHCODE123&state=s#access_token=TOKEN456",
+            },
+          }),
+        "https://docs.example.com/blob": () =>
+          new Response("x", {
+            status: 200,
+            headers: { "content-type": `application/octet-stream; ${"x".repeat(4000)}` },
+          }),
+        "https://docs.example.com/odd": () =>
+          new Response("x", { status: 200, headers: { "content-type": `image/${"p".repeat(500)}` } }),
+      },
+      {},
+    );
+    const creds = await fetchPage(reader, req("https://docs.example.com/creds"));
+    expect(creds.note).toBe("redirected to https://docs.example.com/next: credentials in the URL");
+    const onList = (host: string) =>
+      host.endsWith("docs.example.com") ? null : `${host} is not on the list`;
+    const code = await fetchPage(reader, req("https://docs.example.com/code", { hostRefusal: onList }));
+    expect(code.note).toBe(
+      "redirected to https://elsewhere.example.net/cb?code=%5Bredacted%5D&state=s: elsewhere.example.net is not on the list",
+    );
+    expect((await fetchPage(reader, req("https://docs.example.com/blob"))).note).toBe(
+      "not text (application/octet-stream)",
+    );
+    expect((await fetchPage(reader, req("https://docs.example.com/odd"))).note!.length).toBeLessThan(100);
+  });
+
+  it("gives up at the deadline, a name that takes too long to look up included", async () => {
+    const slowName = {
+      resolve: () => new Promise<string[]>((resolve) => setTimeout(() => resolve(["93.184.215.14"]), 4000)),
+      fetch: (async () => new Response("never asked")) as typeof fetch,
+    };
+    const start = performance.now();
+    expect((await fetchPage(slowName, req("https://slow-dns.example.com/", { timeoutMs: 1000 }))).note).toBe(
+      "no answer in 1s",
+    );
+    expect(performance.now() - start).toBeLessThan(2000);
+  });
+
   it("gives up at the deadline", async () => {
     const reader = {
       resolve: async () => ["93.184.215.14"],

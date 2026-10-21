@@ -169,10 +169,25 @@ describe("redactRawSecrets", () => {
     expect(containsRawSecret(out)).toBe(false);
   });
 
-  it("reads a page of unclosed key headers in one pass", () => {
-    const page = "-----BEGIN PRIVATE KEY-----".repeat(40_000);
-    const start = performance.now();
-    expect(redactRawSecrets(page)).not.toContain("BEGIN");
-    expect(performance.now() - start).toBeLessThan(500);
+  it("reads a hostile page in one pass: unclosed key headers, a run of token starts", () => {
+    for (const page of [
+      "-----BEGIN PRIVATE KEY-----".repeat(40_000),
+      "eyJ-".repeat(250_000),
+      "sk-".repeat(300_000),
+      "xoxb-".repeat(200_000),
+      ` ${"token".repeat(200_000)}`,
+    ]) {
+      const start = performance.now();
+      redactRawSecrets(page);
+      containsRawSecret(page);
+      expect(performance.now() - start, page.slice(0, 12)).toBeLessThan(500);
+    }
+    expect(redactRawSecrets("-----BEGIN PRIVATE KEY-----".repeat(3))).not.toContain("BEGIN");
+    // A token still counts after a quote, a space or an equals sign.
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig";
+    for (const text of [`"${jwt}"`, `token ${jwt}`, `id_token=${jwt}`, jwt]) {
+      expect(containsRawSecret(text), text).toBe(true);
+      expect(redactRawSecrets(text), text).not.toContain("eyJhbGci");
+    }
   });
 });

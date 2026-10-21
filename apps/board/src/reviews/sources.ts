@@ -72,6 +72,15 @@ export function refuseSourceUrl(raw: string): string | null {
   return null;
 }
 
+/** A Content-Type's media type, as a note may quote it: printable, without parameters, at most 80 characters. */
+function mediaType(contentType: string): string {
+  return contentType
+    .split(";")[0]!
+    .trim()
+    .replace(/[^\x21-\x7e]/g, "")
+    .slice(0, 80);
+}
+
 function isText(contentType: string): boolean {
   const type = contentType.split(";")[0]!.trim().toLowerCase();
   return (
@@ -243,6 +252,61 @@ async function readCapped(
   return { body, bytes: bytes.length, cut };
 }
 
+/** The longest URL a note or a record keeps; a teammate asks for at most 2,000 characters anyway. */
+export const MAX_RECORD_URL_CHARS = 2000;
+// Query parameters whose values are a credential more often than not: signed URLs, tokens, sessions.
+const SECRET_PARAM_WORDS = [
+  "token",
+  "secret",
+  "password",
+  "passwd",
+  "pwd",
+  "apikey",
+  "api_key",
+  "api-key",
+  "credential",
+  "signature",
+  "auth",
+  "session",
+];
+const SECRET_PARAM_NAMES = new Set(["key", "sig", "code", "sid"]);
+
+function secretParam(name: string): boolean {
+  const n = name.toLowerCase();
+  return SECRET_PARAM_NAMES.has(n) || n.startsWith("x-amz-") || SECRET_PARAM_WORDS.some((w) => n.includes(w));
+}
+
+/**
+ * A URL as a note or a record keeps it: at most MAX_RECORD_URL_CHARS, without its fragment or credentials,
+ * the values of secret-named query parameters redacted, and any key-shaped string left in it (a token in the
+ * path) redacted too. A note about a redirect names the hop this way, never as the server sent it.
+ */
+export function recordUrl(raw: string): string {
+  const cut = raw.slice(0, MAX_RECORD_URL_CHARS);
+  let url: URL;
+  try {
+    url = new URL(cut);
+  } catch {
+    return redactRawSecrets(cut);
+  }
+  url.hash = "";
+  url.username = "";
+  url.password = "";
+  for (const name of [...new Set(url.searchParams.keys())])
+    if (secretParam(name)) url.searchParams.set(name, "[redacted]");
+  return redactRawSecrets(url.toString()).slice(0, MAX_RECORD_URL_CHARS);
+}
+
+/** A promise that rejects once the signal aborts; it is never left rejected with no one listening. */
+function aborted(signal: AbortSignal): Promise<never> {
+  const p = new Promise<never>((_, reject) => {
+    if (signal.aborted) reject(new Error("aborted"));
+    else signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  });
+  p.catch(() => {});
+  return p;
+}
+
 /** What reading one page came to. */
 export interface FetchedPage {
   /** As asked. */
@@ -293,19 +357,24 @@ export async function fetchPage(web: WebReader, req: PageRequest): Promise<Fetch
   };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), req.timeoutMs);
+  // The deadline covers looking a name up too: a resolver that never answers does not hold the page.
+  const deadline = aborted(controller.signal);
   const late = `no answer in ${Math.round(req.timeoutMs / 1000)}s`;
   let current = req.url;
   try {
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const at = { ...base, finalUrl: current };
-      const where = hop ? `redirected to ${current}: ` : "";
+      const where = hop ? `redirected to ${recordUrl(current)}: ` : "";
       const refused =
         refuseSourceUrl(current) ?? req.hostRefusal?.(new URL(current).hostname.replace(/\.$/, "")) ?? null;
       if (refused) return { ...at, note: `${where}${refused}` };
       try {
-        await publicAddresses(web.resolve, new URL(current).hostname.replace(/\.$/, ""));
+        await Promise.race([
+          publicAddresses(web.resolve, new URL(current).hostname.replace(/\.$/, "")),
+          deadline,
+        ]);
       } catch (err) {
-        return { ...at, note: `${where}${(err as Error).message}` };
+        return { ...at, note: controller.signal.aborted ? late : `${where}${(err as Error).message}` };
       }
       let res: Response;
       try {
@@ -349,7 +418,8 @@ export async function fetchPage(web: WebReader, req: PageRequest): Promise<Fetch
           ...at,
           status: res.status,
           contentType: type || null,
-          note: `not text (${type.split(";")[0] || "unknown type"})`,
+          // The server's own words stay out of a note: only the media type, clipped.
+          note: `not text (${mediaType(type) || "unknown type"})`,
         };
       }
       let read: Awaited<ReturnType<typeof readCapped>>;

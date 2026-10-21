@@ -287,15 +287,17 @@ their own, each with its own database and workers.
   company has one) and grants it in a teammate's toolbox like any connection. Its one tool, `fetch`, reads a
   page and never writes: the broker takes it as a read whatever its row says, nobody can make it a write, and
   nothing it does is proposed or approved. The board fetches; the worker never does.
-- **What it can reach.** http and https pages at public addresses, nothing else. A URL with credentials in
-  it, a literal address, localhost or an internal-looking name is refused. The name is resolved and every
-  address it gets must be public: loopback, private, link-local (where cloud metadata lives), unique-local,
-  shared (carrier-grade NAT) and the other special-purpose ranges are refused, an IPv4 written as IPv6 by its
-  IPv4. The board connects only to the addresses it checked, so a name cannot pass the check with one address
-  and send the connection to another. Every redirect hop is checked the same way, three at most. A page gets
-  15 seconds and 1 MB, only text is read, HTML is turned into text by the converter the research review uses
-  (one pass, whatever the page holds), secret-shaped strings in it are redacted, and a call returns 30,000
-  characters of it at most.
+- **What it can reach.** http and https pages at public addresses, nothing else. A URL with credentials in it,
+  a literal address, localhost or an internal-looking name is refused. The name is resolved and every address
+  it gets must be public: loopback, private, link-local (where cloud metadata lives), unique-local, shared
+  (carrier-grade NAT) and the other special-purpose ranges are refused, an IPv4 written as IPv6 by its IPv4.
+  The board connects only to the addresses it checked, so a name cannot pass the check with one address and
+  send the connection to another. Every redirect hop is checked the same way, three at most. An address is
+  judged by its range alone: where a cluster gives pods or services globally routable IPv6 addresses, or
+  translates through a NAT64 prefix of its own, those look public to the board, so narrow
+  `networkPolicy.board.egressTo` there. A page gets 15 seconds (looking its names up included) and 1 MB, only
+  text is read, HTML is turned into text by the converter the research review uses (one pass, whatever the
+  page holds), secret-shaped strings in it are redacted, and a call returns 30,000 characters of it at most.
 - **Which sites.** The web connection may carry a list of domains, each with the sites under it; without one
   it reads any public site. A department (its sandbox's `webDomains`) and a project's client policy
   (`webDomains`) may each name a list, and a list only narrows: a page must be on every list there is, on
@@ -303,8 +305,11 @@ their own, each with its own database and workers.
 - **What it records.** Every page the broker lets a teammate ask for is a `tool.called` event, appended in
   its own transaction when the fetch ends: the teammate, the task, the run, the URL and where its redirects
   ended (without the fragment or credentials, and with the values of secret-named query parameters such as
-  `token`, `key` or `X-Amz-Signature` redacted), the status, the bytes read and why it failed. A refused
-  address or site is recorded the same way. Never what the page says, and never a header.
+  `token`, `key` or `X-Amz-Signature` redacted, 2,000 characters at most), the status, the bytes read and why
+  it failed, a redirect named the same way. A refused address or site is recorded the same way. Never what
+  the page says, and never a header beyond a non-text page's media type. The run's own log keeps the start of
+  each tool call's arguments as the engine sent them, as it does for every tool, so a URL shows there as
+  asked.
 - What a page says reaches the teammate as material for its task, and the brief says it is not
   instructions. A page can still try to talk a model into something; the toolbox, the department's write
   policy and approvals bound what the teammate can do about it.

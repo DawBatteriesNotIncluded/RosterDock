@@ -20,7 +20,9 @@ const RAW_SECRET_RES: RegExp[] = [
 // start, with enough key behind the prefix that prose naming it ("sk-", "Bearer tokens") is not a hit.
 const TEXT_SECRET_RES: RegExp[] = [
   /\bsk-[A-Za-z0-9_-]{20,}/, // OpenAI/Anthropic-style keys
-  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}/, // JWTs: a header and a payload
+  // JWTs: a header and a payload. The token starts a run of its characters: after `\b` alone, every `eyJ`
+  // in a run like `eyJ-eyJ-…` would start a scan to the run's end, time quadratic in its length.
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}/,
   /\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}/, // GitHub tokens
   /\bxox[a-z]-[A-Za-z0-9-]{10,}/i, // Slack tokens
   /\bAKIA[0-9A-Z]{16}\b/, // AWS access key ids
@@ -64,7 +66,7 @@ export function containsRawSecret(text: string): boolean {
 const TEXT_REDACTIONS: [RegExp, string][] = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]{0,20000}(?:-----END [A-Z ]*PRIVATE KEY-----)?/g, "[redacted]"],
   [/\bsk-[A-Za-z0-9_-]{20,}/g, "[redacted]"],
-  [/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]+)?/g, "[redacted]"],
+  [/(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]+)?/g, "[redacted]"],
   [/\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}/g, "[redacted]"],
   [/\bxox[a-z]-[A-Za-z0-9-]{10,}/gi, "[redacted]"],
   [/\bAKIA[0-9A-Z]{16}\b/g, "[redacted]"],

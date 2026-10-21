@@ -260,7 +260,8 @@ function renderDelivered(push: (...xs: string[]) => void, number: number, output
 function renderWeb(push: (...xs: string[]) => void, spec: RunSpec): void {
   const web = spec.web!;
   const research = spec.task.workKind === "research";
-  const fetch = web.fetch && !web.offline ? web.fetch : null;
+  // Lists that share no site leave the fetch nothing to read.
+  const fetch = web.fetch && !web.offline && web.fetch.domains?.length !== 0 ? web.fetch : null;
   const tools = web.tools ?? [];
   push("## Web");
   if (fetch)
@@ -270,7 +271,9 @@ function renderWeb(push: (...xs: string[]) => void, spec: RunSpec): void {
     );
   else if (web.fetch)
     push(
-      `The web connection (${web.fetch.connection}) is in your toolbox, but this board is kept off the web by its operator: it reads no page.`,
+      web.offline
+        ? `The web connection (${web.fetch.connection}) is in your toolbox, but this board is kept off the web by its operator: it reads no page.`
+        : `The web connection (${web.fetch.connection}) is in your toolbox, but no site is left for this task: the company's sites and the lists that narrow them share none${web.fetch.narrowed ? ` (${web.fetch.narrowed})` : ""}.`,
     );
   if (tools.length) {
     push(

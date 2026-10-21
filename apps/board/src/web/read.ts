@@ -6,8 +6,8 @@
 // it at a time; the record of the call (audit) is the URL, where it ended up,
 // the status and the size, never what the page says or any header.
 
-import { domainsPhrase, hostOnList, redactRawSecrets } from "@rosterdock/shared";
-import { fetchPage } from "../reviews/sources.js";
+import { domainsPhrase, hostOnList } from "@rosterdock/shared";
+import { fetchPage, recordUrl } from "../reviews/sources.js";
 import type { WebReader } from "./transport.js";
 
 export const WEB_FETCH_TOOL = "fetch";
@@ -43,29 +43,6 @@ export type WebReadOutcome =
   | { ok: true; result: Record<string, unknown>; audit: WebAudit }
   | { ok: false; error: string; audit: WebAudit };
 
-// Query parameters whose values are a credential more often than not: signed URLs, tokens, sessions.
-const SECRET_PARAM_RE =
-  /^(?:.*(?:token|secret|passw(?:or)?d|pwd|api[-_]?key|apikey|credential|signature|auth|session).*|key|sig|code|sid|x-amz-.+)$/i;
-
-/**
- * A URL as the record keeps it: no fragment, no credentials, the values of secret-named parameters redacted,
- * and any key-shaped string left in it (a token in the path) redacted too.
- */
-export function auditUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return redactRawSecrets(raw.slice(0, 500));
-  }
-  url.hash = "";
-  url.username = "";
-  url.password = "";
-  for (const name of [...new Set(url.searchParams.keys())])
-    if (SECRET_PARAM_RE.test(name)) url.searchParams.set(name, "[redacted]");
-  return redactRawSecrets(url.toString());
-}
-
 /** What the arguments ask for, or why they cannot be read. */
 function readArgs(args: Record<string, unknown>): { url: string; offset: number } | string {
   const url = typeof args.url === "string" ? args.url.trim() : "";
@@ -89,10 +66,10 @@ export async function readWebPage(
   const asked = readArgs(args);
   const url = typeof args.url === "string" ? args.url.trim() : "";
   if (typeof asked === "string")
-    return { ok: false, error: asked, audit: { url: auditUrl(url), status: null, bytes: 0, note: asked } };
+    return { ok: false, error: asked, audit: { url: recordUrl(url), status: null, bytes: 0, note: asked } };
   if (!web) {
     const note = "this board is kept off the web by its operator; nothing was fetched";
-    return { ok: false, error: note, audit: { url: auditUrl(url), status: null, bytes: 0, note } };
+    return { ok: false, error: note, audit: { url: recordUrl(url), status: null, bytes: 0, note } };
   }
   const page = await fetchPage(web, {
     url: asked.url,
@@ -105,8 +82,8 @@ export async function readWebPage(
         : `${host} is not a site this task may read (${domainsPhrase(domains)})`,
   });
   const audit: WebAudit = {
-    url: auditUrl(page.url),
-    ...(page.finalUrl !== page.url ? { finalUrl: auditUrl(page.finalUrl) } : {}),
+    url: recordUrl(page.url),
+    ...(page.finalUrl !== page.url ? { finalUrl: recordUrl(page.finalUrl) } : {}),
     status: page.status,
     bytes: page.bytes,
     note: page.note,

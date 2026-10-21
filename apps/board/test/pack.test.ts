@@ -192,6 +192,18 @@ describe("run pack", () => {
     );
     expect(offline).not.toContain("Cite what you read");
 
+    // Lists that share no site: the connection is held, but nothing is offered to read.
+    const noSite = renderRunPack({
+      ...spec,
+      web: {
+        fetch: { connection: "web", domains: [], narrowed: "narrowed by the client Globex's list" },
+        offline: false,
+      },
+    });
+    expect(noSite).toContain(
+      "The web connection (web) is in your toolbox, but no site is left for this task: the company's sites and the lists that narrow them share none (narrowed by the client Globex's list).",
+    );
+    expect(noSite).not.toContain("You can read public web pages");
     const none = renderRunPack({ ...spec, web: { fetch: null, offline: false } });
     expect(none).toContain(
       "No web tool is in your toolbox for this task: through the board you cannot open a link or search the web.",

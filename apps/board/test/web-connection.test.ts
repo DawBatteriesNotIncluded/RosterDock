@@ -4,7 +4,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { auditUrl } from "../src/web/read.js";
+import { recordUrl } from "../src/reviews/sources.js";
+import { readWebPage } from "../src/web/read.js";
 import { CONNECTOR_CATALOG, WEB_CATEGORY } from "../src/mcp/catalog.js";
 import {
   addProject,
@@ -447,6 +448,15 @@ describe("the web connection", () => {
     const third = await seedCompany(board, "wc7c@example.com");
     const refused = await third.api.post(`${third.base}/templates/import`, widened);
     expect(refused.body.notes).toContain("connection w2: not a domain is not a web domain; skipped");
+    // A list that is not a list is not read as no list (any public site).
+    const notAList = {
+      ...file,
+      connections: [{ ...file.connections[0], name: "w3", manifest: { domains: "gong.io" } }],
+    };
+    const fourth = await seedCompany(board, "wc7d@example.com");
+    const skipped = await fourth.api.post(`${fourth.base}/templates/import`, notAList);
+    expect(skipped.body.notes).toContain("connection w3: its web domains are not a list; skipped");
+    expect((await fourth.api.get(`${fourth.base}/connections`)).body).toEqual([]);
     expect(web.kind).toBe("web");
   });
 });
@@ -523,17 +533,32 @@ describe("web tools a company brings", () => {
 });
 
 describe("what the record keeps of a URL", () => {
+  it("keeps at most 2,000 characters, in time linear in what was sent", async () => {
+    const start = performance.now();
+    const long = `https://x.example.com/${"eyJ-".repeat(250_000)}?${"token".repeat(40_000)}%0A=1`;
+    expect(recordUrl(long).length).toBeLessThanOrEqual(2000);
+    const asked = await readWebPage(null, { url: long }, null);
+    expect(asked).toMatchObject({ ok: false, error: "the url is longer than 2000 characters" });
+    expect(asked.audit.url.length).toBeLessThanOrEqual(2000);
+    // A parameter named like a token, a line break in its name, is still redacted when the URL fits.
+    expect(recordUrl(`https://x.example.com/?${"token".repeat(300)}%0A=1`)).toContain("=%5Bredacted%5D");
+    expect(recordUrl(`https://x.example.com/?${"token".repeat(40_000)}%0A=1`).length).toBeLessThanOrEqual(
+      2000,
+    );
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
   it("drops credentials and the fragment, and redacts secret-named parameters", () => {
-    expect(auditUrl("https://docs.example.com/a?page=2#top")).toBe("https://docs.example.com/a?page=2");
-    expect(auditUrl("https://s3.example.com/f?X-Amz-Signature=abc&X-Amz-Credential=k&v=1")).toBe(
+    expect(recordUrl("https://docs.example.com/a?page=2#top")).toBe("https://docs.example.com/a?page=2");
+    expect(recordUrl("https://s3.example.com/f?X-Amz-Signature=abc&X-Amz-Credential=k&v=1")).toBe(
       "https://s3.example.com/f?X-Amz-Signature=%5Bredacted%5D&X-Amz-Credential=%5Bredacted%5D&v=1",
     );
-    expect(auditUrl("https://x.example.com/?access_token=t&api_key=k&key=v&q=gong")).toBe(
+    expect(recordUrl("https://x.example.com/?access_token=t&api_key=k&key=v&q=gong")).toBe(
       "https://x.example.com/?access_token=%5Bredacted%5D&api_key=%5Bredacted%5D&key=%5Bredacted%5D&q=gong",
     );
-    expect(auditUrl("not a url")).toBe("not a url");
+    expect(recordUrl("not a url")).toBe("not a url");
     // A made-up token in the path, in the shape of a real one.
-    expect(auditUrl("https://x.example.com/hooks/ghp_0123456789abcdefghijklmnopqrstuvwxyz/run")).toBe(
+    expect(recordUrl("https://x.example.com/hooks/ghp_0123456789abcdefghijklmnopqrstuvwxyz/run")).toBe(
       "https://x.example.com/hooks/[redacted]/run",
     );
   });
