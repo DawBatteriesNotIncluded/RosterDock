@@ -2,8 +2,9 @@
 
 Response shapes of a Streamable HTTP MCP server, written from the Model Context Protocol specification
 (revision 2025-06-18) for a sample CRM-like server, ids and values placeholders. `initialize.json` answers
-`initialize`; `tools-list.json` answers `tools/list` (one tool annotated `readOnlyHint`, one whose name says
-read, one write, one unannotated and unnamed so the default classification applies); `tools-call-<name>.json`
+`initialize`; `tools-list.json` answers `tools/list` (two tools annotated `readOnlyHint`, one whose name
+agrees and `whoami`, whose name does not, so it is held for a person to confirm; one whose name says read; one
+write; one unannotated and unnamed so the default classification applies); `tools-call-<name>.json`
 answers `tools/call` for that tool (`search_crm_objects` with `structuredContent`, `manage_crm_objects` as
 text, `whoami` as text); `tools-call-error.json` is a tool result with `isError`.
 

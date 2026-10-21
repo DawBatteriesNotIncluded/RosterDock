@@ -223,10 +223,13 @@ their own, each with its own database and workers.
   `/proc` included, and its output becomes the review's tests check as written. Turn the step off on a
   fleet that runs repositories you would not run yourself.
 - The engine reaches no external MCP server. Every tool call goes to the board (`board_tool_call`),
-  where the broker decides: run a read, propose a write, or refuse. A tool is a read only when the server
-  marks it read-only, the connector's catalog lists it as one, a person classified it so, or its name
-  starts with a reading verb (get, list, search, read and the like) and joins no second verb to it
-  (`get_or_create` writes). Export, preview and check are not reading verbs. Anything else is a write.
+  where the broker decides: run a read, propose a write, or refuse. A tool is a read only when the
+  connector's catalog lists it as one, a person classified it so, or its name starts with a reading verb
+  (get, list, search, read and the like) and joins no second verb to it (`get_or_create` writes). Export,
+  preview and check are not reading verbs. A server's own read-only label (`readOnlyHint`) counts only with
+  the catalog's list or such a name: a tool the label alone calls a read is a write until an owner or admin
+  confirms it under Settings > Connections, a decision recorded under their name that discovery keeps. A
+  server's word that a tool writes or destroys outweighs the catalog and the name. Anything else is a write.
 - A run's diff is scanned for secret-shaped values before review, anywhere in an added line (a key after
   `NAME=`, in a string, behind `Bearer`), and for values given to secret-named keys, quoted or as
   `NAME=value`; a hit fails the check.

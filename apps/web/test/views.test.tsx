@@ -27,8 +27,10 @@ import { capFor, ClientPoliciesPanel } from "../src/views/ClientPoliciesPanel.ts
 import { messageWithIssues } from "../src/api/client.ts";
 import {
   checkLine,
+  confirmAsRead,
   ConnectionsPanel,
   connectionSummary,
+  heldReads,
   stdioListed,
 } from "../src/views/ConnectionsPanel.tsx";
 import { BoardView } from "../src/views/BoardView.tsx";
@@ -749,6 +751,69 @@ describe("views render with sample data", () => {
     expect(stdioListed([], "npx -y @xeroapi/xero-mcp-server@1.0.0")).toBe(false);
   });
 
+  it("tools only the server calls read-only are listed on their connection for a person to confirm as reads", () => {
+    const props = {
+      connections: connectionFixtures,
+      loadCatalog: async () => [],
+      createConnection: async () => connectionFixtures[0]!,
+      previewOpenApi: async () => ({ operations: [], errors: [] }),
+      createOpenApiConnection: async () => connectionFixtures[1]!,
+      updateConnection: async () => connectionFixtures[0]!,
+      discoverConnection: async () => connectionFixtures[0]!,
+      checkConnection: async () => connectionFixtures[0]!,
+      deleteConnection: asyncNoop,
+      startOAuth: async () => ({ url: "https://auth.example.test/authorize" }),
+      initialCatalog: [],
+    };
+    const html = render(<ConnectionsPanel {...props} canEdit />);
+    // Tools only the server calls read-only are writes until a person confirms them: listed on the card, each
+    // with its confirmation, and all at once; a viewer sees them and who confirms. One switched off waits for nothing.
+    expect(html).not.toContain("Confirm as read");
+    const held = (name: string, more: { off?: boolean } = {}) => ({
+      name,
+      description: `${name} on GitHub`,
+      write: true,
+      source: "unconfirmed" as const,
+      ...more,
+    });
+    const github = {
+      ...connectionFixtures[0]!,
+      id: "c-github",
+      name: "github",
+      tools: [
+        { name: "list_issues", description: "", write: false, source: "annotation" as const },
+        held("issue_read"),
+        held("pull_request_read"),
+        held("projects_get", { off: true }),
+        { name: "label_read", description: "", write: false, source: "person" as const },
+      ],
+    };
+    expect(heldReads(github).map((t) => t.name)).toEqual(["issue_read", "pull_request_read"]);
+    expect(confirmAsRead(["issue_read", "pull_request_read"])).toEqual({
+      tools: [
+        { name: "issue_read", write: false },
+        { name: "pull_request_read", write: false },
+      ],
+    });
+    const holding = render(<ConnectionsPanel {...props} connections={[github]} canEdit />);
+    expect(holding).toContain("github says these 2 tools only read.");
+    expect(holding).toContain("waits for approval as a write until you confirm it reads");
+    expect(holding).toContain('aria-label="Confirm issue_read as read"');
+    expect(holding).toContain('aria-label="Confirm pull_request_read as read"');
+    expect(holding).not.toContain('aria-label="Confirm projects_get as read"');
+    expect(holding).toContain("Confirm all 2 as reads");
+    const watching = render(<ConnectionsPanel {...props} connections={[github]} canEdit={false} />);
+    expect(watching).toContain("pull_request_read");
+    expect(watching).toContain("until an owner or admin confirms it reads");
+    expect(watching).not.toContain("Confirm as read");
+    expect(watching).not.toContain("Confirm all");
+    const single = render(
+      <ConnectionsPanel {...props} connections={[{ ...github, tools: [held("issue_read")] }]} canEdit />,
+    );
+    expect(single).toContain("github says this tool only reads.");
+    expect(single).not.toContain("Confirm all");
+  });
+
   it("a refused body names the field and why, so a form can say more than that it was refused", () => {
     expect(
       messageWithIssues("invalid request body", [
@@ -1285,6 +1350,55 @@ describe("pure helpers", () => {
         fixture,
       ).text,
     ).toBe("Cody's runs cost 3.2× their usual (410k tokens against 128k tokens on #12)");
+    // A discovery says how many tools only the server calls read-only; a person's confirmation says which.
+    const daniel = { kind: "user" as const, id: fixture.members[0]!.userId };
+    expect(
+      describeEvent(
+        ev("connection.updated", daniel, {
+          name: "github",
+          discovered: 5,
+          writes: ["create_issue", "issue_read", "pull_request_read"],
+          unconfirmed: ["issue_read", "pull_request_read"],
+        }),
+        fixture,
+      ).text,
+    ).toBe("Daniel discovered 5 tools on github · 3 write · 2 to confirm as reads");
+    expect(
+      describeEvent(
+        ev("connection.updated", daniel, { name: "github", discovered: 2, writes: [], unconfirmed: [] }),
+        fixture,
+      ).text,
+    ).toBe("Daniel discovered 2 tools on github · 0 write");
+    expect(
+      describeEvent(
+        ev("connection.updated", daniel, {
+          name: "github",
+          reclassified: ["issue_read"],
+          confirmed: ["issue_read"],
+        }),
+        fixture,
+      ).text,
+    ).toBe("Daniel confirmed issue_read on github as a read");
+    expect(
+      describeEvent(
+        ev("connection.updated", daniel, {
+          name: "github",
+          reclassified: ["issue_read", "pull_request_read"],
+          confirmed: ["issue_read", "pull_request_read"],
+        }),
+        fixture,
+      ).text,
+    ).toBe("Daniel confirmed issue_read, pull_request_read on github as reads");
+    expect(
+      describeEvent(
+        ev("connection.updated", daniel, {
+          name: "github",
+          reclassified: ["issue_read", "create_issue"],
+          confirmed: ["issue_read"],
+        }),
+        fixture,
+      ).text,
+    ).toBe("Daniel reclassified issue_read, create_issue on github");
     // A cancelled task says why, and a reopened one says so.
     const cancelled = { number: 12, title: "Map it", from: "todo", to: "cancelled", toLabel: "Cancelled" };
     expect(
