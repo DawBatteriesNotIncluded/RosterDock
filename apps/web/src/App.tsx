@@ -15,7 +15,7 @@ import {
 } from "./modals/index.tsx";
 import { useApp } from "./state/store.tsx";
 import { ActivityView } from "./views/ActivityView.tsx";
-import { ApprovalsView } from "./views/ApprovalsView.tsx";
+import { afterRejectionText, ApprovalsView } from "./views/ApprovalsView.tsx";
 import { BoardView } from "./views/BoardView.tsx";
 import { CompanyView } from "./views/CompanyView.tsx";
 import { CostsView } from "./views/CostsView.tsx";
@@ -113,10 +113,8 @@ export function App() {
     await refresh();
   };
   const rejectApproval = async (id: string, note?: string) => {
-    await run(
-      () => client.rejectApproval(cid, id, note),
-      "Rejected. Nothing was sent; Peter re-plans the task.",
-    );
+    const r = await run(() => client.rejectApproval(cid, id, note));
+    app.toast(`Rejected. ${afterRejectionText(r.afterRejection)}`);
     await refresh();
   };
   const loadMessages = useCallback(
