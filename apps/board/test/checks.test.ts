@@ -149,7 +149,7 @@ describe("sources fetched", () => {
       if (url === "https://gong.io/down") throw new Error("ECONNREFUSED");
       return new Response("nope", { status: 404, headers: { "content-type": "text/plain" } });
     };
-    const fetched = await sourceFetcher({ fetch: fake }).fetch([
+    const fetched = await sourceFetcher({ fetch: fake, resolve: async () => ["93.184.215.14"] }).fetch([
       "https://gong.io/docs/calls",
       "https://gong.io/moved",
       "https://gong.io/inside",

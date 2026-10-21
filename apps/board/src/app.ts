@@ -54,6 +54,7 @@ import { plannerRouter, probePlanners, type PlannerStatus } from "./peter/planne
 import { anthropicModel, tracedModel, type PeterModel } from "./peter/model.js";
 import { startReaper } from "./runs/reaper.js";
 import { sourceFetcher, type SourceFetcher } from "./reviews/sources.js";
+import { boardWebReader, type Resolve, type WebReader } from "./web/transport.js";
 import { s3Store, type ObjectStore } from "./storage/s3.js";
 import { registerStyleRoutes } from "./routes/styles.js";
 import { STYLE_PACKS, VENDOR_DIR, type StylePack } from "./styles/catalog.js";
@@ -106,8 +107,13 @@ export interface BuildOptions {
   otlpFetch?: typeof fetch;
   /** The fetch the object store is reached with; tests replay recorded MinIO responses. Default: global fetch. */
   storageFetch?: typeof fetch;
-  /** The fetch research sources are read with when a review opens; tests use a fake. Default: global fetch. */
-  sourcesFetch?: typeof fetch;
+  /**
+   * What the board reads the web with (research sources when a review opens, the web connection's pages):
+   * a fetch that follows no redirect, and the resolver every hop's name is checked with. Tests inject both.
+   * Default: node's HTTP client pinned to the addresses the system resolver gives, once each is public.
+   */
+  webFetch?: typeof fetch;
+  webResolve?: Resolve;
   /** The fetch the Kubernetes secret store reaches the API server with; tests use a fake. Default: global fetch. */
   secretsFetch?: typeof fetch;
 }
@@ -154,10 +160,13 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
       : null,
   };
 
-  // Artifacts over the inline limit live here, when the config names a bucket.
-  const sources: SourceFetcher | null = config.fetchSources
-    ? sourceFetcher({ fetch: opts.sourcesFetch ?? ((input, init) => fetch(input, init)) })
+  // The web, when the operator lets the board read it: research sources and the web connection share it.
+  const board = boardWebReader(opts.webResolve);
+  const web: WebReader | null = config.fetchSources
+    ? { fetch: opts.webFetch ?? board.fetch, resolve: opts.webResolve ?? board.resolve }
     : null;
+  const sources: SourceFetcher | null = web ? sourceFetcher(web) : null;
+  // Artifacts over the inline limit live here, when the config names a bucket.
   const store: ObjectStore | null = config.storage
     ? s3Store(config.storage, opts.storageFetch ? { fetch: opts.storageFetch } : {})
     : null;

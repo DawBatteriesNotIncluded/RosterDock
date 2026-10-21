@@ -58,6 +58,34 @@ export function containsRawSecret(text: string): boolean {
   return TEXT_SECRET_RES.some((re) => re.test(text));
 }
 
+// The same shapes, for taking them out of text: what each keeps (a variable's name, the word Bearer) and
+// what goes. A private key goes from its first line to its last; the body is never scanned past a dash, so
+// a page of unclosed key headers is read once.
+const TEXT_REDACTIONS: [RegExp, string][] = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]{0,20000}(?:-----END [A-Z ]*PRIVATE KEY-----)?/g, "[redacted]"],
+  [/\bsk-[A-Za-z0-9_-]{20,}/g, "[redacted]"],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]+)?/g, "[redacted]"],
+  [/\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}/g, "[redacted]"],
+  [/\bxox[a-z]-[A-Za-z0-9-]{10,}/gi, "[redacted]"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "[redacted]"],
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gi, "$1[redacted]"],
+  [
+    /((?:^|\s)[A-Za-z0-9_]*(?:api[_-]?key|secret(?:[_-]?key)?|private[_-]?key|password|passwd|token)=)[A-Za-z0-9._~+/:@%^*!#-]{8,}/gi,
+    "$1[redacted]",
+  ],
+];
+
+/**
+ * Text with every secret-shaped value in it replaced by `[redacted]`: the shapes `containsRawSecret` finds,
+ * keeping a variable's name and the word Bearer. For text from outside, such as a web page, before a
+ * teammate reads it; what it says otherwise is left as it is.
+ */
+export function redactRawSecrets(text: string): string {
+  let out = text;
+  for (const [re, replacement] of TEXT_REDACTIONS) out = out.replace(re, replacement);
+  return out;
+}
+
 export interface SecretFinding {
   /** JSON path of the offending string, e.g. `settings.apiKey` or `tools[2].credential`. */
   path: string;

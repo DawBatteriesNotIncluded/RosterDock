@@ -6,6 +6,7 @@ import {
   isEnvVarName,
   looksLikeRawSecret,
   RawSecretError,
+  redactRawSecrets,
 } from "../src/index.js";
 
 describe("looksLikeRawSecret", () => {
@@ -140,5 +141,38 @@ describe("containsRawSecret", () => {
       "N8N_API_KEY",
     ])
       expect(containsRawSecret(line), line).toBe(false);
+  });
+});
+
+describe("redactRawSecrets", () => {
+  it("takes key material out of text and leaves prose that names it", () => {
+    // Made-up fakes in the shape of the real keys.
+    const page = [
+      "Set the key: sk-ant-api03-FAKE0123456789abcdefghij and go.",
+      "export OPENAI_API_KEY=sk-proj-FAKE0123456789abcdefghij",
+      "DB_PASSWORD=hunter2hunter2 in the example",
+      'curl -H "Authorization: Bearer abcdefghijklmnopqrstuvwxyz" https://api.example.com',
+      "A GitHub token looks like ghp_0123456789abcdefghijklmnopqrstuvwxyz.",
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY----- after",
+      "Bearer tokens and sk- prefixes are explained here; API_KEY=${API_KEY} is a reference.",
+    ].join("\n");
+    const out = redactRawSecrets(page);
+    for (const value of ["sk-ant-api03", "sk-proj", "hunter2", "abcdefghijklmnop", "ghp_", "MIIEow"])
+      expect(out).not.toContain(value);
+    expect(out).toContain("Set the key: [redacted] and go.");
+    expect(out).toContain("DB_PASSWORD=[redacted] in the example");
+    expect(out).toContain("Authorization: Bearer [redacted]");
+    expect(out).toContain("[redacted] after");
+    expect(out).toContain(
+      "Bearer tokens and sk- prefixes are explained here; API_KEY=${API_KEY} is a reference.",
+    );
+    expect(containsRawSecret(out)).toBe(false);
+  });
+
+  it("reads a page of unclosed key headers in one pass", () => {
+    const page = "-----BEGIN PRIVATE KEY-----".repeat(40_000);
+    const start = performance.now();
+    expect(redactRawSecrets(page)).not.toContain("BEGIN");
+    expect(performance.now() - start).toBeLessThan(500);
   });
 });

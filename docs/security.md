@@ -273,10 +273,13 @@ their own, each with its own database and workers.
   cluster the same store is a directory of files (`ROSTERDOCK_SECRET_STORE=file:<dir>`); without either, no
   connection authorises by OAuth.
 - When a research review opens, the board fetches the public http(s) links the documents cite so the reviewer
-  can read them. Literal addresses, localhost and internal-looking names are refused on every hop, a source
-  gets five seconds and half a megabyte, and only text is kept; what a page says reaches the reviewer as
-  quoted material. `ROSTERDOCK_FETCH_SOURCES=0` (chart `board.fetchSources: false`) keeps the board off the
-  web.
+  can read them. Literal addresses, localhost and internal-looking names are refused on every hop, and so is a
+  name that resolves to any address that is not public: loopback, private, link-local (where cloud metadata
+  lives), unique-local, shared and the other special-purpose ranges, an IPv4 written as IPv6 included. The
+  board connects only to the addresses it checked, so a name cannot pass the check with one address and send
+  the connection to another. A source gets five seconds and half a megabyte, only text is kept, secret-shaped
+  strings in it are redacted, and what a page says reaches the reviewer as quoted material.
+  `ROSTERDOCK_FETCH_SOURCES=0` (chart `board.fetchSources: false`) keeps the board off the web.
 
 ## What you own
 
