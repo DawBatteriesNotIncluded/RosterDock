@@ -8,6 +8,7 @@
 // No client library: a few requests over an injected fetch. Nothing here
 // stores anything: the caller keeps the tokens in the secret store, and every
 // error text is free of them.
+import { trimTrailingSlashes } from "@rosterdock/shared";
 import { codeChallenge } from "../auth/oidc.js";
 
 export interface OAuthDeps {
@@ -62,7 +63,6 @@ export interface TokenSet {
   scope: string | null;
 }
 
-const trimSlash = (u: string) => u.replace(/\/+$/, "");
 const DISCOVERY_TTL_MS = 10 * 60_000;
 const servers = new Map<string, { at: number; doc: AuthorizationServer }>();
 
@@ -87,7 +87,7 @@ async function getJson(
 /** The well-known URLs for a resource or an issuer with a path: the path-aware form first, then the root. */
 function wellKnown(base: string, suffix: string): string[] {
   const u = new URL(base);
-  const path = trimSlash(u.pathname);
+  const path = trimTrailingSlashes(u.pathname);
   const root = `${u.origin}/.well-known/${suffix}`;
   return path && path !== "/" ? [`${u.origin}/.well-known/${suffix}${path}`, root] : [root];
 }
@@ -106,7 +106,7 @@ export async function discoverResource(
     const { status, json } = await getJson(url, deps);
     if (status === 200 && json) {
       const list = json.authorization_servers;
-      const first = Array.isArray(list) && typeof list[0] === "string" ? trimSlash(list[0]) : null;
+      const first = Array.isArray(list) && typeof list[0] === "string" ? trimTrailingSlashes(list[0]) : null;
       if (first) {
         const scopes = Array.isArray(json.scopes_supported)
           ? json.scopes_supported.filter((s): s is string => typeof s === "string")
@@ -124,7 +124,7 @@ export async function discoverAuthorizationServer(
   issuer: string,
   deps: OAuthDeps,
 ): Promise<AuthorizationServer> {
-  const key = trimSlash(issuer);
+  const key = trimTrailingSlashes(issuer);
   const now = deps.now?.() ?? Date.now();
   const cached = servers.get(key);
   if (cached && now - cached.at < DISCOVERY_TTL_MS) return cached.doc;
@@ -138,7 +138,7 @@ export async function discoverAuthorizationServer(
     if (status !== 200 || !json) continue;
     if (typeof json.authorization_endpoint !== "string" || typeof json.token_endpoint !== "string") continue;
     const doc: AuthorizationServer = {
-      issuer: typeof json.issuer === "string" ? trimSlash(json.issuer) : key,
+      issuer: typeof json.issuer === "string" ? trimTrailingSlashes(json.issuer) : key,
       authorization_endpoint: json.authorization_endpoint,
       token_endpoint: json.token_endpoint,
       ...(typeof json.registration_endpoint === "string"

@@ -8,7 +8,12 @@
 // with secret-shaped keys redacted. Carried over from the v1 prototype without
 // its governance ladder; the broker decides, this module calls.
 
-import type { ConnectionToolInput, OpenApiManifestInput, OpenApiOperationInput } from "@rosterdock/shared";
+import {
+  trimTrailingSlashes,
+  type ConnectionToolInput,
+  type OpenApiManifestInput,
+  type OpenApiOperationInput,
+} from "@rosterdock/shared";
 import YAML from "yaml";
 import { notSetForCompany } from "../secrets/company.js";
 import type { McpCallOutcome } from "./client.js";
@@ -251,7 +256,7 @@ function buildUrl(
     search.append(k, String(v));
   }
   const qs = search.toString();
-  return { url: `${base.replace(/\/+$/, "")}${resolved}${qs ? `?${qs}` : ""}` };
+  return { url: `${trimTrailingSlashes(base)}${resolved}${qs ? `?${qs}` : ""}` };
 }
 
 /**

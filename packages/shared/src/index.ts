@@ -9,3 +9,4 @@ export * from "./policy.js";
 export * from "./otel.js";
 export * from "./queue.js";
 export * from "./operator.js";
+export * from "./text.js";
