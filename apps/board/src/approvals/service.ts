@@ -5,8 +5,9 @@
 // bytes through the executor (the broker); the outcome is recorded and the
 // proposer is started again with it in their pack. Reject records the note and
 // the task says so: blocked on the rejection, not on a decision nobody has left
-// to make; Peter re-plans it on his next pass. Every step is a mutation with an
-// event.
+// to make. Peter re-plans a teammate's task on his next pass; any other waits
+// with the rejection for a person, and the card says which. Every step is a
+// mutation with an event.
 
 import {
   assertNoRawSecrets,
@@ -21,6 +22,8 @@ import { describeActor } from "../actors.js";
 import type { Db, Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate, type MutationContext } from "../mutate.js";
+import { MAX_REPLANS } from "../peter/replan.js";
+import { companyManager, managerForTask } from "../peter/seat.js";
 import type { RunQueue } from "../queue.js";
 import { dispatchRun } from "../runs/service.js";
 import { moveTask, STATUS_LABEL, type TaskRow } from "../tasks/service.js";
@@ -59,7 +62,18 @@ export interface ApprovalRow {
   teammate_handle?: string | null;
 }
 
-export function approvalToJson(row: ApprovalRow) {
+/** Who takes a task from a rejected write: what its card says after "Nothing was sent". */
+export type AfterRejection =
+  /** The task's manager re-planned it since the rejection. */
+  | { kind: "replanned"; by: string }
+  /** The task waits with the rejection, and its manager re-plans it on his next pass. */
+  | { kind: "replan"; by: string }
+  /** Another proposal on the task still waits for a decision. */
+  | { kind: "proposal" }
+  /** The task waits with the rejection for its assignee, a person, or for any person (null). */
+  | { kind: "person"; name: string | null };
+
+export function approvalToJson(row: ApprovalRow, after: AfterRejection | null = null) {
   return {
     id: row.id,
     companyId: row.company_id,
@@ -96,9 +110,86 @@ export function approvalToJson(row: ApprovalRow) {
     /** What it writes to (a path, an id), when its arguments name one. */
     target: writeTarget(row.payload)?.label ?? null,
     supersededBy: row.superseded_by ?? null,
+    /** A rejected write's: who takes the task from there; null once it moved on another way. */
+    afterRejection: row.status === "rejected" ? after : null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+/**
+ * For each rejected write among `rows`, who takes its task from there. Mirrors Peter's replanRejections
+ * (peter/loop.ts): he re-plans a teammate's task outside a stopped or closed goal until its re-plans run out
+ * (MAX_REPLANS, then he escalates). Any other task waits with the rejection for its assignee when a person
+ * is, or for any person. A rejection whose task has moved on another way (started again, cancelled, done)
+ * says nothing more.
+ */
+export async function afterRejections(
+  db: Queryable,
+  companyId: string,
+  rows: ApprovalRow[],
+): Promise<Map<string, AfterRejection>> {
+  const out = new Map<string, AfterRejection>();
+  const rejected = rows.filter((r) => r.status === "rejected" && r.decided_at);
+  if (!rejected.length) return out;
+  const res = await db.query<{
+    id: string;
+    replanned_by: string | null;
+    task_status: string;
+    blocker_code: string | null;
+    assignee_kind: "user" | "teammate" | null;
+    assignee_id: string | null;
+    department_id: string | null;
+    replans: number;
+    goal_status: string | null;
+    person: string | null;
+    pending: number;
+  }>(
+    `SELECT a.id,
+       (SELECT e.payload->>'managerName' FROM events e
+         WHERE e.company_id = a.company_id AND e.subject_kind = 'task' AND e.subject_id = a.task_id
+           AND e.type = 'task.replanned' AND e.created_at >= a.decided_at
+         ORDER BY e.seq LIMIT 1) AS replanned_by,
+       t.status AS task_status, t.blocker->>'code' AS blocker_code, t.assignee_kind, t.assignee_id,
+       t.department_id, t.replans, g.status AS goal_status, u.name AS person,
+       (SELECT count(*)::int FROM approvals p WHERE p.task_id = t.id AND p.status = 'pending') AS pending
+     FROM approvals a
+     JOIN tasks t ON t.id = a.task_id
+     LEFT JOIN goals g ON g.id = t.goal_id
+     LEFT JOIN users u ON t.assignee_kind = 'user' AND u.id = t.assignee_id
+     WHERE a.company_id = $1 AND a.id = ANY($2::uuid[])`,
+    [companyId, rejected.map((r) => r.id)],
+  );
+  // Without a company manager Peter makes no pass at all.
+  const peter = res.rows.length ? await companyManager(db, companyId) : null;
+  for (const r of res.rows) {
+    if (r.replanned_by) {
+      out.set(r.id, { kind: "replanned", by: r.replanned_by });
+      continue;
+    }
+    if (r.task_status !== "blocked") continue;
+    if (r.blocker_code === "approval_required" && r.pending > 0) {
+      out.set(r.id, { kind: "proposal" });
+      continue;
+    }
+    if (r.blocker_code !== "approval_rejected" && r.blocker_code !== "approval_required") continue;
+    const goalOpen = r.goal_status !== "stopped" && r.goal_status !== "done";
+    if (peter && r.assignee_kind === "teammate" && goalOpen && r.replans < MAX_REPLANS) {
+      const manager = await managerForTask(db, companyId, r);
+      if (manager) {
+        out.set(r.id, { kind: "replan", by: manager.name });
+        continue;
+      }
+    }
+    out.set(r.id, { kind: "person", name: r.person });
+  }
+  return out;
+}
+
+/** Approvals as the API returns them: each rejected one says who takes its task from there. */
+export async function approvalsToJson(db: Queryable, companyId: string, rows: ApprovalRow[]) {
+  const after = await afterRejections(db, companyId, rows);
+  return rows.map((row) => approvalToJson(row, after.get(row.id) ?? null));
 }
 
 export const APPROVAL_SELECT = `
@@ -487,7 +578,7 @@ export async function approveApproval(
 
 /**
  * Reject: the note is recorded and the task stays blocked, on the rejection once nothing else waits for a
- * person; Peter re-plans it on his next pass.
+ * person. Peter re-plans a teammate's task on his next pass; afterRejections says who takes any task.
  */
 export async function rejectApproval(
   db: Db,

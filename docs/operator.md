@@ -53,7 +53,7 @@ var name in Settings) and a row in the Approvals or Company page:
 
 | Sentence                                   | What to do                                                                                               |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| A teammate asks approval to write …        | Approvals: read the exact payload and its hash; Approve and run, or Reject with a note (Peter re-plans). |
+| A teammate asks approval to write …        | Approvals: read the exact payload and its hash; Approve and run, or Reject with a note (see below).      |
 | The approved write could not be sent       | The connection is off, gone or refusing: Settings, Connections; fix and let the teammate propose again.  |
 | Peter has questions before planning …      | The goal card: answer them; Peter plans.                                                                 |
 | Peter needs you on … (a goal turned amber) | The goal card: a task failed three times; read the runs, fix the brief or the toolbox, restart the task. |
@@ -78,8 +78,11 @@ branch you give it, and Peter plans changes to code only on a project that has o
 project after the goal that opened it closed is work outside that goal.
 
 A write a person rejects leaves its task Blocked on the rejection, with the note: nothing waits for a decision
-any more, and Peter re-plans a teammate's task without that write. A task nobody will finish is cancelled from
-its status menu (owners and admins); a cancelled task is reopened from Details.
+any more. Peter (or the department's lead) re-plans a teammate's task without that write, unless its goal was
+stopped or closed or he has re-planned it twice already; any other task waits with the rejection for its
+assignee when a person is, or for any person to start it again with a note, reassign it or cancel it. The
+rejected card on Approvals, and the toast, say which. A task nobody will finish is cancelled from its status
+menu (owners and admins); a cancelled task is reopened from Details.
 
 ## Runs that go wrong
 

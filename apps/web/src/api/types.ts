@@ -388,9 +388,22 @@ export interface Approval {
   target: string | null;
   /** The newer proposal that replaced it. */
   supersededBy: string | null;
+  /** A rejected write's: who takes the task from there; null once it moved on another way. */
+  afterRejection: AfterRejection | null;
   createdAt: string;
   updatedAt: string;
 }
+
+/** Who takes a task from a rejected write. */
+export type AfterRejection =
+  /** The task's manager re-planned it since the rejection. */
+  | { kind: "replanned"; by: string }
+  /** The task waits with the rejection, and its manager re-plans it on his next pass. */
+  | { kind: "replan"; by: string }
+  /** Another proposal on the task still waits for a decision. */
+  | { kind: "proposal" }
+  /** The task waits with the rejection for its assignee, a person, or for any person (null). */
+  | { kind: "person"; name: string | null };
 
 // --- Peter (M4) ---------------------------------------------------------------
 

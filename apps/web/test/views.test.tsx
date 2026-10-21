@@ -3,7 +3,7 @@
 import { blockerFor, EVENT_TYPES } from "@rosterdock/shared";
 import { blockerLine, blockerNeedsYou } from "../src/lib/format.ts";
 import { renderToString } from "react-dom/server";
-import type { CompanyData } from "../src/api/types.ts";
+import type { Approval, CompanyData } from "../src/api/types.ts";
 import { describe, expect, it } from "vitest";
 import { Shell } from "../src/components/Shell.tsx";
 import { Avatar, elapsedLabel, Thinking, Topbar } from "../src/components/ui.tsx";
@@ -17,7 +17,12 @@ import {
 } from "../src/modals/index.tsx";
 import { GoalResultPanel, goalProgress, goalTone, publishedVerdict } from "../src/views/GoalsPanel.tsx";
 import { ActivityView } from "../src/views/ActivityView.tsx";
-import { APPROVAL_LABEL, ApprovalsView, sortApprovals } from "../src/views/ApprovalsView.tsx";
+import {
+  afterRejectionText,
+  APPROVAL_LABEL,
+  ApprovalsView,
+  sortApprovals,
+} from "../src/views/ApprovalsView.tsx";
 import { capFor, ClientPoliciesPanel } from "../src/views/ClientPoliciesPanel.tsx";
 import { messageWithIssues } from "../src/api/client.ts";
 import {
@@ -527,6 +532,42 @@ describe("views render with sample data", () => {
       <ApprovalsView data={fixture} canDecide onApprove={asyncNoop} onReject={asyncNoop} onOpenTask={noop} />,
     );
     expect(empty).toContain("Nothing waits for you");
+  });
+
+  it("a rejected write's card says who takes the task from there, and claims no re-plan that will not come", () => {
+    const card = (afterRejection: Approval["afterRejection"]) =>
+      render(
+        <ApprovalsView
+          data={{ ...approvalsFixture, approvals: [{ ...approvalFixtures[1]!, afterRejection }] }}
+          canDecide
+          onApprove={asyncNoop}
+          onReject={asyncNoop}
+          onOpenTask={noop}
+        />,
+      );
+    // A teammate's task: its manager re-plans it on his next pass, and then has.
+    expect(card({ kind: "replan", by: "Peter" })).toContain(
+      "Not until the first digest is approved. Nothing was sent; Peter re-plans the task.",
+    );
+    expect(card({ kind: "replanned", by: "Lena" })).toContain("Nothing was sent; Lena re-planned the task.");
+    // A person's task waits for them; one nobody picks up says what a person can do with it.
+    const dana = card({ kind: "person", name: "Dana" });
+    expect(dana).toContain("Nothing was sent; the task waits with the rejection for Dana.");
+    expect(dana).not.toContain("re-plan");
+    const nobody = card({ kind: "person", name: null });
+    expect(nobody).toContain(
+      "Nothing was sent; the task waits with the rejection for a person to start it again with a note, reassign it or cancel it.",
+    );
+    expect(nobody).not.toContain("re-plan");
+    expect(card({ kind: "proposal" })).toContain(
+      "Nothing was sent; the task still waits on another proposal.",
+    );
+    // A task that moved on another way (started again, cancelled) is not promised anything.
+    expect(card(null)).toContain("Not until the first digest is approved. Nothing was sent.</span>");
+    // The toast says the same after "Rejected."
+    expect(afterRejectionText({ kind: "person", name: "Dana" })).toBe(
+      "Nothing was sent; the task waits with the rejection for Dana.",
+    );
   });
 
   it("Connections panel lists connections with credential names, tools by classification, and the add forms", () => {
