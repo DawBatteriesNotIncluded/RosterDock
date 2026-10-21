@@ -108,7 +108,10 @@ with personas and toolboxes, departments with leads, members, sandbox and pool) 
 happened and what could not be honoured (a connection the company does not have, an engine that is not
 enabled). The shipped examples are `deploy/templates/gtm-company.json` and `finance-department.json`;
 the format is `rosterdock/templates/1` (`TemplatesFileSchema` in `@rosterdock/shared`). Files carry names,
-never credential values: a persona or a playbook that carries one is refused whole.
+never credential values: a persona or a playbook that carries one is refused whole. The teammate templates
+a file brings are the company's own: Hire lists them after the built-in ones
+(`GET /api/companies/:companyId/templates/teammates`), and no other company sees them;
+`GET /api/templates/teammates` serves only the built-in ones.
 
 ## Worker pools
 

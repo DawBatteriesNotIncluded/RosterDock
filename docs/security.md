@@ -71,9 +71,11 @@ What an owner or admin of one company can reach:
 
 What they cannot reach:
 
-- Another company's rows, events, connections or secrets. Every company route checks the caller's role in
-  the company it names, and a company's names resolve from its own secrets. A stdio child the board keeps
-  between calls serves the company that started it, with the values it started with, and no other.
+- Another company's rows, events, connections, secrets or teammate templates. Every company route checks
+  the caller's role in the company it names, and a route that names no company returns nothing of a
+  company the caller is not in: the teammate templates there are the built-in ones, and a company's own
+  come only through the company. A company's names resolve from its own secrets. A stdio child the board
+  keeps between calls serves the company that started it, with the values it started with, and no other.
 - The board's own environment: its database URL, its worker token, the object store's keys, its model keys,
   its sign-in client secret, or any other variable on the board pod the operator has not shared. A name a
   company writes (a connection's credential, the env var names handed to a stdio command, an OAuth client

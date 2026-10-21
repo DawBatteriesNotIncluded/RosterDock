@@ -97,26 +97,56 @@ async function departmentsOf(db: Queryable, companyId: string) {
   return map;
 }
 
+type TemplateRow = Pick<
+  TeammateRow,
+  | "id"
+  | "company_id"
+  | "name"
+  | "role"
+  | "persona_md"
+  | "playbooks"
+  | "engine"
+  | "model"
+  | "avatar"
+  | "effort"
+>;
+
+const TEMPLATE_SELECT =
+  "SELECT id, company_id, name, role, persona_md, playbooks, engine, model, avatar, effort FROM teammate_templates";
+
+function templateToJson(r: TemplateRow) {
+  return {
+    id: r.id,
+    companyId: r.company_id,
+    name: r.name,
+    role: r.role,
+    personaMd: r.persona_md,
+    playbooks: r.playbooks,
+    engine: r.engine,
+    model: r.model,
+    avatar: r.avatar,
+  };
+}
+
 export function registerTeammateRoutes(app: FastifyInstance, db: Db): void {
-  app.get("/api/templates/teammates", { config: {} }, async (req) => {
-    const companyId = (req.query as { companyId?: string }).companyId ?? null;
-    const res = await db.query(
-      `SELECT id, company_id, name, role, persona_md, playbooks, engine, model, avatar, effort FROM teammate_templates
-       WHERE company_id IS NULL OR company_id = $1 ORDER BY company_id NULLS FIRST, name`,
-      [companyId],
-    );
-    return res.rows.map((r) => ({
-      id: r.id,
-      companyId: r.company_id,
-      name: r.name,
-      role: r.role,
-      personaMd: r.persona_md,
-      playbooks: r.playbooks,
-      engine: r.engine,
-      model: r.model,
-      avatar: r.avatar,
-    }));
+  // The built-in templates, for anyone signed in. A company's own come only through the company below.
+  app.get("/api/templates/teammates", { config: {} }, async () => {
+    const res = await db.query<TemplateRow>(`${TEMPLATE_SELECT} WHERE company_id IS NULL ORDER BY name`);
+    return res.rows.map(templateToJson);
   });
+
+  // What the company hires from: the built-in templates, then the ones its files imported.
+  app.get(
+    "/api/companies/:companyId/templates/teammates",
+    { config: { action: "company.read" } },
+    async (req) => {
+      const res = await db.query<TemplateRow>(
+        `${TEMPLATE_SELECT} WHERE company_id IS NULL OR company_id = $1 ORDER BY company_id NULLS FIRST, name`,
+        [req.companyId],
+      );
+      return res.rows.map(templateToJson);
+    },
+  );
 
   app.get("/api/companies/:companyId/teammates", { config: { action: "company.read" } }, async (req) => {
     const res = await db.query<TeammateRow>(
