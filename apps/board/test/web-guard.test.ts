@@ -227,7 +227,9 @@ describe("one page through the guard", () => {
     expect((await fetchPage(reader, req("https://docs.example.com/c"))).note).toContain(
       "redirected to http://meta.example.org/latest: meta.example.org resolves to 169.254.169.254",
     );
-    expect(calls.filter((c) => c.includes("169.254") || c.includes("meta.example.org"))).toEqual([]);
+    expect(
+      calls.filter((c) => ["169.254.169.254", "meta.example.org"].includes(new URL(c).hostname)),
+    ).toEqual([]);
   });
 
   it("asks the host check on every hop, so a redirect cannot leave a company's sites", async () => {
@@ -239,7 +241,7 @@ describe("one page through the guard", () => {
       {},
     );
     const onList = (host: string) =>
-      host.endsWith("gong.io") ? null : `${host} is not on this company's list`;
+      host === "gong.io" || host.endsWith(".gong.io") ? null : `${host} is not on this company's list`;
     const page = await fetchPage(reader, req("https://docs.gong.io/x", { hostRefusal: onList }));
     expect(page.note).toBe(
       "redirected to https://evil.example.net/: evil.example.net is not on this company's list",
@@ -303,7 +305,7 @@ describe("one page through the guard", () => {
     const creds = await fetchPage(reader, req("https://docs.example.com/creds"));
     expect(creds.note).toBe("redirected to https://docs.example.com/next: credentials in the URL");
     const onList = (host: string) =>
-      host.endsWith("docs.example.com") ? null : `${host} is not on the list`;
+      host === "docs.example.com" || host.endsWith(".docs.example.com") ? null : `${host} is not on the list`;
     const code = await fetchPage(reader, req("https://docs.example.com/code", { hostRefusal: onList }));
     expect(code.note).toBe(
       "redirected to https://elsewhere.example.net/cb?code=%5Bredacted%5D&state=s: elsewhere.example.net is not on the list",
