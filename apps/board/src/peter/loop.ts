@@ -205,14 +205,15 @@ async function replanFailures(deps: PeterDeps, companyId: string, out: PassResul
 // --- 3b. Rejected proposals: the write a person said no to is re-planned ---
 
 async function replanRejections(deps: PeterDeps, companyId: string, out: PassResult): Promise<void> {
-  // Teammate tasks parked on an approval, with nothing pending any more and the latest decision a rejection.
+  // Teammate tasks blocked on a rejection (or, from before the board said so, still on the approval), with
+  // nothing pending any more and the latest decision a rejection.
   const rejected = await deps.db.query<
     TaskRow & { a_title: string; a_connection: string; a_tool: string; a_note: string | null }
   >(
     `${TASK_SELECT.replace("SELECT t.*,", "SELECT t.*, a.title AS a_title, a.connection AS a_connection, a.tool AS a_tool, a.note AS a_note,")}
      JOIN LATERAL (SELECT * FROM approvals x WHERE x.task_id = t.id ORDER BY x.updated_at DESC LIMIT 1) a ON true
      WHERE t.company_id = $1 AND t.status = 'blocked' AND t.assignee_kind = 'teammate'
-       AND t.blocker->>'code' = 'approval_required' AND a.status = 'rejected'
+       AND t.blocker->>'code' IN ('approval_rejected', 'approval_required') AND a.status = 'rejected'
        AND NOT EXISTS (SELECT 1 FROM approvals p WHERE p.task_id = t.id AND p.status = 'pending')
        AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.status IN ('queued', 'running', 'interrupted'))
        AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = t.goal_id AND g.status IN ('stopped', 'done'))

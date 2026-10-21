@@ -4,8 +4,9 @@
 // Approve records the decision, re-verifies the hash and sends exactly those
 // bytes through the executor (the broker); the outcome is recorded and the
 // proposer is started again with it in their pack. Reject records the note and
-// leaves the task blocked; Peter re-plans it on his next pass. Every step is a
-// mutation with an event.
+// the task says so: blocked on the rejection, not on a decision nobody has left
+// to make; Peter re-plans it on his next pass. Every step is a mutation with an
+// event.
 
 import {
   assertNoRawSecrets,
@@ -190,6 +191,47 @@ export function approvalBlocker(approval: Pick<ApprovalRow, "id" | "title" | "co
     what: `Waiting for approval: ${approval.title} (${approval.connection}).`,
     waitingOn: { kind: "approval", id: approval.id, name: approval.title },
   });
+}
+
+/** The blocker a task carries once the last proposal it waited on was rejected: nothing waits any more. */
+export function rejectedBlocker(
+  approval: Pick<ApprovalRow, "title" | "connection" | "tool" | "note">,
+): BlockerRecord {
+  const note = approval.note?.trim();
+  return blockerFor("approval_rejected", {
+    what: `${approval.title} (${approval.connection} · ${approval.tool}) was rejected${note ? `: ${note}` : "."}`,
+  });
+}
+
+/**
+ * After a decision the task's blocker says what is true: the oldest proposal still waiting, or the
+ * rejection when the last one waiting was rejected. A task whose write went through is restarted by
+ * resumeProposer, outside this.
+ */
+async function settleTask(ctx: MutationContext, decided: ApprovalRow): Promise<void> {
+  const task = (
+    await ctx.client.query<TaskRow>("SELECT * FROM tasks WHERE id = $1 FOR UPDATE", [decided.task_id])
+  ).rows[0];
+  if (!task || task.status !== "blocked" || task.blocker?.code !== "approval_required") return;
+  const pending = (
+    await ctx.client.query<ApprovalRow>(
+      `${APPROVAL_SELECT} WHERE a.task_id = $1 AND a.status = 'pending' ORDER BY a.created_at`,
+      [task.id],
+    )
+  ).rows;
+  // Still waiting on one that waits: nothing to say.
+  if (pending.some((a) => a.id === task.blocker?.waitingOn?.id)) return;
+  const waiting = pending[0];
+  const blocker = waiting
+    ? approvalBlocker(waiting)
+    : decided.status === "rejected"
+      ? rejectedBlocker(decided)
+      : null;
+  if (!blocker) return;
+  await ctx.client.query("UPDATE tasks SET blocker = $2, updated_at = now() WHERE id = $1", [
+    task.id,
+    JSON.stringify(blocker),
+  ]);
 }
 
 /**
@@ -435,13 +477,18 @@ export async function approveApproval(
       { kind: "approval", id: approved.id },
       eventPayload(approved, { error: outcome.ok ? null : outcome.error }),
     );
+    // Another proposal still waits: the task waits on that one now, not on this decided one.
+    await settleTask(ctx, { ...approved, ...updated });
     return { ...approved, ...updated };
   });
   const resumed = await resumeProposer(db, queue, companyId, actor, executed);
   return { approval: await loadApproval(db, companyId, executed.id), ...resumed };
 }
 
-/** Reject: the note is recorded, the task stays blocked, Peter re-plans it on his next pass. */
+/**
+ * Reject: the note is recorded and the task stays blocked, on the rejection once nothing else waits for a
+ * person; Peter re-plans it on his next pass.
+ */
 export async function rejectApproval(
   db: Db,
   companyId: string,
@@ -462,6 +509,7 @@ export async function rejectApproval(
       { kind: "approval", id: row.id },
       eventPayload(row, { note: note ?? null }),
     );
+    await settleTask(ctx, { ...row, status: "rejected", note: note ?? null });
   });
   return loadApproval(db, companyId, approvalId);
 }

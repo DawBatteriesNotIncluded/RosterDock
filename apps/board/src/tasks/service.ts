@@ -207,7 +207,8 @@ export interface CreateTaskOptions {
 
 /**
  * The goal a new task serves: the goal Peter planned it for, the goal of the task it was filed from, or
- * the goal its project was opened for. Null: work outside any goal.
+ * the goal its project was opened for, while that goal is open. Null: work outside any goal, which is what
+ * a task filed after its goal closed is (Peter does not re-plan a closed goal's tasks).
  */
 async function goalOfNewTask(
   db: Queryable,
@@ -216,13 +217,15 @@ async function goalOfNewTask(
 ): Promise<string | null> {
   if (opts.fromGoal) return opts.fromGoal;
   if (opts.parentTaskId) {
-    const parent = await db.query<{ goal_id: string | null }>("SELECT goal_id FROM tasks WHERE id = $1", [
-      opts.parentTaskId,
-    ]);
+    const parent = await db.query<{ goal_id: string | null }>(
+      `SELECT t.goal_id FROM tasks t JOIN goals g ON g.id = t.goal_id
+       WHERE t.id = $1 AND g.status NOT IN ('done', 'stopped')`,
+      [opts.parentTaskId],
+    );
     if (parent.rows[0]?.goal_id) return parent.rows[0].goal_id;
   }
   const opened = await db.query<{ id: string }>(
-    "SELECT id FROM goals WHERE project_id = $1 AND opened_project",
+    "SELECT id FROM goals WHERE project_id = $1 AND opened_project AND status NOT IN ('done', 'stopped')",
     [projectId],
   );
   return opened.rows[0]?.id ?? null;

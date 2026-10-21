@@ -70,6 +70,9 @@ const COLUMNS: [TaskStatus, string][] = [
   ["done", "Done"],
 ];
 
+const CANCEL_HINT =
+  "It closes without being Done: a run on it stops and nobody picks it up. You can reopen it.";
+
 function StatusLine({ t, data }: { t: Task; data: CompanyData }) {
   const review = data.reviews?.find((r) => r.taskId === t.id);
   if (t.status === "doing" && review?.status === "changes_requested")
@@ -273,6 +276,8 @@ function Drawer({
   };
 
   const assigneeValue = t.assignee ? `${t.assignee.kind}:${t.assignee.id}` : "";
+  const cancellable =
+    !!canCancel && !!onCancel && (t.status === "todo" || t.status === "doing" || t.status === "blocked");
   return (
     <aside className="drawer">
       <div className="drawer-h">
@@ -287,14 +292,18 @@ function Drawer({
         </div>
         <div className="drawer-title">{t.title}</div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* A cancelled task says so here and is reopened from Details, not moved. */}
+          {/* A cancelled task says so here and is reopened from Details, not moved. Owners and admins
+              cancel from here too: a task nobody will finish need not sit Blocked. */}
           <select
             className="select"
             value={t.status}
             disabled={t.status === "cancelled"}
             onChange={(e) => {
               const next = e.target.value as TaskStatus;
-              if (next === "cancelled") return;
+              if (next === "cancelled") {
+                if (cancellable && window.confirm(`Cancel #${t.number}? ${CANCEL_HINT}`)) void onCancel(t.id);
+                return;
+              }
               if (next === "done") return onRefuseDone(t.id);
               void onMove(t.id, { status: next as MoveTaskInput["status"] });
             }}
@@ -305,6 +314,7 @@ function Drawer({
                 {l}
               </option>
             ))}
+            {cancellable ? <option value="cancelled">{STATUS_LABEL.cancelled}</option> : null}
           </select>
           <select
             className="select"
@@ -526,9 +536,7 @@ function Drawer({
                   </Button>
                 </div>
               ) : null}
-              {canCancel &&
-              onCancel &&
-              (t.status === "todo" || t.status === "doing" || t.status === "blocked") ? (
+              {cancellable && onCancel ? (
                 <div className="flex flex-col gap-2">
                   <span className="eyebrow">Cancel this task</span>
                   <input
@@ -544,9 +552,7 @@ function Drawer({
                   >
                     Cancel task
                   </Button>
-                  <span className="hint">
-                    It closes without being Done: a run on it stops and nobody picks it up. You can reopen it.
-                  </span>
+                  <span className="hint">{CANCEL_HINT}</span>
                 </div>
               ) : null}
               {canCancel && onReopen && t.status === "cancelled" ? (
