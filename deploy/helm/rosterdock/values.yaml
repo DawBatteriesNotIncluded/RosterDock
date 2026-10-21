@@ -205,10 +205,13 @@ worker:
   extraEnv: []
   #  - name: ROSTERDOCK_RUN_REPO_TESTS
   #    value: "0"
-  # Optional git token the worker clones private repositories with, by NAME from a Secret.
+  # Optional git token the worker clones private repositories with, by NAME from a Secret, and the git hosts
+  # it is sent to (ROSTERDOCK_GIT_TOKEN_HOSTS), with a port where it is not 443: a repository on any other
+  # host is cloned without it. List your GitLab or GitHub Enterprise Server host here.
   gitSecret:
     name: ""
     key: ROSTERDOCK_GIT_TOKEN
+    hosts: [github.com]
   workVolumeSize: 4Gi
   # The worker serves its own counters (runs by outcome, seconds on runs, in flight) on this port; the pod
   # is annotated for scraping, and with observability.serviceMonitor.enabled a ServiceMonitor covers the

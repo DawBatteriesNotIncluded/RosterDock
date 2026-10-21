@@ -316,17 +316,34 @@ describe("workspace", () => {
         path.join(root, "work"),
         "run-4",
         { repoUrl: path.join(root, "nope.git"), defaultBranch: "main" },
-        "tok",
+        { token: "tok", hosts: ["github.com"] },
       ),
     ).rejects.toThrow(/git clone failed/);
   });
 
-  it("injects the token into https URLs only and redacts it from messages", () => {
-    expect(withToken("https://github.com/o/r.git", "abc")).toBe(
+  it("injects the token into https URLs on its own hosts only and redacts it from messages", () => {
+    const github = { token: "abc", hosts: ["github.com"] };
+    expect(withToken("https://github.com/o/r.git", github)).toBe(
       "https://x-access-token:abc@github.com/o/r.git",
     );
-    expect(withToken("git@github.com:o/r.git", "abc")).toBe("git@github.com:o/r.git");
-    expect(withToken("https://u@github.com/o/r.git", "abc")).toBe("https://u@github.com/o/r.git");
+    expect(withToken("https://GitHub.com/o/r.git", github)).toBe(
+      "https://x-access-token:abc@github.com/o/r.git",
+    );
+    expect(withToken("git@github.com:o/r.git", github)).toBe("git@github.com:o/r.git");
+    expect(withToken("https://u@github.com/o/r.git", github)).toBe("https://u@github.com/o/r.git");
+    // Any other host clones without it: a look-alike name, a subdomain, another port, plain http.
+    for (const url of [
+      "https://git.example.com/o/r.git",
+      "https://github.com.example.com/o/r.git",
+      "https://api.github.com/o/r.git",
+      "https://github.com:8443/o/r.git",
+      "http://github.com/o/r.git",
+    ])
+      expect(withToken(url, github), url).toBe(url);
+    expect(
+      withToken("https://git.example.com:8443/o/r.git", { token: "abc", hosts: ["git.example.com:8443"] }),
+    ).toBe("https://x-access-token:abc@git.example.com:8443/o/r.git");
+    expect(withToken("https://github.com/o/r.git", null)).toBe("https://github.com/o/r.git");
     expect(redactGit("fatal: https://x-access-token:abc@github.com/o/r.git not found")).toBe(
       "fatal: https://***@github.com/o/r.git not found",
     );

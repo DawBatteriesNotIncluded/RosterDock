@@ -152,6 +152,8 @@ spec:
                 secretKeyRef:
                   name: {{ $w.gitSecret.name }}
                   key: {{ $w.gitSecret.key }}
+            - name: ROSTERDOCK_GIT_TOKEN_HOSTS
+              value: {{ join "," ($w.gitSecret.hosts | default (list "github.com")) | quote }}
             {{- end }}
             {{- range $envNames }}
             - name: {{ . }}

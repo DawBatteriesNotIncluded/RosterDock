@@ -1,10 +1,11 @@
 // One ephemeral directory per run. With a repository: shallow clone, run, then
 // capture the diff. Without: an empty directory the outputs land in.
-// The git token, when present, goes into the clone URL only and is never
-// logged or written to the board. git itself sees none of the worker's
-// environment and no config but the clone's own: the harvest runs git in a
-// checkout the run has just changed, and a filter, an fsmonitor or a hook the
-// run wrote into it would otherwise run with the worker's credentials.
+// The git token, when present, goes into the clone URL only, on the hosts it is
+// meant for, and is never logged or written to the board. git itself sees none
+// of the worker's environment and no config but the clone's own: the harvest
+// runs git in a checkout the run has just changed, and a filter, an fsmonitor
+// or a hook the run wrote into it would otherwise run with the worker's
+// credentials.
 
 import { spawn } from "node:child_process";
 import { constants, type Stats } from "node:fs";
@@ -123,13 +124,21 @@ export function git(
   });
 }
 
-export function withToken(repoUrl: string, token: string | null): string {
-  if (!token) return repoUrl;
+/** The fleet's git token and the hosts it is for (ROSTERDOCK_GIT_TOKEN, ROSTERDOCK_GIT_TOKEN_HOSTS). */
+export interface GitCredential {
+  token: string;
+  /** Lower-case host names, with the port where it is not 443. A repository anywhere else gets no token. */
+  hosts: readonly string[];
+}
+
+/** The clone URL with the token in it: https on one of the token's own hosts only. */
+export function withToken(repoUrl: string, credential: GitCredential | null): string {
+  if (!credential) return repoUrl;
   try {
     const u = new URL(repoUrl);
-    if (u.protocol !== "https:" || u.username) return repoUrl;
+    if (u.protocol !== "https:" || u.username || !credential.hosts.includes(u.host)) return repoUrl;
     u.username = "x-access-token";
-    u.password = token;
+    u.password = credential.token;
     return u.toString();
   } catch {
     return repoUrl;
@@ -149,7 +158,7 @@ export async function prepareWorkspace(
   workRoot: string,
   runId: string,
   project: { repoUrl: string | null; defaultBranch: string },
-  gitToken: string | null,
+  credential: GitCredential | null,
   signal?: AbortSignal,
 ): Promise<Workspace> {
   const dir = path.join(workRoot, runId);
@@ -168,7 +177,7 @@ export async function prepareWorkspace(
       "--branch",
       project.defaultBranch,
       "--",
-      withToken(project.repoUrl, gitToken),
+      withToken(project.repoUrl, credential),
       ".",
     ],
     dir,
@@ -182,7 +191,7 @@ export async function prepareWorkspace(
     );
   }
   // Never leave the credential in the checkout.
-  if (gitToken) await git(["remote", "set-url", "origin", project.repoUrl], dir);
+  if (credential) await git(["remote", "set-url", "origin", project.repoUrl], dir);
   return { dir, repo: true, gitConfig: await readFile(path.join(dir, ".git", "config"), "utf8") };
 }
 

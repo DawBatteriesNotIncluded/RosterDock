@@ -153,7 +153,7 @@ and which optional secrets exist. Everything in `values.yaml` is commented. The 
 | `worker.autoscaling`             | A KEDA ScaledObject: one worker per waiting run between the bounds. Needs KEDA installed.             |
 | `worker.image`                   | The worker image with Claude Code that you build (Engines on the worker, below). Empty: the chart's.  |
 | `worker.engineEnvNames`          | Env var NAMES the worker hands to the engine, read from `worker.engineSecret`.                        |
-| `worker.gitSecret`               | A token for cloning private repositories, by name.                                                    |
+| `worker.gitSecret`               | A token for cloning private repositories, by name, and `hosts`, the git hosts it is sent to.          |
 | `worker.podMetrics.enabled`      | Pod CPU and memory from the metrics API (a worker account, a Role, the token) instead of the cgroup.  |
 | `postgres.cidr`, `postgres.port` | Where Postgres answers; the network policies let the board and workers reach only that.               |
 | `storage.*`                      | Endpoint, bucket, region, path style; credentials from `storage.externalSecret`.                      |

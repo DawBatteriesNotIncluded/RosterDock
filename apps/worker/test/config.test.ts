@@ -31,6 +31,27 @@ describe("worker config", () => {
     expect(() => loadConfig({ ...base, ROSTERDOCK_START_ATTEMPTS: "0" })).toThrow(/START_ATTEMPTS/);
   });
 
+  it("sends the git token only to the hosts named for it, github.com unless told otherwise", () => {
+    expect(loadConfig(base).gitCredential).toBeNull();
+    expect(loadConfig({ ...base, ROSTERDOCK_GIT_TOKEN: "tok" }).gitCredential).toEqual({
+      token: "tok",
+      hosts: ["github.com"],
+    });
+    expect(
+      loadConfig({
+        ...base,
+        ROSTERDOCK_GIT_TOKEN: "tok",
+        ROSTERDOCK_GIT_TOKEN_HOSTS: " GitLab.example.com , git.example.com:8443 ",
+      }).gitCredential,
+    ).toEqual({ token: "tok", hosts: ["gitlab.example.com", "git.example.com:8443"] });
+    // A URL or a pattern is not a host: refused, rather than sending the token nowhere or everywhere.
+    for (const hosts of ["https://github.com", "*.github.com", "github.com/acme", ","])
+      expect(
+        () => loadConfig({ ...base, ROSTERDOCK_GIT_TOKEN: "tok", ROSTERDOCK_GIT_TOKEN_HOSTS: hosts }),
+        hosts,
+      ).toThrow(/ROSTERDOCK_GIT_TOKEN_HOSTS/);
+  });
+
   it("reads the collector from the standard variables", () => {
     expect(loadConfig(base).otlp).toBeNull();
     const t = loadConfig({

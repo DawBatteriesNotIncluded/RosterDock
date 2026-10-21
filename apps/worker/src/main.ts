@@ -89,7 +89,7 @@ await boss.work<{ runId: string; companyId: string }>(
             heartbeatMs: config.heartbeatMs,
             engineEnv: engineEnvironment(config.passEnvNames),
             boardUrl: config.boardUrl,
-            gitToken: config.gitToken,
+            gitCredential: config.gitCredential,
             repoTests: config.runRepoTests ? { timeoutMs: config.testTimeoutMs } : null,
             otlp: config.otlp ? { target: config.otlp, fetch: (i, init) => fetch(i, init) } : null,
             resources,
@@ -115,6 +115,10 @@ log.info(
     pool: config.pool,
   },
 );
+if (config.gitCredential)
+  log.info(
+    `the git token goes to ${config.gitCredential.hosts.join(", ")} only; a repository elsewhere clones without it`,
+  );
 
 const stop = async () => {
   log.info("shutting down");
