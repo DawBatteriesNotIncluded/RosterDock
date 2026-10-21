@@ -6,12 +6,16 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { classifyOn } from "../src/broker/broker.js";
+import { migrate } from "../src/db/migrate.js";
 import { callMcpTool, discoverTools, mcpClientPool } from "../src/mcp/client.js";
+import type { ConnectionRow } from "../src/mcp/connections.js";
 import { fakeMcp } from "./mcp-fake.js";
 import { addProject, addTeammate, seedCompany, startTestBoard, type TestBoard } from "./helpers.js";
 
 let board: TestBoard;
 const mcp = fakeMcp();
+const READS_BY_NAME = "0033_reads_by_name.sql";
 const env: NodeJS.ProcessEnv = { HUBSPOT_MCP_TOKEN: "fixture-token-000000" };
 const stdioScript = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -403,5 +407,39 @@ describe("connections", () => {
       default: "read",
       caps: { slack: "off" },
     });
+  });
+
+  it("a name makes a tool a read only with a reading verb and no second verb, at a call and in what discovery kept", async () => {
+    // Not discovered and not in the catalog: the broker reads the name when the call comes.
+    const bare = { tools: [], discovered_at: null, catalog_id: null } as unknown as ConnectionRow;
+    for (const tool of ["export_contacts", "preview_campaign", "check_in", "get_or_create_contact"])
+      expect(classifyOn(bare, tool).write, tool).toBe(true);
+    expect(classifyOn(bare, "list_contacts").write).toBe(false);
+
+    // A discovery under the old rule kept some of those as reads by their name: the upgrade makes them
+    // writes. What a person, an annotation or the catalog said stays as it was.
+    const { api, base } = await seedCompany(board, "cn6@example.com");
+    const conn = (await api.post(`${base}/connections`, { name: "crm", url: "https://crm.test/mcp" })).body;
+    const kept = [
+      { name: "export_contacts", description: "Export to CSV", write: false, source: "name" },
+      { name: "crm.preview_campaign", description: "", write: false, source: "name", off: true },
+      { name: "find_and_merge_duplicates", description: "", write: false, source: "name" },
+      { name: "list_contacts", description: "", write: false, source: "name" },
+      { name: "export_audit_log", description: "", write: false, source: "person" },
+      { name: "check_quota", description: "", write: false, source: "annotation" },
+      { name: "create_contact", description: "", write: true, source: "default" },
+    ];
+    await board.db.query("UPDATE connections SET tools = $2, discovered_at = now() WHERE id = $1", [
+      conn.id,
+      JSON.stringify(kept),
+    ]);
+    await board.db.query("DELETE FROM schema_migrations WHERE name = $1", [READS_BY_NAME]);
+    expect((await migrate(board.db)).applied).toEqual([READS_BY_NAME]);
+    expect((await api.get(`${base}/connections/${conn.id}`)).body.tools).toEqual([
+      { name: "export_contacts", description: "Export to CSV", write: true, source: "default" },
+      { name: "crm.preview_campaign", description: "", write: true, source: "default", off: true },
+      { name: "find_and_merge_duplicates", description: "", write: true, source: "default" },
+      ...kept.slice(3),
+    ]);
   });
 });

@@ -5,7 +5,7 @@
 // The same module executes approved writes, so the bytes a person approved are
 // the bytes that leave. Every call and refusal is an event.
 
-import { type ActorRef, verdictFor } from "@rosterdock/shared";
+import { type ActorRef, readsByName, verdictFor } from "@rosterdock/shared";
 import { proposeApproval, type ApprovalExecutor, type ApprovalRow } from "../approvals/service.js";
 import type { Db } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
@@ -84,9 +84,7 @@ export function classifyOn(
     ? false
     : entry?.writes.includes(tool)
       ? true
-      : !/^(get|list|search|read|find|describe|query|fetch|lookup|count|show|check|view|inspect|export|preview|summari[sz]e|retrieve|browse)(?![a-z])/i.test(
-          tool.replace(/^[a-z0-9-]+[.:]/i, ""),
-        );
+      : !readsByName(tool);
   return { write, known: !!entry, off: false };
 }
 
