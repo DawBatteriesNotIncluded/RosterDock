@@ -15,7 +15,7 @@ import { addProject, addTeammate, seedCompany, startTestBoard, type TestBoard } 
 
 let board: TestBoard;
 const mcp = fakeMcp();
-const READS_BY_NAME = "0033_reads_by_name.sql";
+const READS_BY_NAME = "0035_reads_by_name.sql";
 const env: NodeJS.ProcessEnv = { HUBSPOT_MCP_TOKEN: "fixture-token-000000" };
 const stdioScript = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
