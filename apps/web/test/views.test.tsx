@@ -5,7 +5,7 @@ import { renderToString } from "react-dom/server";
 import type { CompanyData } from "../src/api/types.ts";
 import { describe, expect, it } from "vitest";
 import { Shell } from "../src/components/Shell.tsx";
-import { Avatar, elapsedLabel, Thinking } from "../src/components/ui.tsx";
+import { Avatar, elapsedLabel, Thinking, Topbar } from "../src/components/ui.tsx";
 import { describeEvent, engineChoices, relativeTime, teammateStatus } from "../src/lib/format.ts";
 import {
   CreateDepartmentModal,
@@ -27,7 +27,7 @@ import {
 } from "../src/views/ConnectionsPanel.tsx";
 import { BoardView } from "../src/views/BoardView.tsx";
 import { CompanyView } from "../src/views/CompanyView.tsx";
-import { CostsView, fourteenDays, money, MonthlyView, monthOf } from "../src/views/CostsView.tsx";
+import { CostsView, fourteenDays, modelLabel, money, MonthlyView, monthOf } from "../src/views/CostsView.tsx";
 import { characterRows, carpetOf, HAIR_STYLES, lookFor } from "../src/views/office/art.ts";
 import {
   lineDuration,
@@ -456,10 +456,25 @@ describe("views render with sample data", () => {
     expect(html).toContain("Cody · n8n engineer · Engineering");
     expect(html).toContain("#144");
     expect(html).toContain("sha256 9f2c4d1a0b7e");
-    // The decided card fades and carries the note.
+    // The decided card fades and carries the note, which ends the sentence with its own full stop.
     expect(html).toContain("approval decided");
-    expect(html).toContain("Not until the first digest is approved.");
-    expect(html).toContain("Nothing was sent; Peter re-plans the task.");
+    expect(html).toContain(
+      "Not until the first digest is approved. Nothing was sent; Peter re-plans the task.",
+    );
+    expect(html).not.toContain("approved..");
+    const failed = render(
+      <ApprovalsView
+        data={{
+          ...approvalsFixture,
+          approvals: [{ ...approvalFixtures[0]!, status: "failed", error: "HubSpot answered HTTP 429." }],
+        }}
+        canDecide
+        onApprove={asyncNoop}
+        onReject={asyncNoop}
+        onOpenTask={noop}
+      />,
+    );
+    expect(failed).toContain("but the send failed: HubSpot answered HTTP 429.</span>");
     expect(sortApprovals(approvalFixtures)[0]!.status).toBe("pending");
     expect(APPROVAL_LABEL.executed).toBe("Approved · executed");
     // A replaced proposal fades, says what replaced it, and offers no decision.
@@ -813,6 +828,11 @@ describe("views render with sample data", () => {
     expect(queue).toContain("In review");
 
     const detail = render(<ReviewsView {...base} selectedId={reviewFixture.id} initial={reviewFixture} />);
+    // The task's title gives way to the rest of the bar, whole on hover; the people can drop to faces.
+    expect(detail).toContain('class="topbar long"');
+    expect(detail).toContain(`<span class="title" title="${reviewFixture.taskTitle}">`);
+    expect(detail).toContain('class="name">Brody</span>');
+    expect(render(<Topbar title="Reviews" />)).toContain('<span class="title">Reviews</span>');
     expect(detail).toContain("2 files");
     expect(detail).toContain("workflows/vms-digest.json");
     expect(detail).toContain("docs/digest-requirements.md");
@@ -1474,6 +1494,29 @@ describe("pure helpers", () => {
     expect(html).toContain("Export CSV");
     expect(html).toContain('href="/api/companies/c1/costs/export.csv?window=week"');
     expect(html).toContain("Monthly report");
+    // A stub teammate's runs read as the stub engine, never as the model the teammate names.
+    const stubTokens = { input: 1200, output: 300, cacheRead: 0, cacheWrite: 0, total: 1500 };
+    const stub = { model: "stub", tokens: stubTokens, costMinorUnits: null, runs: 1 };
+    const withStub = render(
+      <CostsView
+        data={fixture}
+        initial={{
+          ...costFixture,
+          byTeammate: [{ ...costFixture.byTeammate[0]!, ...stub, name: "Stubby", engine: "stub" }],
+          byModel: [{ ...stub, teammates: 1 }],
+        }}
+        loadCosts={async () => costFixture}
+        loadMonthly={async () => monthlyFixture}
+        usageCsvUrl={(w) => `/api/companies/c1/costs/export.csv?window=${w}`}
+        chargebackCsvUrl={(m) => `/api/companies/c1/costs/monthly.csv?month=${m}`}
+        onOpenTeammate={noop}
+        onOpenProject={noop}
+        onOpenSettings={noop}
+      />,
+    );
+    expect((withStub.match(/Stub \(no model\)/g) ?? []).length).toBe(2);
+    expect(withStub).not.toContain("claude-sonnet-5");
+    expect(modelLabel("claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
     const monthly = render(
       <MonthlyView
         month="2026-08"

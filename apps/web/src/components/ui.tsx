@@ -159,16 +159,21 @@ export function Topbar({
   subtitle,
   left,
   right,
+  long = false,
 }: {
   title: string;
   subtitle?: string;
   left?: ReactNode;
   right?: ReactNode;
+  /** A task's title, not a page's: it gives way to the rest of the bar, cut short and whole on hover. */
+  long?: boolean;
 }) {
   return (
-    <div className="topbar">
+    <div className={cn("topbar", long && "long")}>
       <div className="topbar-l">
-        <span className="title">{title}</span>
+        <span className="title" title={long ? title : undefined}>
+          {title}
+        </span>
         {subtitle ? <span className="subtitle">{subtitle}</span> : null}
         {left}
       </div>

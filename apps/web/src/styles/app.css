@@ -5,7 +5,9 @@
   display: flex;
   height: 100vh;
   min-height: 640px;
-  overflow: hidden;
+  /* Clipped, not hidden: a hidden box still scrolls when something wider inside is brought into view (a
+     focused field, find in page), and that slid the sidebar away with no scrollbar to slide it back. */
+  overflow: clip;
 }
 .sidebar {
   width: 220px;
@@ -202,6 +204,16 @@
 }
 .topbar-l > .segs > .seg {
   flex-shrink: 0;
+}
+/* A long title (a task's) takes the room the rest of the bar leaves, never less than a few words: cut short,
+   whole on hover. Past that, the filters beside it scroll. */
+.topbar.long .topbar-l > .title {
+  flex: 1 1 0%;
+  min-width: 8em;
+  max-width: max-content;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 17px;
 }
 .chip {
   display: inline-flex;
@@ -1883,6 +1895,7 @@ table.costs tr.cursor-pointer:hover td {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--border-soft);
   position: sticky;
@@ -2108,6 +2121,67 @@ table.costs tr.cursor-pointer:hover td {
   align-items: center;
   justify-content: space-between;
   font-size: 13px;
+}
+/* Under 1,280 wide: the files sit over the diff, so the diff keeps a reading width beside the panel; the
+   people on the bar show by face (their names on hover, and still read out); the other reviews are under
+   All reviews. */
+@media (max-width: 1279px) {
+  .review {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .review > .files {
+    grid-area: 1 / 1;
+    width: auto;
+    max-height: 25vh;
+    padding: 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .review > .diffwrap {
+    grid-area: 2 / 1;
+  }
+  .review > .rpanel {
+    grid-area: 1 / 2 / 3 / 3;
+    width: auto;
+    padding: 18px;
+  }
+  .rpeople .name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .topbar.long .topbar-l > .segs {
+    display: none;
+  }
+}
+/* Under 960 wide: one column, the decision under the diff, and the bar keeps the title and the buttons (the
+   people and the round are in the panel). */
+@media (max-width: 959px) {
+  .review {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    overflow: auto;
+  }
+  .review > .files,
+  .review > .diffwrap,
+  .review > .rpanel {
+    grid-area: auto;
+    max-height: none;
+    overflow: visible;
+  }
+  .review > .rpanel {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+  .topbar.long .rpeople,
+  .topbar.long .round {
+    display: none;
+  }
 }
 .input {
   font: inherit;

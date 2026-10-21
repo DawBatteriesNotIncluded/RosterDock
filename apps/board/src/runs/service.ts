@@ -29,7 +29,7 @@ import type { ObjectStore } from "../storage/s3.js";
 import type { FetchedSource, SourceFetcher } from "../reviews/sources.js";
 import { queueNameForPool } from "@rosterdock/shared";
 import type { RunQueue } from "../queue.js";
-import { costFor, totalTokens } from "../budgets/cost.js";
+import { costFor, totalTokens, usageModel } from "../budgets/cost.js";
 import { alertOnBudgets, assertWithinBudgets, priceFor } from "../budgets/service.js";
 import { effectiveToolbox } from "../broker/policy.js";
 import { narrowingReason } from "../broker/policy.js";
@@ -1241,7 +1241,7 @@ export async function completeRun(
       ],
     );
     let row = updated.rows[0]!;
-    const model = input.model ?? run.model;
+    const model = usageModel(run.engine, input.model ?? run.model);
     const price = await priceFor(ctx.client, run.company_id, model);
     const cost = costFor(usage, price);
     if (cost !== null) {
@@ -1340,7 +1340,7 @@ export async function completeRun(
         cacheWriteTokens: usage.cacheWriteTokens ?? 0,
       },
       durationMs: row.duration_ms,
-      model: input.model ?? run.model,
+      model,
       kind: run.kind,
     };
     await ctx.emit(
