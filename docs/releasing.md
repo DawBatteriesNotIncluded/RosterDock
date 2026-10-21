@@ -6,13 +6,15 @@ For the maintainers. A release is one version for the three images and the chart
 
 ## Cutting one
 
-1. On `main`, with CI green: move what changed under the new version's heading in `CHANGELOG.md`, dated
+1. In a pull request: move what changed under the new version's heading in `CHANGELOG.md`, dated
    (`## 0.2.0 (2026-11-02)`), and set `version` and `appVersion` in `deploy/helm/rosterdock/Chart.yaml` to it.
    The workflow publishes the tag's version whatever `Chart.yaml` says, and warns when the two differ;
-   keeping them equal keeps a checkout's chart on its own images.
-2. Commit, tag that commit, push the tag:
+   keeping them equal keeps a checkout's chart on its own images. Squash-merge it once CI is green: the
+   `main` ruleset takes changes only that way.
+2. Tag the merged commit on `main` and push the tag:
 
    ```bash
+   git switch main && git pull
    git tag -a v0.2.0 -m "RosterDock 0.2.0"
    git push origin v0.2.0
    ```
@@ -31,9 +33,10 @@ For the maintainers. A release is one version for the three images and the chart
    ```
 
 A failed image or chart job can be re-run alone from the run's page; the jobs that passed are not built
-again, and the chart waits for every image. If CI fails on the tag, nothing was pushed: delete the tag,
-fix, and tag again. Once anything of a version is published, never move or reuse its tag: fix forward with
-the next patch version.
+again, and the chart waits for every image. If CI fails on the tag, nothing was pushed, but the tag stays:
+the `release tags` ruleset forbids moving or deleting a `v*` tag. Fix on `main` and tag again under the next
+version, so a failed `v0.2.0-rc.1` is followed by `v0.2.0-rc.2` and a failed `v0.2.0` by `v0.2.1`. That is
+why a version starts with a dry run and a prerelease tag.
 
 **A dry run.** Actions, release, Run workflow, with any version: CI and every build run for both
 architectures, and nothing logs in or pushes.
@@ -54,15 +57,16 @@ their parsers' fixtures were recorded with; moving one means recording the fixtu
 - **Actions.** Settings, Actions, General: actions allowed to run, including `docker/*`, `azure/setup-helm`,
   `helm/kind-action` and `pnpm/action-setup` (CI uses them already). The default workflow permissions can
   stay read-only: each workflow asks for what it needs, and only the release's image and chart jobs may
-  write packages. Every action is pinned to a commit, so "Require actions to be pinned to a full-length
-  commit SHA" can be turned on.
-- **Dependabot.** Version updates run from `.github/dependabot.yml`; turn on alerts and security updates in
+  write packages. "Require actions to be pinned to a full-length commit SHA" is on, so a new action is
+  pinned to a commit or its workflow does not run.
+- **Dependabot.** Version updates run from `.github/dependabot.yml`; alerts and security updates are on in
   Settings, Code security.
-- **Private vulnerability reporting.** `SECURITY.md` and the issue template send reporters to the advisory
-  form, which exists only once the repository is public and the feature is on: Settings, Code security,
-  Private vulnerability reporting, Enable. Then check that `/security/advisories/new` opens.
-- **Who may release.** Anyone who can push a `v*` tag publishes. A tag ruleset on `v*` (Settings, Rules)
-  can keep creating release tags to the maintainers and forbid moving or deleting one.
+- **Code security.** Private vulnerability reporting is on: `SECURITY.md` and the issue template send
+  reporters to `/security/advisories/new`. Secret scanning and push protection are on, and skip only the
+  files `.github/secret_scanning.yml` names. CodeQL runs in its default setup.
+- **Rules.** The `main` ruleset takes changes only through a squash-merged pull request whose four CI checks
+  are green (the skipped smoke install counts), with no force-push, no deletion and nobody exempt. The
+  `release tags` ruleset forbids moving or deleting a `v*` tag. Anyone who can push a `v*` tag publishes.
 - **The pre-release sentences.** When 0.1.0 ships, delete the sentence in `README.md`'s Status that says
   nothing is published, and the two sentences directly under "Where the images and the chart come from" in
   `docs/install.md`.
