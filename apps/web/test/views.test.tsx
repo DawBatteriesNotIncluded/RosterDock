@@ -1350,6 +1350,22 @@ describe("pure helpers", () => {
     expect(
       describeEvent(ev("review.approved", verifier, { number: 142, title: "Map VMS" }), fixture).text,
     ).toBe("Verifier approved #142 Map VMS");
+    // A person approving over a failed credential scan or failing tests is said so in the line.
+    expect(
+      describeEvent(
+        ev(
+          "review.approved",
+          { kind: "user", id: fixture.members[0]!.userId },
+          {
+            number: 142,
+            title: "Map VMS",
+            overrodeChecks: [{ kind: "tests", title: "npm test failed: 2 failing" }],
+          },
+        ),
+        fixture,
+        fixture.members[0]!.userId,
+      ).text,
+    ).toBe("You approved #142 Map VMS over a failed check: npm test failed: 2 failing");
     expect(
       describeEvent(
         ev("pr.opened", verifier, { number: 142, prNumber: 42, repo: "acme/gtm", reviewId: "rev1" }),

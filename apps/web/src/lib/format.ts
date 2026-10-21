@@ -379,11 +379,13 @@ export function describeEvent(
         text: `${who} requested changes on ${n}${title}${p(ev).openComments ? ` · ${p(ev).openComments} open ${p(ev).openComments === 1 ? "comment" : "comments"}` : ""}`,
         go: { view: "reviews", reviewId: ev.subject?.id, taskId: p(ev).taskId },
       };
-    case "review.approved":
+    case "review.approved": {
+      const overrode = (p(ev).overrodeChecks as { title: string }[] | undefined) ?? [];
       return {
-        text: `${who} approved ${n}${title}`,
+        text: `${who} approved ${n}${title}${overrode.length ? ` over a failed check: ${overrode.map((c) => c.title).join("; ")}` : ""}`,
         go: { view: "reviews", reviewId: ev.subject?.id, taskId: p(ev).taskId },
       };
+    }
     case "review.vetoed":
       return {
         text: `${who} vetoed the approval of ${n}: ${p(ev).note ?? ""}`,

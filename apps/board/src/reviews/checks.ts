@@ -15,6 +15,12 @@ import type { FetchedSource } from "./sources.js";
 
 export type CheckKind = "secrets" | "outputs" | "tests" | "evaluation" | "sources";
 
+/**
+ * A check whose failure stops a teammate's approval: a credential value in the diff, the repository's own
+ * tests failing. A person may approve over one, and the approval records it.
+ */
+export const BLOCKING_CHECKS: readonly CheckKind[] = ["secrets", "tests"];
+
 export interface CheckResult {
   kind: CheckKind;
   /** null: not run (nothing declared, no test script, not scored yet). */
