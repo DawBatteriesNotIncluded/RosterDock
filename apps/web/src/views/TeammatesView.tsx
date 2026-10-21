@@ -1,11 +1,11 @@
 import type { ToolMode, UpdateTeammateInput } from "@rosterdock/shared";
 import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { CompanyData, Inbox, Teammate } from "../api/types.ts";
+import type { CompanyData, Inbox, Teammate, ToolboxEntry } from "../api/types.ts";
 import { Avatar, Button, Dot, Empty, Field, Tip, Topbar } from "../components/ui.tsx";
 import { cn } from "../lib/cn.ts";
 import { driftLine, engineChoices, relativeTime, standingDrift, teammateStatus } from "../lib/format.ts";
-import { ConnectionGrant } from "./ToolboxEditor.tsx";
+import { ConnectionGrant, type Grant } from "./ToolboxEditor.tsx";
 
 export interface TeammatesViewProps {
   data: CompanyData;
@@ -56,6 +56,94 @@ function InboxPanel({ t, load }: { t: Teammate; load: TeammatesViewProps["loadIn
   );
 }
 
+/** What the editor edits: the teammate's fields as the form shows them, and its toolbox by connection. */
+export interface TeammateDraft {
+  form: {
+    name: string;
+    role: string;
+    engine: string;
+    model: string;
+    effort: string;
+    personaMd: string;
+    playbooks: string;
+  };
+  /** The mode on each connection; one set to off is not saved. */
+  toolbox: Record<string, ToolMode>;
+  /** Per connection: the tool names picked, or null for every tool. */
+  picked: Record<string, string[] | null>;
+}
+
+export function draftOf(t: Teammate): TeammateDraft {
+  return {
+    form: {
+      name: t.name,
+      role: t.role,
+      engine: t.engine,
+      model: t.model,
+      effort: t.effort ?? "",
+      personaMd: t.personaMd,
+      playbooks: t.playbooks.join("\n\n---\n\n"),
+    },
+    toolbox: Object.fromEntries(t.toolbox.map((e) => [e.connection, e.mode])),
+    picked: Object.fromEntries(t.toolbox.map((e) => [e.connection, e.tools ?? null])),
+  };
+}
+
+/** One connection's grant changed, tool by tool or for a whole group. */
+export function withGrant(d: TeammateDraft, connection: string, g: Grant): TeammateDraft {
+  return {
+    ...d,
+    toolbox: { ...d.toolbox, [connection]: g.mode },
+    picked: { ...d.picked, [connection]: g.picked },
+  };
+}
+
+/** The toolbox Save sends: a line per connection granted, naming its tools when not every one is. */
+export function toolboxLines(d: Pick<TeammateDraft, "toolbox" | "picked">): ToolboxEntry[] {
+  return Object.entries(d.toolbox)
+    .filter(([, mode]) => mode !== "off")
+    .map(([connection, mode]) => ({
+      connection,
+      mode,
+      ...(d.picked[connection] != null ? { tools: d.picked[connection] } : {}),
+    }));
+}
+
+/** A draft as one string: two drafts that save the same thing read the same, whatever the order. */
+function draftKey(d: TeammateDraft): string {
+  const lines = toolboxLines(d)
+    .map((l) => (l.tools ? { ...l, tools: [...l.tools].sort() } : l))
+    .sort((a, b) => a.connection.localeCompare(b.connection));
+  return JSON.stringify([d.form, lines]);
+}
+
+/** The editor: the teammate as saved (which version, and what it holds) and the person's draft of it. */
+export interface EditorState {
+  savedAt: string;
+  saved: string;
+  draft: TeammateDraft;
+}
+
+export function editorState(t: Teammate): EditorState {
+  const draft = draftOf(t);
+  return { savedAt: `${t.id} ${t.updatedAt}`, saved: draftKey(draft), draft };
+}
+
+/** Whether Save has something to send: any field, a connection's mode, or one tool picked or dropped. */
+export function draftDirty(s: EditorState): boolean {
+  return draftKey(s.draft) !== s.saved;
+}
+
+/**
+ * The editor after the company's data is fetched again, which every event in the company does. The draft
+ * stays unless the teammate as saved changed (a save here, or someone else's): a refresh that brings the
+ * same teammate back must not drop a grant nobody has saved yet.
+ */
+export function refreshed(s: EditorState, t: Teammate): EditorState {
+  const now = editorState(t);
+  return now.savedAt === s.savedAt && now.saved === s.saved ? s : now;
+}
+
 function Editor({
   t,
   data,
@@ -67,43 +155,13 @@ function Editor({
   onSave: TeammatesViewProps["onSave"];
   loadInbox: TeammatesViewProps["loadInbox"];
 }) {
-  const [form, setForm] = useState({
-    name: t.name,
-    role: t.role,
-    engine: t.engine,
-    model: t.model,
-    effort: t.effort ?? "",
-    personaMd: t.personaMd,
-    playbooks: t.playbooks.join("\n\n---\n\n"),
-  });
-  const [toolbox, setToolbox] = useState<Record<string, ToolMode>>(toolboxMap(t));
-  /** Per connection: the tool names picked, or null for every tool. */
-  const [picked, setPicked] = useState<Record<string, string[] | null>>(pickedMap(t));
+  const [state, setState] = useState(() => editorState(t));
+  useEffect(() => setState((s) => refreshed(s, t)), [t]);
+  const { form, toolbox, picked } = state.draft;
+  const setForm = (next: TeammateDraft["form"]) =>
+    setState((s) => ({ ...s, draft: { ...s.draft, form: next } }));
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    setForm({
-      name: t.name,
-      role: t.role,
-      engine: t.engine,
-      model: t.model,
-      effort: t.effort ?? "",
-      personaMd: t.personaMd,
-      playbooks: t.playbooks.join("\n\n---\n\n"),
-    });
-    setToolbox(toolboxMap(t));
-    setPicked(pickedMap(t));
-  }, [t.id, t.updatedAt, t.name, t.role, t.engine, t.model, t.effort, t.personaMd, t.playbooks, t.toolbox]);
-  const dirty =
-    form.name !== t.name ||
-    form.role !== t.role ||
-    form.engine !== t.engine ||
-    form.model !== t.model ||
-    form.effort !== (t.effort ?? "") ||
-    form.personaMd !== t.personaMd ||
-    form.playbooks !== t.playbooks.join("\n\n---\n\n") ||
-    JSON.stringify(toolbox) !== JSON.stringify(toolboxMap(t)) ||
-    JSON.stringify(grantedPicks(toolbox, picked)) !==
-      JSON.stringify(grantedPicks(toolboxMap(t), pickedMap(t)));
+  const dirty = draftDirty(state);
   const st = teammateStatus(t, data.tasks);
   const drift = standingDrift(t, data.events);
   const save = async () => {
@@ -120,13 +178,7 @@ function Editor({
           .split(/\n\s*---\s*\n/)
           .map((s) => s.trim())
           .filter(Boolean),
-        toolbox: Object.entries(toolbox)
-          .filter(([, mode]) => mode !== "off")
-          .map(([connection, mode]) => ({
-            connection,
-            mode,
-            ...(picked[connection] != null ? { tools: picked[connection] } : {}),
-          })),
+        toolbox: toolboxLines(state.draft),
       });
     } finally {
       setBusy(false);
@@ -238,10 +290,7 @@ function Editor({
                 key={c.id}
                 connection={c}
                 grant={{ mode: toolbox[c.name] ?? "off", picked: picked[c.name] ?? null }}
-                onChange={(g) => {
-                  setToolbox({ ...toolbox, [c.name]: g.mode });
-                  setPicked({ ...picked, [c.name]: g.picked });
-                }}
+                onChange={(g) => setState((s) => ({ ...s, draft: withGrant(s.draft, c.name, g) }))}
               />
             ))}
             <span className="text-[12px] text-muted">
@@ -253,26 +302,6 @@ function Editor({
         )}
       </div>
     </div>
-  );
-}
-
-function toolboxMap(t: Teammate): Record<string, ToolMode> {
-  return Object.fromEntries(t.toolbox.map((e) => [e.connection, e.mode]));
-}
-
-function pickedMap(t: Teammate): Record<string, string[] | null> {
-  return Object.fromEntries(t.toolbox.map((e) => [e.connection, e.tools ?? null]));
-}
-
-/** The picks that matter: only on connections that are granted, in a stable shape for a dirty check. */
-function grantedPicks(
-  toolbox: Record<string, ToolMode>,
-  picked: Record<string, string[] | null>,
-): Record<string, string[] | null> {
-  return Object.fromEntries(
-    Object.entries(toolbox)
-      .filter(([, mode]) => mode !== "off")
-      .map(([c]) => [c, picked[c] ? [...picked[c]!].sort() : null]),
   );
 }
 
