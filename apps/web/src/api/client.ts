@@ -274,7 +274,7 @@ export const httpClient: Client = {
     request("PUT", `${c(id)}/departments/${d}/members/${t}`, { isLead }),
   removeDepartmentMember: (id, d, t) => request("DELETE", `${c(id)}/departments/${d}/members/${t}`),
   teammates: (id) => request("GET", `${c(id)}/teammates`),
-  templates: (id) => request("GET", `/api/templates/teammates?companyId=${id}`),
+  templates: (id) => request("GET", `${c(id)}/templates/teammates`),
   templatesExportUrl: (id) => `${c(id)}/templates/export`,
   importTemplates: (id, file) => request("POST", `${c(id)}/templates/import`, file),
   createTeammate: (id, input) => request("POST", `${c(id)}/teammates`, input),
