@@ -202,8 +202,10 @@ describe("each company's planner", () => {
     ])
       await addTeammate(api, base, name!, role);
     const planner = async () => (await api.get(`${base}/planner?refresh=1`)).body;
+    // The recorded Claude plan builds a page in a repository, so every goal here names one.
     const plannedBy = async (text: string) =>
-      (await api.post(`${base}/goals`, { text })).body.planner as string;
+      (await api.post(`${base}/goals`, { text, repoUrl: "https://github.com/acme/site" })).body
+        .planner as string;
     const choose = async (choice: object) =>
       expect((await api.patch(base, { settings: { planner: choice } })).status).toBe(200);
 

@@ -64,7 +64,9 @@ var name in Settings) and a row in the Approvals or Company page:
 A teammate's pull request (a merge request on GitLab) is one commit on the branch `rosterdock/task-12`,
 titled `Task 12: <the task's title>`. Its body names the round, the reviewer who approved it, the checks and
 the diff's sha256. The board never writes a bare `#12`: the git host would link that to the repository's
-own issue or pull request 12.
+own issue or pull request 12. Only build work on a project with a repository opens one; research documents
+stay on the board. **New goal** takes the repository URL and branch for the project a goal opens, and Peter
+plans changes to code only on a project that has one.
 
 ## Runs that go wrong
 

@@ -238,6 +238,8 @@ export function ReviewsView(p: ReviewsViewProps) {
   const current = r.comments.filter((c) => c.round === r.round);
   const openComments = current.filter((c) => !c.resolved).length;
   const project = p.data.projects.find((x) => x.id === r.projectId);
+  // Build work on a project with a repository becomes a pull request; research documents stay on the board.
+  const opensChange = !!project?.repoUrl && r.workKind === "build";
   const pr = r.pullRequests[0] ?? null;
   const decided = r.decisions.filter((d) => d.round === r.round);
   const myDecision = decided.filter((d) => d.by.kind === "user" && d.by.id === p.meId).at(-1) ?? null;
@@ -704,14 +706,16 @@ export function ReviewsView(p: ReviewsViewProps) {
             ) : done ? (
               <span>
                 #{r.taskNumber} is Done.{" "}
-                {project?.repoUrl
+                {opensChange
                   ? "No pull request was opened: the run recorded no base commit."
-                  : "This project has no repository, so there is no pull request."}
+                  : project?.repoUrl
+                    ? "Its documents stay on the board: research opens no pull request."
+                    : "This project has no repository, so there is no pull request."}
               </span>
             ) : (
               <span>
                 Approving marks #{r.taskNumber} Done
-                {project?.repoUrl ? (
+                {opensChange ? (
                   <>
                     {" "}
                     and opens a pull request to <span className="mono text-[12px]">{project.repoUrl}</span>
@@ -720,7 +724,7 @@ export function ReviewsView(p: ReviewsViewProps) {
                 . Request changes sends {author?.name ?? "the author"} back with every comment in their pack.
               </span>
             )}
-            {project?.repoUrl ? (
+            {opensChange ? (
               <span className="chip warn" style={{ width: "fit-content", padding: "6px 10px", fontSize: 12 }}>
                 <span className="dot warn" />
                 Merging needs you

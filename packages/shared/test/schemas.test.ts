@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   CreateDepartmentSchema,
+  CreateGoalSchema,
+  CreateProjectSchema,
   CreateTaskSchema,
   extractMentions,
   handleFor,
   MoveTaskSchema,
   CreateTeammateSchema,
   ModelPriceInputSchema,
+  UpdateProjectSchema,
   UpdateTeammateSchema,
 } from "../src/index.js";
 
@@ -31,6 +34,39 @@ describe("request schemas", () => {
     expect(MoveTaskSchema.safeParse({ status: "blocked", blocker: { code: "kill_switch" } }).success).toBe(
       false,
     );
+  });
+
+  it("a goal opens its project on a repository and a branch, and no repository URL carries a credential", () => {
+    const goal = CreateGoalSchema.parse({
+      text: "Fix the export",
+      repoUrl: "https://github.com/acme/app",
+      defaultBranch: "develop",
+    });
+    expect(goal).toMatchObject({
+      repoUrl: "https://github.com/acme/app",
+      defaultBranch: "develop",
+      caps: {},
+    });
+    expect(CreateGoalSchema.parse({ text: "Fix the export" }).repoUrl).toBeUndefined();
+    // A branch belongs to a repository.
+    expect(CreateGoalSchema.safeParse({ text: "Fix the export", defaultBranch: "develop" }).success).toBe(
+      false,
+    );
+    expect(CreateGoalSchema.safeParse({ text: "Fix the export", repoUrl: "not a url" }).success).toBe(false);
+    // A password, or a user on http(s), is a credential: the worker's token is named in its environment.
+    for (const repoUrl of [
+      "https://deploy:hunter2@github.com/acme/app",
+      "https://deploy@github.com/acme/app",
+      "ssh://git:hunter2@example.com/acme/app.git",
+    ]) {
+      expect(CreateGoalSchema.safeParse({ text: "Fix the export", repoUrl }).success).toBe(false);
+      expect(CreateProjectSchema.safeParse({ name: "App", repoUrl }).success).toBe(false);
+      expect(UpdateProjectSchema.safeParse({ repoUrl }).success).toBe(false);
+    }
+    // The user on an ssh URL is who git signs in as, not a secret.
+    expect(
+      CreateProjectSchema.safeParse({ name: "App", repoUrl: "ssh://git@example.com/acme/app.git" }).success,
+    ).toBe(true);
   });
 
   it("accepts a user or a teammate as assignee", () => {

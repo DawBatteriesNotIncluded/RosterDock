@@ -136,12 +136,21 @@ function shortTitle(text: string): string {
   return (first.length > 80 ? `${first.slice(0, 77)}…` : first) || "Goal";
 }
 
-/** Open a project for the goal and record it as planning. The caller plans it next. */
+/**
+ * Open a project for the goal, on the repository and branch the goal names, and record it as planning. The
+ * caller plans it next.
+ */
 export async function createGoal(
   deps: PeterDeps,
   companyId: string,
   actor: ActorRef,
-  input: { text: string; departmentId?: string | null; caps?: Partial<GoalCaps> },
+  input: {
+    text: string;
+    departmentId?: string | null;
+    repoUrl?: string | null;
+    defaultBranch?: string;
+    caps?: Partial<GoalCaps>;
+  },
 ): Promise<GoalRow> {
   const caps = GoalCapsSchema.parse(input.caps ?? {});
   const { result } = await mutate(deps.db, companyId, actor, async (ctx) => {
@@ -156,8 +165,9 @@ export async function createGoal(
     const title = shortTitle(input.text);
     const project = (
       await ctx.client.query<{ id: string; name: string; client: string }>(
-        "INSERT INTO projects (company_id, name, client, goal) VALUES ($1, $2, 'Internal', $3) RETURNING id, name, client",
-        [companyId, title, input.text],
+        `INSERT INTO projects (company_id, name, client, goal, repo_url, default_branch)
+         VALUES ($1, $2, 'Internal', $3, $4, $5) RETURNING id, name, client`,
+        [companyId, title, input.text, input.repoUrl ?? null, input.defaultBranch ?? "main"],
       )
     ).rows[0]!;
     await ctx.emit(
@@ -277,9 +287,10 @@ async function planClaimed(deps: PeterDeps, first: GoalRow): Promise<GoalRow> {
   if (!manager) throw new HttpError(409, "this company has no project manager teammate");
   const roster = await buildRoster(deps.db, first.company_id, manager);
   const project = (
-    await deps.db.query<{ repo_url: string | null }>("SELECT repo_url FROM projects WHERE id = $1", [
-      first.project_id,
-    ])
+    await deps.db.query<{ repo_url: string | null; default_branch: string }>(
+      "SELECT repo_url, default_branch FROM projects WHERE id = $1",
+      [first.project_id],
+    )
   ).rows[0];
   const answered = (first.questions ?? []).filter((q) => q.answer !== null) as {
     text: string;
@@ -292,7 +303,7 @@ async function planClaimed(deps: PeterDeps, first: GoalRow): Promise<GoalRow> {
     mayAsk: rounds < MAX_QUESTION_ROUNDS,
     maxTasks: first.caps.maxTasks,
     departmentId: first.department_id,
-    repoUrl: project?.repo_url ?? null,
+    repo: project?.repo_url ? { url: project.repo_url, branch: project.default_branch } : null,
   };
   let plan: Plan | null = null;
   let planner = "heuristic";
@@ -323,7 +334,9 @@ async function planClaimed(deps: PeterDeps, first: GoalRow): Promise<GoalRow> {
         });
         usage = result.usage;
         if (result.output) {
-          const problems = validatePlan(result.output, planRoster, first.caps.maxTasks);
+          const problems = validatePlan(result.output, planRoster, first.caps.maxTasks, {
+            repository: !!input.repo,
+          });
           if (!input.mayAsk && result.output.questions.length)
             problems.push("asked questions after its question round");
           if (problems.length === 0) {

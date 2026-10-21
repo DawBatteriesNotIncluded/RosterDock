@@ -424,6 +424,8 @@ export function NewGoalModal({
   const [text, setText] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [tokens, setTokens] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
+  const [branch, setBranch] = useState("");
   const [phase, setPhase] = useState<"input" | "thinking" | "result">("input");
   const [goal, setGoal] = useState<GoalDetail | null>(null);
   const [answers, setAnswers] = useState<string[]>([]);
@@ -435,6 +437,9 @@ export function NewGoalModal({
       const g = await onCreate({
         text: text.trim(),
         departmentId: departmentId || null,
+        ...(repoUrl.trim()
+          ? { repoUrl: repoUrl.trim(), ...(branch.trim() ? { defaultBranch: branch.trim() } : {}) }
+          : {}),
         caps: tokens.trim() ? { tokens: Number(tokens) } : {},
       });
       setGoal(g);
@@ -486,6 +491,28 @@ export function NewGoalModal({
                 onChange={(e) => setTokens(e.target.value.replace(/[^\d]/g, ""))}
                 placeholder="2000000"
                 className="mono"
+              />
+            </Field>
+          </div>
+          <div className="grid2">
+            <Field
+              label="Repository (optional)"
+              hint="Peter plans changes to its code, and each approved change opens a pull request. Without one, the goal delivers files."
+            >
+              <input
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                placeholder="https://github.com/acme/app"
+                className="mono"
+              />
+            </Field>
+            <Field label="Branch" hint="Where its pull requests go.">
+              <input
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                placeholder="main"
+                className="mono"
+                disabled={!repoUrl.trim()}
               />
             </Field>
           </div>

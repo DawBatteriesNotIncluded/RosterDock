@@ -1,11 +1,16 @@
-// Peter's intake: a goal opens a project, is planned (by heuristic, or by the
-// model against recorded responses), asks at most one round of questions,
-// hands off tasks with criteria, outputs, dependencies and assignees, starts
-// the first ones, and stays within its caps. No model, no network.
+// Peter's intake: a goal opens a project, on a repository when it names one,
+// is planned (by heuristic, or by the model against recorded responses), asks
+// at most one round of questions, hands off tasks with criteria, outputs,
+// dependencies and assignees, starts the first ones, and stays within its
+// caps; on a repository its approved build work opens a pull request. No
+// model, no network, no git host.
+import { renderNewFileDiff } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { approveTool } from "../src/mcp/tools.js";
 import { createGoal, planGoal, type PeterDeps } from "../src/peter/goals.js";
 import type { PeterModel } from "../src/peter/model.js";
 import { fakeAnthropic } from "./anthropic-fake.js";
+import { fakeGitHub } from "./github-fake.js";
 import {
   addProject,
   addTeammate,
@@ -13,6 +18,7 @@ import {
   seedCompany,
   startTestBoard,
   workerClaim,
+  workerComplete,
   type Api,
   type TestBoard,
 } from "./helpers.js";
@@ -20,9 +26,10 @@ import {
 let board: TestBoard;
 let modelBoard: TestBoard;
 const anthropic = fakeAnthropic();
+const github = fakeGitHub();
 
 beforeAll(async () => {
-  board = await startTestBoard();
+  board = await startTestBoard({}, { githubFetch: github.fetch });
   modelBoard = await startTestBoard({ anthropicApiKey: "test-key-by-name" }, { modelFetch: anthropic.fetch });
 });
 afterAll(async () => {
@@ -105,6 +112,40 @@ describe("goals by heuristic (no model configured)", () => {
     const stopped = await api.post(`${base}/goals/${res.body.id}/stop`, {});
     expect(stopped.body.status).toBe("stopped");
     expect((await api.post(`${base}/goals/${res.body.id}/stop`, {})).status).toBe(409);
+  });
+
+  it("opens the goal's project on the repository and branch it names, and the build changes its code", async () => {
+    const { api, base } = await seedCompany(board, "g-repo@example.com");
+    const { cody } = await team(api, base);
+    const res = await api.post(`${base}/goals`, {
+      text: "Add a weekly digest command to the app.",
+      repoUrl: "https://github.com/acme/digest",
+      defaultBranch: "develop",
+    });
+    expect(res.status).toBe(201);
+    const project = (await api.get(`${base}/projects/${res.body.projectId}`)).body;
+    expect(project).toMatchObject({ repoUrl: "https://github.com/acme/digest", defaultBranch: "develop" });
+    // Research and requirements still deliver documents; the build is a change to the repository.
+    const build = res.body.tasks[2];
+    expect(build).toMatchObject({
+      workKind: "build",
+      declaredOutputs: [],
+      assignee: { kind: "teammate", id: cody.id },
+    });
+    expect(build.description).toMatch(/^Implement the goal in the repository/);
+    // A repository without a branch: its pull requests go to main.
+    const onMain = (
+      await api.post(`${base}/goals`, { text: "Fix the export.", repoUrl: "https://github.com/acme/digest" })
+    ).body;
+    expect((await api.get(`${base}/projects/${onMain.projectId}`)).body.defaultBranch).toBe("main");
+    // A credential in the URL, or a branch with no repository, is refused before anything opens.
+    const projects = (await api.get(`${base}/projects`)).body.length;
+    for (const body of [
+      { text: "Fix the export.", repoUrl: "https://deploy:hunter2@github.com/acme/digest" },
+      { text: "Fix the export.", defaultBranch: "develop" },
+    ])
+      expect((await api.post(`${base}/goals`, body)).status).toBe(400);
+    expect((await api.get(`${base}/projects`)).body).toHaveLength(projects);
   });
 
   it("caps what teammates can add to a goal: tasks per goal and depth", async () => {
@@ -361,6 +402,39 @@ describe("goals by model (recorded responses)", () => {
     expect(failed.body.planner).toMatch(/^heuristic \(the model call failed/);
   });
 
+  it("is told whether the project has a repository, and plans no change to code without one", async () => {
+    const { api, base } = await seedCompany(modelBoard, "g-model-repo@example.com");
+    const { ricky, cody } = await team(api, base);
+    // A plan that changes code in a project with no repository goes back once with the reason, then the heuristic.
+    const before = anthropic.requests.length;
+    anthropic.queue.push("plan-code-change.json", "plan-code-change.json");
+    const none = (await api.post(`${base}/goals`, { text: "Build the pricing calculator." })).body;
+    expect(none.planner).toMatch(
+      /^heuristic \(the model's plan was refused: task 2 is build work with no outputs, and the project has no repository to change/,
+    );
+    expect(none.tasks.at(-1).declaredOutputs).toEqual(["deliverable.md"]);
+    const [firstTry, secondTry] = anthropic.requests.slice(before).map((r) => r.body.messages[0]!.content);
+    expect(firstTry).toContain("The project has no repository, so there is no code to change");
+    expect(secondTry).toMatch(/- task 2 is build work with no outputs/);
+    // The same plan for a goal on a repository is accepted: its build task changes the code.
+    anthropic.queue.push("plan-code-change.json");
+    const onRepo = (
+      await api.post(`${base}/goals`, {
+        text: "Build the pricing calculator.",
+        repoUrl: "https://github.com/acme/pricing",
+        defaultBranch: "develop",
+      })
+    ).body;
+    expect(onRepo.planner).toBe("model:claude-opus-5");
+    expect(onRepo.tasks.map((t: any) => [t.assignee.id, t.workKind, t.declaredOutputs])).toEqual([
+      [ricky.id, "research", ["pricing-research.md"]],
+      [cody.id, "build", []],
+    ]);
+    expect(anthropic.requests.at(-1)!.body.messages[0]!.content).toContain(
+      "The project's repository: https://github.com/acme/pricing, branch develop.",
+    );
+  });
+
   it("a plan the board cannot accept goes back to the model once, with the reasons", async () => {
     const { api, base } = await seedCompany(modelBoard, "g6b@example.com");
     const { cody } = await team(api, base);
@@ -379,6 +453,112 @@ describe("goals by model (recorded responses)", () => {
       /The board did not accept your last plan for this goal:\n- task 1 names @nobody/,
     );
     expect(secondTry).toContain(firstTry);
+  });
+});
+
+describe("a goal on a repository (the M4 demo)", () => {
+  const BASE_SHA = "0253df7ed00df5f84097e01499f26e4be2f011cf";
+
+  it("one typed goal ends in a reviewed pull request, and only its build work opens one", async () => {
+    const { api, base, companyId } = await seedCompany(board, "g-pr@example.com");
+    const { verifier } = await team(api, base);
+    const created = await api.post(`${base}/goals`, {
+      text: "Add a weekly digest of new deals to the app.",
+      repoUrl: "https://github.com/acme/gtm-automations.git",
+      defaultBranch: "develop",
+    });
+    expect(created.status).toBe(201);
+    const goal = created.body;
+    const [research, requirements, build] = goal.tasks;
+    const deps = {
+      db: board.db,
+      queue: board.queue,
+      hosts: {
+        github: { fetch: github.fetch, token: "ghs_test_token", apiBase: "https://api.github.test" },
+        gitlab: null,
+      },
+    } as unknown as Parameters<typeof approveTool>[0];
+
+    // The assignee's run delivers files in a checkout of the branch; the reviewer teammate approves.
+    const deliverAndApprove = async (task: any, files: Record<string, string>) => {
+      const run = (await api.get(`${base}/tasks/${task.id}/runs`)).body.find(
+        (r: any) => r.status === "queued",
+      );
+      expect(run).toBeTruthy();
+      const { token, api: asRun } = await workerClaim(board, run.id);
+      for (const [path, content] of Object.entries(files))
+        await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
+          path,
+          kind: path.endsWith(".md") ? "document" : "file",
+          content,
+        });
+      await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
+        path: "changes.diff",
+        kind: "diff",
+        content: Object.entries(files)
+          .map(([path, content]) => renderNewFileDiff(path, content))
+          .join(""),
+      });
+      await workerComplete(board, token, run.id, {
+        status: "completed",
+        summary: "Delivered.",
+        baseSha: BASE_SHA,
+      });
+      const review = (await api.get(`${base}/tasks/${task.id}/review`)).body;
+      expect(review.reviewer).toMatchObject({ kind: "teammate", id: verifier.id });
+      return approveTool(
+        deps,
+        {
+          companyId,
+          teammateId: verifier.id,
+          teammateName: "Verifier",
+          handle: "verifier",
+          runId: null,
+          taskId: task.id,
+        },
+        { summary: "Meets the brief." },
+      );
+    };
+
+    // Research and requirements are documents: approved, Done, and no pull request.
+    const sources = "\n\n# Sources\n\n- https://example.com/deals-api\n";
+    const researched = await deliverAndApprove(research, { "research.md": `# Deals${sources}` });
+    expect(researched).toMatchObject({ status: "approved", taskStatus: "done", pullRequests: [] });
+    await api.post(`${base}/peter/pass`, {});
+    const required = await deliverAndApprove(requirements, {
+      "requirements.md": `# Weekly digest${sources}`,
+    });
+    expect(required.pullRequests).toEqual([]);
+
+    // The build is the change to the code: its approval opens the pull request to the goal's branch.
+    await api.post(`${base}/peter/pass`, {});
+    github.requests.length = 0;
+    const built = await deliverAndApprove(build, {
+      "src/digest.ts": 'export const digest = (deals: string[]) => deals.join("\\n");\n',
+    });
+    expect(built.taskStatus).toBe("done");
+    expect(built.pullRequests).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        repo: "acme/gtm-automations",
+        baseBranch: "develop",
+        headBranch: `rosterdock/task-${build.number}`,
+        status: "opened",
+        number: 42,
+      }),
+    ]);
+    const pull = github.requests.find((r) => r.method === "POST" && r.path.endsWith("/pulls"))!.body;
+    expect(pull).toMatchObject({
+      base: "develop",
+      head: `rosterdock/task-${build.number}`,
+      title: `Task ${build.number}: ${build.title}`,
+    });
+    // Every task is Done: the next pass closes the goal, and merging stays with a person.
+    await api.post(`${base}/peter/pass`, {});
+    expect((await api.get(`${base}/goals/${goal.id}`)).body.status).toBe("done");
+    const types = (await api.get(`${base}/events`)).body.map((e: any) => e.type);
+    expect(types.filter((t: string) => t === "pr.opened")).toHaveLength(1);
+    expect(types).toContain("goal.done");
   });
 });
 

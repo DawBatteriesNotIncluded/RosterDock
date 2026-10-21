@@ -26,8 +26,8 @@ scheduled; delete it when it ships.
   `kubernetes` Service's endpoints, or a value the operator sets).
 - A teammate token an owner or admin mints lasts up to 30 days and no route revokes it. Add a list and a
   revoke in Settings, as events.
-- A goal opens a new project with no repository (`apps/board/src/peter/goals.ts`), so the build tasks Peter
-  plans for it have nowhere to push. Let a goal name a project or a repository.
+- A goal names a repository for the project it opens, but cannot go into a project that exists
+  (`apps/board/src/peter/goals.ts`). Let a goal name an existing project.
 - Costs' "If billed the other way" shows US$0.00 for a teammate on a seat with no price set; say the seat is
   unpriced instead.
 - Lint is not type-aware (`recommendedTypeChecked` is off, for speed), and `deploy/**` is ignored, so

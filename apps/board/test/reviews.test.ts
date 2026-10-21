@@ -753,6 +753,22 @@ describe("reviews", () => {
     await completeTaskRun(api, base, task3.id, textOnly);
     const review3 = (await api.get(`${base}/tasks/${task3.id}/review`)).body;
     expect((await api.post(`${base}/reviews/${review3.id}/approve`, {})).body.pullRequests).toEqual([]);
+
+    // Research is documents, delivered on the board: approving it opens no pull request on the repository.
+    const research = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Research the digest's sources",
+        assignee: { kind: "teammate", id: cody.id },
+        workKind: "research",
+      })
+    ).body;
+    await completeTaskRun(api, base, research.id, textOnly, { baseSha: BASE_SHA });
+    const review4 = (await api.get(`${base}/tasks/${research.id}/review`)).body;
+    github.requests.length = 0;
+    const approvedResearch = (await api.post(`${base}/reviews/${review4.id}/approve`, {})).body;
+    expect(approvedResearch).toMatchObject({ status: "approved", taskStatus: "done", pullRequests: [] });
+    expect(github.requests).toEqual([]);
   });
 
   it("sends the author back on a repository with the round's diff to start from, and says on the task when it did not carry over", async () => {
