@@ -107,7 +107,8 @@ its status menu (owners and admins); a cancelled task is reopened from Details.
 - **Failed at once with "Codex cannot keep to <department>'s tool list"**: the department's tool list leaves
   out Bash, or allows only some shell commands, and Codex reads files and runs commands only through its
   shell. Nothing started: no clone, no Codex. Name Bash on its own in the list (Codex's own sandbox still
-  holds it to the rest of the list, `docs/security.md`), or give the work to a Claude Code teammate.
+  holds it to the rest of the list, `docs/security.md`), or give the work to a Claude Code teammate. The
+  board refuses to seat a Codex teammate in such a department; Peter's audit names one seated before.
 - **"runs on opencode, which is not available"**: OpenCode has no worker yet, so the board starts no run on it
   and the pickers no longer offer it. Pick another engine in the teammate's editor.
 - **Failed with "git clone failed"**: the project's repository URL or branch, or the worker's git token

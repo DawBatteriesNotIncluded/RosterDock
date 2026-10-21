@@ -212,7 +212,8 @@ their own, each with its own database and workers.
   to `workspace-write`, so Codex's own sandbox has to work in that pod), and without WebSearch its web
   search is off. Codex reads files and runs commands only through its shell, so it does not run under a
   list that leaves out Bash or allows only some commands (`Bash(npm test:*)`): the worker fails the run
-  before it clones anything.
+  before it clones anything, and the board refuses to seat a Codex teammate in such a department, to set
+  such a list where one sits, or to move a teammate who sits there to Codex.
 - A run cannot file its way out of its department. A task a teammate files from a run, in any project,
   takes the department of the run's task, so its run gets the same sandbox, pool and write policy; the
   board refuses another department, or none, over MCP and REST alike. Outside a run a teammate names only

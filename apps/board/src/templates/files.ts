@@ -8,7 +8,9 @@
 // mutation, so a file that fails half way changes nothing. The raw-secret
 // guard already ran on the body; connections carry env var NAMES only, and a
 // connection the board would not let a person add (a name that is the
-// board's own, a command the operator does not list) is skipped with a note.
+// board's own, a command the operator does not list) is skipped with a note,
+// as is a Codex teammate's seat in a department whose tool list Codex cannot
+// keep to.
 
 import {
   type Effort,
@@ -22,6 +24,7 @@ import {
 import type { Queryable } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
 import type { MutationContext } from "../mutate.js";
+import { codexMisfit, codexNewcomers } from "../teammates/codex.js";
 
 export interface TemplateRow {
   id: string;
@@ -397,6 +400,16 @@ export async function importTemplates(
       memberIds.push(id);
       if (d.lead && handleFor(d.lead) === handleFor(name)) leadId = id;
     }
+    // A Codex teammate's runs would not start under a tool list Codex cannot keep to, so it is not seated there.
+    const misfit = codexMisfit(d.sandbox);
+    if (misfit)
+      for (const t of await codexNewcomers(db, companyId, memberIds, null)) {
+        memberIds.splice(memberIds.indexOf(t.id), 1);
+        if (leadId === t.id) leadId = null;
+        report.notes.push(
+          `department ${d.name}: ${t.name} runs on Codex, which cannot keep to its tool list (${misfit}); not added`,
+        );
+      }
     const res = await db.query<{ id: string }>(
       "INSERT INTO departments (company_id, slug, name, write_policy, sandbox, lead_teammate_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
       [companyId, slug, d.name, d.writePolicy, JSON.stringify(d.sandbox ?? {}), leadId],

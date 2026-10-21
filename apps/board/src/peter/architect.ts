@@ -12,6 +12,7 @@ import { DEFAULT_MODEL, handleFor, WRITE_POLICIES, type ActorRef } from "@roster
 import type { Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate } from "../mutate.js";
+import { codexMisfit } from "../teammates/codex.js";
 import type { PeterDeps } from "./goals.js";
 import { addUsage, type ModelUsage } from "./model.js";
 import { isManager, isReviewer } from "./plan.js";
@@ -56,6 +57,7 @@ export interface AuditFinding {
     | "no_lead"
     | "unseated"
     | "wide_sandbox"
+    | "engine_mismatch"
     | "no_department";
   subject: { kind: "teammate" | "department" | "company"; id: string; name: string } | null;
   text: string;
@@ -524,6 +526,16 @@ export async function auditCompany(deps: PeterDeps, companyId: string): Promise<
         text: `${d.name} is read only but its sandbox allows ${reach.join(", ")}, which can reach live systems.`,
         suggestion: "Narrow the sandbox to files in the working directory, or change the policy on purpose.",
       });
+    // The worker does not start a Codex teammate's run under a tool list Codex cannot keep to.
+    const misfit = codexMisfit(d.sandbox);
+    if (misfit)
+      for (const t of members.filter((m) => m.engine === "codex"))
+        findings.push({
+          kind: "engine_mismatch",
+          subject: { kind: "teammate", id: t.id, name: t.name },
+          text: `${t.name} runs on Codex, which cannot keep to ${d.name}'s tool list (${misfit}), so ${t.name}'s runs there do not start.`,
+          suggestion: `Name Bash on its own in ${d.name}'s tool list, pick another engine for ${t.name}, or take them out of ${d.name}.`,
+        });
   }
   if (!org.departments.length && org.teammates.length > 1)
     findings.push({
