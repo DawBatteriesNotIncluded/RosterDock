@@ -105,6 +105,27 @@ async function resolveTask(deps: ToolDeps, actor: ToolActor, ref: string | undef
   }
 }
 
+/**
+ * The task whose department and client narrow a teammate's live systems: in a run, the run's own, and a
+ * task named besides it is refused; outside one, the task named, only if it is assigned to the teammate.
+ * Naming another task never lends its policy.
+ */
+async function policyTask(deps: ToolDeps, actor: ToolActor, ref: string | undefined): Promise<TaskRow> {
+  const task = await resolveTask(deps, actor, ref);
+  if (actor.taskId) {
+    if (task.id === actor.taskId) return task;
+    const own = await loadTask(deps.db, actor.companyId, actor.taskId);
+    throw new ToolError(
+      `live systems are reached for this run's own task, #${own.number}, under its department and client; #${task.number} is not it`,
+    );
+  }
+  if (task.assignee_kind !== "teammate" || task.assignee_id !== actor.teammateId)
+    throw new ToolError(
+      `outside a run, live systems are reached only for a task assigned to you; #${task.number} is not assigned to you`,
+    );
+  return task;
+}
+
 /** A project by name (case-insensitive) or id. */
 async function resolveProject(deps: ToolDeps, companyId: string, ref: string) {
   const res = await deps.db.query<{ id: string; department_id: string | null }>(
@@ -485,9 +506,9 @@ export async function approveTool(
 
 // --- Governed tools (M5) ------------------------------------------------------
 
-/** The connections in the teammate's toolbox as they apply to a task: modes, tools, verdicts. */
+/** The connections in the teammate's toolbox as they apply to its task: modes, tools, verdicts. */
 export async function listToolsTool(deps: ToolDeps, actor: ToolActor, input: { task?: string } = {}) {
-  const task = await resolveTask(deps, actor, input.task);
+  const task = await policyTask(deps, actor, input.task);
   return brokerList(
     { db: deps.db, mcp: deps.mcp, tracer: deps.tracer ?? null },
     {
@@ -515,7 +536,7 @@ export async function toolCallTool(
 ) {
   guard(input);
   const { task: taskRef, ...call } = input;
-  const task = await resolveTask(deps, actor, taskRef);
+  const task = await policyTask(deps, actor, taskRef);
   try {
     return await brokerCall(
       { db: deps.db, mcp: deps.mcp, tracer: deps.tracer ?? null },
