@@ -100,7 +100,7 @@ async function completeTaskRun(
   base: string,
   taskId: string,
   diff: string,
-  opts: { baseSha?: string } = {},
+  opts: { baseSha?: string; tests?: { kind: "tests"; ok: boolean; title: string } } = {},
 ) {
   const run = (await api.post(`${base}/tasks/${taskId}/runs`, {})).body;
   expect(run.status).toBe("queued");
@@ -121,7 +121,7 @@ async function completeTaskRun(
     summary: "Mapped the workflow.",
     usage: { inputTokens: 1000, outputTokens: 100 },
     ...(opts.baseSha ? { baseSha: opts.baseSha } : {}),
-    checks: [{ kind: "tests", ok: true, title: "npm test passed", detail: "12 passing" }],
+    checks: [opts.tests ?? { kind: "tests", ok: true, title: "npm test passed", detail: "12 passing" }],
   });
   expect(done.status).toBe(200);
   return run.id as string;
@@ -1139,5 +1139,57 @@ describe("reviews", () => {
     expect(secrets.ok).toBe(false);
     expect(secrets.detail.lines).toEqual([{ path: "workflows/vms-digest.json", line: 6 }]);
     expect(JSON.stringify(secrets)).not.toContain("hunter2");
+  });
+
+  it("a failed credential scan or failing tests stop a teammate's approval; a person approves over them, on the record", async () => {
+    const { api, base } = await seedCompany(board, "rv12@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const verifier = await addTeammate(api, base, "Verifier", "reviewer");
+    const project = await addProject(api, base);
+    const leaky = DIFF.replace('+    "active": false,', '+    "smtp_password": "hunter2hunter2",');
+    const red = { kind: "tests" as const, ok: false, title: "npm test failed: 2 failing" };
+    for (const [title, diff, tests, failed] of [
+      ["Leaky", leaky, undefined, { kind: "secrets", title: "1 secret-shaped string in the diff" }],
+      ["Red", DIFF, red, { kind: "tests", title: red.title }],
+    ] as const) {
+      const task = (
+        await api.post(`${base}/tasks`, {
+          projectId: project.id,
+          title,
+          assignee: { kind: "teammate", id: cody.id },
+        })
+      ).body;
+      await completeTaskRun(api, base, task.id, diff, tests ? { tests } : {});
+      const review = (await api.get(`${base}/tasks/${task.id}/review`)).body;
+      expect(review.reviewer).toMatchObject({ kind: "teammate", id: verifier.id });
+      const reviewRun = (await liveRuns(api, base)).find((r) => r.kind === "review")!;
+      const claimed = await claim(reviewRun.id);
+      expect(claimed.pack).toContain(`FAIL ${failed.title}`);
+      expect(claimed.pack).toContain("blocks your approval");
+
+      // The assigned reviewer teammate, over MCP and over REST: refused, and the task stays in review.
+      const vclient = await connect(claimed.token);
+      const refused = await vclient.callTool({ name: "board_approve", arguments: { summary: "Fine." } });
+      expect(refused.isError).toBe(true);
+      expect(text(refused)).toContain(failed.title);
+      await vclient.close();
+      const rest = await board.api(claimed.token).post(`${base}/reviews/${review.id}/approve`, {});
+      expect(rest.status).toBe(409);
+      expect((await api.get(`${base}/tasks/${task.id}`)).body.status).toBe("review");
+      await board.api(claimed.token).post(`/api/worker/runs/${reviewRun.id}/complete`, {
+        status: "completed",
+        summary: "Left it to a person.",
+        usage: {},
+      });
+
+      // A person may approve over it, and the approval says which check they overrode.
+      const approved = await api.post(`${base}/reviews/${review.id}/approve`, {});
+      expect(approved.status).toBe(200);
+      expect(approved.body.status).toBe("approved");
+      const event = (await api.get(`${base}/events?limit=200`)).body.find(
+        (e: any) => e.type === "review.approved" && e.subject.id === review.id,
+      );
+      expect(event.payload.overrodeChecks).toEqual([failed]);
+    }
   });
 });

@@ -27,7 +27,9 @@ model output on their cluster.
   stores it with its sha256; a person approves; the executor re-hashes the stored payload and sends those
   bytes or nothing. There is one door (`callConnectionTool`) with two callers: the broker's read path and
   the approval executor. The worker starts every engine with the board as its only MCP server.
-- **Teammates never mark Done.** An approved review does; a person can veto any review.
+- **Teammates never mark Done.** An approved review does; a person can veto any review. While a blocking
+  check of the round has failed (the credential scan of the diff, the repository's tests), a teammate
+  reviewer cannot approve: a person may, and the approval's event names each check they approved over.
 - **Policy only narrows.** A teammate's toolbox is the ceiling (a connection with a mode, and optionally
   only some of its tools: the rest are never listed to that teammate and refused if called); the
   department's write policy and the project's client policy tighten it and never widen it. Files import

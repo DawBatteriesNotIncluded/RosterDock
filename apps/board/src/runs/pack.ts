@@ -4,6 +4,7 @@
 // pack without its lanes; its tools came back in M5 as the company's connections.
 
 import { payloadSha256, type Criterion, type ReviewStatus } from "@rosterdock/shared";
+import { BLOCKING_CHECKS } from "../reviews/checks.js";
 
 export const RUN_SPEC_VERSION = 1;
 export const HANDOVER_FILE = "handover-summary.md";
@@ -278,6 +279,11 @@ export function renderRunPack(spec: RunSpec): string {
     push("");
     push("Checks so far:");
     for (const c of r.checks) push(`- ${c.ok === null ? "…" : c.ok ? "ok" : "FAIL"} ${c.title}`);
+    if (r.checks.some((c) => c.ok === false && (BLOCKING_CHECKS as readonly string[]).includes(c.kind)))
+      push(
+        "",
+        "A failed credential scan or a failed test run blocks your approval: board_approve is refused. Send the work back with board_request_changes, saying what must change; a person may still approve over it.",
+      );
     if (spec.task.workKind === "research" && r.sources?.length) {
       push(
         "",

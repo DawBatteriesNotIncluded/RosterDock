@@ -32,6 +32,7 @@ import { extractSourceUrls, type SourceFetcher } from "./sources.js";
 import type { ObjectStore } from "../storage/s3.js";
 import { STATUS_LABEL, type TaskRow } from "../tasks/service.js";
 import {
+  BLOCKING_CHECKS,
   evaluationCheck,
   outputsCheck,
   scoreCriteria,
@@ -925,6 +926,15 @@ export async function approveReview(
     ).rows[0]!;
     if (task.status === "doing")
       throw new HttpError(409, `#${task.number} is being worked on; wait for the run to finish`);
+    // A credential in the diff or failing tests are a person's to wave through, never a teammate's.
+    const overrode = (await listChecks(ctx.client, review))
+      .filter((c) => c.ok === false && BLOCKING_CHECKS.includes(c.kind))
+      .map((c) => ({ kind: c.kind, title: c.title }));
+    if (overrode.length && actor.kind === "teammate")
+      throw new HttpError(
+        409,
+        `#${task.number} has a failed check a teammate cannot approve over (${overrode.map((c) => c.title).join("; ")}): request changes, or leave the decision to a person`,
+      );
     const who = await describeActor(ctx.client, companyId, actor);
     const updated = (
       await ctx.client.query<ReviewRow>(
@@ -954,7 +964,11 @@ export async function approveReview(
       authorName: review.author_name ?? null,
       summary: input.summary ?? null,
     };
-    await ctx.emit("review.approved", { kind: "review", id: review.id }, payload);
+    await ctx.emit(
+      "review.approved",
+      { kind: "review", id: review.id },
+      overrode.length ? { ...payload, overrodeChecks: overrode } : payload,
+    );
     await ctx.emit(
       "task.moved",
       { kind: "task", id: review.task_id },
