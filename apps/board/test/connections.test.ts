@@ -158,10 +158,11 @@ describe("connections", () => {
       off: true,
       source: "unconfirmed",
     });
-    const offEvent = (await api.get(`${base}/events?limit=10`)).body.find(
-      (e: { type: string; payload: any }) => e.type === "connection.updated" && e.payload.switchedOff?.length,
-    );
+    const offEvents = (await api.get(`${base}/events?limit=10`)).body as { type: string; payload: any }[];
+    const offEvent = offEvents.find((e) => e.type === "connection.updated" && e.payload.switchedOff?.length);
     expect(offEvent?.payload).toMatchObject({ switchedOff: ["whoami"], off: ["whoami"] });
+    // Switched off, it waits for no confirmation.
+    expect(offEvents.find((e) => e.type === "connection.updated")?.payload.unconfirmed).toEqual([]);
     const on = await api.patch(`${base}/connections/${created.body.id}`, {
       tools: [{ name: "whoami", off: false }],
     });

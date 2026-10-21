@@ -540,7 +540,8 @@ export async function discoverConnectionTools(
         discovered: tools.length,
         reads: tools.filter((t) => !t.write).map((t) => t.name),
         writes: tools.filter((t) => t.write).map((t) => t.name),
-        unconfirmed: tools.filter((t) => t.source === "unconfirmed").map((t) => t.name),
+        // Held for a person to confirm as reads; one switched off waits for nothing.
+        unconfirmed: tools.filter((t) => t.source === "unconfirmed" && !t.off).map((t) => t.name),
       },
     );
     return updated;
