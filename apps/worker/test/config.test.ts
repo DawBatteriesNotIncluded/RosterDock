@@ -31,6 +31,17 @@ describe("worker config", () => {
     expect(() => loadConfig({ ...base, ROSTERDOCK_START_ATTEMPTS: "0" })).toThrow(/START_ATTEMPTS/);
   });
 
+  it("takes Codex's widest sandbox as one Codex knows, workspace-write unless told otherwise", () => {
+    expect(loadConfig(base).codexSandbox).toBe("workspace-write");
+    expect(loadConfig({ ...base, ROSTERDOCK_CODEX_SANDBOX: " danger-full-access " }).codexSandbox).toBe(
+      "danger-full-access",
+    );
+    // A department's list narrows from it, so a mode Codex does not know stops the worker instead.
+    expect(() => loadConfig({ ...base, ROSTERDOCK_CODEX_SANDBOX: "workspace_write" })).toThrow(
+      'ROSTERDOCK_CODEX_SANDBOX must be read-only, workspace-write or danger-full-access, not "workspace_write"',
+    );
+  });
+
   it("sends the git token only to the hosts named for it, github.com unless told otherwise", () => {
     expect(loadConfig(base).gitCredential).toBeNull();
     expect(loadConfig({ ...base, ROSTERDOCK_GIT_TOKEN: "tok" }).gitCredential).toEqual({

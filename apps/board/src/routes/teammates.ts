@@ -11,6 +11,7 @@ import { mintApiToken } from "../auth/tokens.js";
 import type { Db, Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate } from "../mutate.js";
+import { assertCodexEngine } from "../teammates/codex.js";
 import { listInbox } from "../teammates/inbox.js";
 import { parseBody, uuidParam } from "../validate.js";
 
@@ -269,6 +270,7 @@ export function registerTeammateRoutes(app: FastifyInstance, db: Db): void {
           if (dup.rowCount) throw new HttpError(409, `a teammate with the handle @${handle} already exists`);
         }
         if (body.toolbox) await assertToolbox(ctx.client, req.companyId, body.toolbox);
+        if (body.engine === "codex") await assertCodexEngine(ctx.client, req.companyId, id);
         const res = await ctx.client.query<TeammateRow>(
           `UPDATE teammates SET
            name = COALESCE($3, name), handle = COALESCE($4, handle), role = COALESCE($5, role),

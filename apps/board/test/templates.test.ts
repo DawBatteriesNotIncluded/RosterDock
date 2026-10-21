@@ -380,6 +380,48 @@ describe("templates as files", () => {
     }
   });
 
+  it("leaves a Codex teammate out of a department whose tool list Codex cannot keep to, with a note", async () => {
+    const { api, base } = await seedCompany(board, "tf5@example.com");
+    const imported = await api.post(`${base}/templates/import`, {
+      format: "rosterdock/templates/1",
+      teammates: [
+        {
+          name: "Dex",
+          role: "automation engineer",
+          engine: "codex",
+          model: "gpt-6-astra",
+          personaMd: "Scripts.",
+        },
+        { name: "Scout", role: "market analyst", model: "claude-sonnet-5-5", personaMd: "Research." },
+      ],
+      departments: [
+        {
+          name: "Research",
+          lead: "Dex",
+          members: ["Scout", "Dex"],
+          sandbox: { allowedTools: ["Read(./**)", "Write(./**)", "WebSearch"] },
+        },
+        {
+          name: "Engineering",
+          lead: "Dex",
+          sandbox: { allowedTools: ["Read(./**)", "Write(./**)", "Bash"] },
+        },
+      ],
+    });
+    expect(imported.status).toBe(200);
+    expect(imported.body.created.departments).toEqual(["Research", "Engineering"]);
+    expect(imported.body.notes).toEqual([
+      "department Research: Dex runs on Codex, which cannot keep to its tool list (it reads files and runs commands only through its shell, and the list leaves out Bash); not added",
+    ]);
+    const depts = (await api.get(`${base}/departments`)).body;
+    expect(
+      depts.map((d: any) => [d.name, d.leadTeammateId !== null, d.members.map((m: any) => m.name)]),
+    ).toEqual([
+      ["Research", false, ["Scout"]],
+      ["Engineering", true, ["Dex"]],
+    ]);
+  });
+
   it("refuses a file that carries a credential value, a wrong format, or a stranger's role", async () => {
     const { api, base, companyId } = await seedCompany(board, "tf4@example.com");
     const leaky = {

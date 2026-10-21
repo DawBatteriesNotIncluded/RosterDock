@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { RunEventInput, RunUsage } from "@rosterdock/shared";
+import { splitToolList, toolName, type RunEventInput, type RunUsage } from "@rosterdock/shared";
 import type { EngineAdapter, EngineContext, EngineResult } from "./types.js";
 import { clip, tail } from "../text.js";
 
@@ -63,25 +63,6 @@ export function mcpConfig(mcp: { url: string; token: string }): string {
 }
 
 export const MCP_TOOL_PATTERN = "mcp__rosterdock";
-
-/** A tool list as Claude Code takes it: comma or space separated, never inside a rule's parentheses. */
-export function splitToolList(list: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let cur = "";
-  for (const ch of list) {
-    if (ch === "(") depth += 1;
-    else if (ch === ")") depth = Math.max(0, depth - 1);
-    if (depth === 0 && (ch === "," || /\s/.test(ch))) {
-      if (cur.trim()) out.push(cur.trim());
-      cur = "";
-    } else cur += ch;
-  }
-  if (cur.trim()) out.push(cur.trim());
-  return out;
-}
-
-const toolName = (rule: string) => rule.replace(/\(.*$/s, "");
 
 /**
  * The department's tool list narrows the worker's, never widens it. A rule the worker holds as written

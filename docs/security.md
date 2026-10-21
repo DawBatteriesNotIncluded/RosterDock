@@ -206,15 +206,24 @@ their own, each with its own database and workers.
   narrowed list is the whole of Claude Code's built-in tools for the run (`--tools`), not only the ones it
   may use without asking, so a list without Bash leaves the engine no shell, read-only commands
   included; the rules on it (`Read(./**)`) are what it may do with them without asking. Codex
-  has no per-tool list: it runs in the worker's Codex sandbox (`ROSTERDOCK_CODEX_SANDBOX`) whatever the
-  department lists.
+  has no per-tool list, so the worker holds it to the department's with Codex's own controls, which only
+  narrow the worker's Codex sandbox (`ROSTERDOCK_CODEX_SANDBOX`): without Write or Edit it runs
+  read-only, without WebFetch its commands get no network (a worker on `danger-full-access` comes down
+  to `workspace-write`, so Codex's own sandbox has to work in that pod), and without WebSearch its web
+  search is off. Codex reads files and runs commands only through its shell, so it does not run under a
+  list that leaves out Bash or allows only some commands (`Bash(npm test:*)`): the worker fails the run
+  before it clones anything, and the board refuses to seat a Codex teammate in such a department, to set
+  such a list where one sits, or to move a teammate who sits there to Codex.
 - A run cannot file its way out of its department. A task a teammate files from a run, in any project,
   takes the department of the run's task, so its run gets the same sandbox, pool and write policy; the
   board refuses another department, or none, over MCP and REST alike. Outside a run a teammate names only
   a department it belongs to.
 - Claude Code starts with no settings file (`--setting-sources` empty): not the operator's, and not the
   cloned repository's `.claude/settings.json`, so a repository cannot allow itself a tool or add a hook.
-  Codex starts with `--ignore-user-config`.
+  Codex starts with `--ignore-user-config` and `--ignore-rules`, so no rules file in its home or the
+  repository lets a command out of its sandbox (a rule that allows a command runs it unsandboxed), and with
+  its ChatGPT apps and plugins off, so a worker signed in to ChatGPT brings none of that account's
+  connectors into a run.
 - After the engine, the worker runs the repository's own `test` script in the workspace
   (`ROSTERDOCK_RUN_REPO_TESTS`, on by default), once the diff is captured. That script is the
   repository's code and the run may have rewritten it, so it gets PATH, HOME, the temp directory, the

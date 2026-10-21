@@ -9,6 +9,7 @@ import type { Db, Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import type { MutationContext } from "../mutate.js";
 import { mutate } from "../mutate.js";
+import { assertCodexSeats, codexMembers, codexMisfit, codexRefused } from "../teammates/codex.js";
 import { parseBody, uuidParam } from "../validate.js";
 
 interface DepartmentRow {
@@ -166,6 +167,12 @@ export function registerDepartmentRoutes(app: FastifyInstance, db: Db): void {
           ...new Set([...(body.leadTeammateId ? [body.leadTeammateId] : []), ...body.memberTeammateIds]),
         ];
         const names = await assertTeammates(ctx.client, req.companyId, ids);
+        await assertCodexSeats(
+          ctx.client,
+          req.companyId,
+          { id: null, name: body.name, sandbox: body.sandbox ?? null },
+          ids,
+        );
         const res = await ctx.client.query<DepartmentRow>(
           "INSERT INTO departments (company_id, slug, name, write_policy, sandbox) VALUES ($1, $2, $3, $4, $5) RETURNING *",
           [req.companyId, slug, body.name, body.writePolicy, JSON.stringify(body.sandbox ?? {})],
@@ -222,6 +229,12 @@ export function registerDepartmentRoutes(app: FastifyInstance, db: Db): void {
       const body = parseBody(UpdateDepartmentSchema, req.body);
       const { result } = await mutate(db, req.companyId, req.principal.actor, async (ctx) => {
         const dept = await loadDepartment(ctx.client, req.companyId, id);
+        // A tool list Codex cannot keep to would stop the Codex teammates who sit here: refused, unless it already did.
+        const misfit = body.sandbox ? codexMisfit(body.sandbox) : null;
+        if (misfit && !codexMisfit(dept.sandbox)) {
+          const codex = await codexMembers(ctx.client, req.companyId, id);
+          if (codex.length) throw codexRefused(codex, body.name ?? dept.name, misfit);
+        }
         if (body.name !== undefined || body.writePolicy !== undefined || body.sandbox !== undefined) {
           const res = await ctx.client.query<DepartmentRow>(
             "UPDATE departments SET name = COALESCE($3, name), write_policy = COALESCE($4, write_policy), sandbox = COALESCE($5::jsonb, sandbox), updated_at = now() WHERE id = $1 AND company_id = $2 RETURNING *",
@@ -241,11 +254,9 @@ export function registerDepartmentRoutes(app: FastifyInstance, db: Db): void {
           );
         }
         if (body.leadTeammateId !== undefined) {
-          const names = await assertTeammates(
-            ctx.client,
-            req.companyId,
-            body.leadTeammateId ? [body.leadTeammateId] : [],
-          );
+          const ids = body.leadTeammateId ? [body.leadTeammateId] : [];
+          const names = await assertTeammates(ctx.client, req.companyId, ids);
+          await assertCodexSeats(ctx.client, req.companyId, dept, ids);
           await setLead(ctx, dept, body.leadTeammateId, names);
         }
         if (ctx.events.length === 0) {
@@ -298,6 +309,7 @@ export function registerDepartmentRoutes(app: FastifyInstance, db: Db): void {
       const { result } = await mutate(db, req.companyId, req.principal.actor, async (ctx) => {
         const dept = await loadDepartment(ctx.client, req.companyId, departmentId);
         const names = await assertTeammates(ctx.client, req.companyId, [teammateId]);
+        await assertCodexSeats(ctx.client, req.companyId, dept, [teammateId]);
         const existing = await ctx.client.query(
           "SELECT 1 FROM department_members WHERE department_id = $1 AND teammate_id = $2",
           [departmentId, teammateId],
