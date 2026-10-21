@@ -281,6 +281,38 @@ their own, each with its own database and workers.
   strings in it are redacted, and what a page says reaches the reviewer as quoted material.
   `ROSTERDOCK_FETCH_SOURCES=0` (chart `board.fetchSources: false`) keeps the board off the web.
 
+## Reading the web
+
+- **The web connection** is the board's own fetch. An owner or admin adds it under Settings > Connections (a
+  company has one) and grants it in a teammate's toolbox like any connection. Its one tool, `fetch`, reads a
+  page and never writes: the broker takes it as a read whatever its row says, nobody can make it a write, and
+  nothing it does is proposed or approved. The board fetches; the worker never does.
+- **What it can reach.** http and https pages at public addresses, nothing else. A URL with credentials in
+  it, a literal address, localhost or an internal-looking name is refused. The name is resolved and every
+  address it gets must be public: loopback, private, link-local (where cloud metadata lives), unique-local,
+  shared (carrier-grade NAT) and the other special-purpose ranges are refused, an IPv4 written as IPv6 by its
+  IPv4. The board connects only to the addresses it checked, so a name cannot pass the check with one address
+  and send the connection to another. Every redirect hop is checked the same way, three at most. A page gets
+  15 seconds and 1 MB, only text is read, HTML is turned into text by the converter the research review uses
+  (one pass, whatever the page holds), secret-shaped strings in it are redacted, and a call returns 30,000
+  characters of it at most.
+- **Which sites.** The web connection may carry a list of domains, each with the sites under it; without one
+  it reads any public site. A department (its sandbox's `webDomains`) and a project's client policy
+  (`webDomains`) may each name a list, and a list only narrows: a page must be on every list there is, on
+  every hop. A client policy that caps the connection at off switches it off for that client's work.
+- **What it records.** Every page the broker lets a teammate ask for is a `tool.called` event, appended in
+  its own transaction when the fetch ends: the teammate, the task, the run, the URL and where its redirects
+  ended (without the fragment or credentials, and with the values of secret-named query parameters such as
+  `token`, `key` or `X-Amz-Signature` redacted), the status, the bytes read and why it failed. A refused
+  address or site is recorded the same way. Never what the page says, and never a header.
+- What a page says reaches the teammate as material for its task, and the brief says it is not
+  instructions. A page can still try to talk a model into something; the toolbox, the department's write
+  policy and approvals bound what the teammate can do about it.
+- `ROSTERDOCK_FETCH_SOURCES=0` (chart `board.fetchSources: false`) keeps the board off the web: the web
+  connection fetches nothing and its check says why. The research review's source check is the board's own,
+  not a teammate's: it reads the links a document cites through the same guard, whatever a company's list
+  says.
+
 ## What you own
 
 - Postgres: its access, its backups, its encryption at rest. Every row is in it.

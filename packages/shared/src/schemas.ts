@@ -7,6 +7,7 @@ import { BLOCKER_CODES } from "./blockers.js";
 import { TOOL_MODES } from "./policy.js";
 import { POOL_RE } from "./queue.js";
 import { ACTOR_KINDS, ROLES } from "./roles.js";
+import { normalizeDomain } from "./web.js";
 
 /**
  * A model id as an engine takes it. Claude's are all dashes (`claude-opus-5-5`); written the way people say
@@ -64,6 +65,18 @@ const slug = z
   .regex(/^[a-z0-9][a-z0-9-]*$/, "lowercase letters, digits and dashes");
 const uuid = z.string().uuid();
 const longText = z.string().max(20_000);
+/** A domain on a web list, as typed (`docs.example.com`, `*.example.com`, a URL) and kept normalised (web.ts). */
+const webDomain = z
+  .string()
+  .trim()
+  .max(300)
+  .refine((v) => normalizeDomain(v) !== null, "a domain, such as example.com")
+  .transform((v) => normalizeDomain(v)!);
+/**
+ * Web domains, each with the sites under it. Empty or absent says nothing: on the company's web connection,
+ * any public site; on a department or a client, no narrowing.
+ */
+export const WebDomainsSchema = z.array(webDomain).max(100);
 const outputName = z
   .string()
   .trim()
@@ -219,6 +232,11 @@ export const SandboxPresetSchema = z.object({
    * policy (the chart's worker.pools). Empty: the default fleet.
    */
   pool: z.string().regex(POOL_RE, "a pool name: lowercase letters, digits and dashes").optional(),
+  /**
+   * The web domains this department's runs may read through the company's web connection. Narrows the
+   * company's list, never widens it; empty or absent: the company's list.
+   */
+  webDomains: WebDomainsSchema.optional(),
 });
 export type SandboxPreset = z.infer<typeof SandboxPresetSchema>;
 
@@ -284,6 +302,8 @@ export const UpdateTeammateSchema = z.object({
 export const ClientPolicySchema = z.object({
   default: z.enum(TOOL_MODES).nullable().default(null),
   caps: z.record(slug, z.enum(TOOL_MODES)).default({}),
+  /** The web domains this client lets the company's web connection read; narrows, never widens. */
+  webDomains: WebDomainsSchema.optional(),
 });
 export type ClientPolicyInput = z.infer<typeof ClientPolicySchema>;
 
@@ -668,7 +688,11 @@ export const ApprovalDecisionSchema = z.object({
 });
 export type ApprovalDecisionInput = z.infer<typeof ApprovalDecisionSchema>;
 
-export const CONNECTION_KINDS = ["mcp", "openapi"] as const;
+/**
+ * mcp: an MCP server over HTTP or stdio. openapi: an OpenAPI service. web: the board's own web fetch, one per
+ * company, whose one tool reads a page and never writes.
+ */
+export const CONNECTION_KINDS = ["mcp", "openapi", "web"] as const;
 export const MCP_TRANSPORTS = ["http", "stdio"] as const;
 const envName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "an env var NAME");
 /** A company secret's name: the env var NAME connections resolve. */
@@ -733,6 +757,8 @@ export const CreateConnectionSchema = z
     tools: z.array(ConnectionToolSchema).max(500).optional(),
     /** Authorise by OAuth instead of a credential by name. */
     oauth: ConnectionOAuthSchema.optional(),
+    /** The web connection only: the domains it may read. Empty or absent: any public site. */
+    domains: WebDomainsSchema.nullable().optional(),
   })
   .refine((v) => !(v.authEnvName && v.oauth), { message: "a credential by name or OAuth, not both" });
 export type CreateConnectionInput = z.input<typeof CreateConnectionSchema>;
@@ -745,6 +771,8 @@ export const UpdateConnectionSchema = z.object({
   enabled: z.boolean().optional(),
   /** Switch to OAuth (an object; a new client id or scopes start over), or back to a credential by name (null). */
   oauth: ConnectionOAuthSchema.nullable().optional(),
+  /** The web connection only: the domains it may read; empty or null for any public site. */
+  domains: WebDomainsSchema.nullable().optional(),
   /** Reclassify tools by name (a person's word is recorded as the source), or switch one off or on for everyone. */
   tools: z
     .array(

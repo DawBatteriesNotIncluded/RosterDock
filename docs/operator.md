@@ -152,6 +152,21 @@ department's sandbox ("Runs on" when creating it, or PATCH `sandbox.pool`). Its 
 a full reference) for a fleet on another engine build or a pinned tag; without one it runs `worker.image`,
 else the chart's. Check `rosterdock_runs_live` and the fleet's pods when such a department's tasks sit queued.
 
+## Web access for teammates
+
+A teammate reaches nothing outside the board on its own: Claude Code runs with the tools the worker lists
+(read, write and edit in the run's folder by default), and every live system is a connection the board
+governs. The web is one too.
+
+- **The web connection.** Settings > Connections > Web, built in: the board reads public pages for a
+  teammate (`fetch`, a read; one per company). Grant it in the teammate's toolbox, and the brief tells them
+  how to read a page; each page they read is a line in Activity (the URL, the status, the size, never what
+  it says). Leave its domains empty for any public site, or list the ones it may read: a department narrows
+  that list from its sandbox (`webDomains`), a project's client from its client policy (Settings >
+  Connections > Client policies), never wider. An address that is not public is refused whatever a list says
+  (`docs/security.md`, Reading the web). With `ROSTERDOCK_FETCH_SOURCES=0` the board stays off the web, and
+  the connection's Check says so.
+
 ## Upgrades and backups
 
 - Upgrade by naming the next chart version (`docs/install.md`, Upgrading). The chart's version is its
@@ -200,7 +215,7 @@ setting with no value of its own from `board.extraEnv`. The ones an operator cha
 | `ROSTERDOCK_PETER_INTERVAL_MS`               | How often Peter's loop passes over every company; 0 disables it.                                                                                                                                                                                                                                                                                                       |
 | `ROSTERDOCK_RUN_STALE_AFTER_MS`              | How long a silent run is left before the reaper interrupts it.                                                                                                                                                                                                                                                                                                         |
 | `ROSTERDOCK_DB_POOL_MAX`                     | Postgres connections per board replica (the board and the queue).                                                                                                                                                                                                                                                                                                      |
-| `ROSTERDOCK_FETCH_SOURCES`                   | `0` keeps the board off the web: a research reviewer gets no fetched sources (chart `board.fetchSources: false`).                                                                                                                                                                                                                                                      |
+| `ROSTERDOCK_FETCH_SOURCES`                   | `0` keeps the board off the web: a research reviewer gets no fetched sources, and the web connection fetches nothing (chart `board.fetchSources: false`).                                                                                                                                                                                                              |
 | `OTEL_EXPORTER_OTLP_*`                       | Traces.                                                                                                                                                                                                                                                                                                                                                                |
 | Worker: `ROSTERDOCK_WORKER_POOL`             | Which queue this fleet consumes.                                                                                                                                                                                                                                                                                                                                       |
 | Worker: `ROSTERDOCK_HEARTBEAT_MS`            | How often a running run tells the board it is alive (15000). Keep it well under `ROSTERDOCK_RUN_STALE_AFTER_MS`, or the board takes the run over (chart `worker.extraEnv`).                                                                                                                                                                                            |

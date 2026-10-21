@@ -190,8 +190,8 @@ export interface Project {
   status: string;
   repoUrl: string | null;
   defaultBranch: string;
-  /** What this project's client lets any teammate do with each connection. Only narrows. */
-  clientPolicy: { default: ToolMode | null; caps: Record<string, ToolMode> };
+  /** What this project's client lets any teammate do with each connection, and the web sites it lets the web connection read. Only narrows. */
+  clientPolicy: { default: ToolMode | null; caps: Record<string, ToolMode>; webDomains?: string[] };
   /** A cost centre, client code or invoice reference the monthly cost report groups by. */
   chargebackTag: string | null;
   counts: { open: number; running: number; blocked: number; review: number; done: number };
@@ -291,6 +291,8 @@ export interface Features {
   sharedEnvNames?: string[];
   /** The command lines a stdio connection may run inside the board, as the operator wrote them; a final `*` lets more arguments follow. Only for people who manage connections. */
   stdioCommands?: string[];
+  /** Whether the board reads the web (the web connection's pages, research sources); false: its operator keeps it off. */
+  web?: boolean;
 }
 
 export interface Connection {
@@ -298,7 +300,8 @@ export interface Connection {
   companyId: string;
   name: string;
   catalogId: string | null;
-  kind: "mcp" | "openapi";
+  /** web: the board's own fetch; its manifest keeps the company's list of web domains. */
+  kind: "mcp" | "openapi" | "web";
   transport: "http" | "stdio";
   url: string | null;
   command: string | null;

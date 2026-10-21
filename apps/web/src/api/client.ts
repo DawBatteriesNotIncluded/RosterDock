@@ -16,6 +16,7 @@ import type {
   ReviewCommentInput,
   ReviewScoreInput,
   UpdateConnectionInput,
+  UpdateDepartmentInput,
   UpdateProjectInput,
   UpdateTaskInput,
   UpdateTeammateInput,
@@ -129,6 +130,11 @@ export interface Client {
     isLead: boolean,
   ): Promise<Department>;
   removeDepartmentMember(companyId: string, departmentId: string, teammateId: string): Promise<Department>;
+  updateDepartment(
+    companyId: string,
+    departmentId: string,
+    input: UpdateDepartmentInput,
+  ): Promise<Department>;
   teammates(companyId: string): Promise<Teammate[]>;
   templates(companyId: string): Promise<TeammateTemplate[]>;
   /** Where the browser downloads the company's templates file from. */
@@ -273,6 +279,7 @@ export const httpClient: Client = {
   setDepartmentMember: (id, d, t, isLead) =>
     request("PUT", `${c(id)}/departments/${d}/members/${t}`, { isLead }),
   removeDepartmentMember: (id, d, t) => request("DELETE", `${c(id)}/departments/${d}/members/${t}`),
+  updateDepartment: (id, d, input) => request("PATCH", `${c(id)}/departments/${d}`, input),
   teammates: (id) => request("GET", `${c(id)}/teammates`),
   templates: (id) => request("GET", `${c(id)}/templates/teammates`),
   templatesExportUrl: (id) => `${c(id)}/templates/export`,

@@ -221,7 +221,7 @@ describe("env var names a company writes", () => {
     const viewer = await board.login("op4-viewer@example.com");
     await api.post(`${base}/members`, { email: "op4-viewer@example.com", role: "viewer" });
     const seen = (await board.api(viewer.token).get("/api/features")).body;
-    expect(seen).toEqual({ oauth: true, objectStore: false });
+    expect(seen).toEqual({ oauth: true, objectStore: false, web: true });
   });
 
   it("the board will not start sharing one of its own names", () => {

@@ -203,6 +203,7 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
     log: { warn: (msg) => app.log.warn(msg) },
     pool: mcpPool,
     stdioCommands: config.stdioCommands,
+    web,
   };
   const notify: NotifyDeps = {
     db,
@@ -343,6 +344,8 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
     return {
       oauth: !!secrets,
       objectStore: !!store,
+      // Whether the board reads the web: the web connection's pages and research sources.
+      web: !!web,
       ...(manages
         ? { sharedEnvNames: config.sharedEnvNames, stdioCommands: config.stdioCommands.map(stdioCommandLine) }
         : {}),

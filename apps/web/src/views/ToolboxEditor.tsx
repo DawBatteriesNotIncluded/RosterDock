@@ -9,6 +9,7 @@ import { Ban, Check, ChevronDown, ChevronRight, Hand } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { Connection } from "../api/types.ts";
 import { Tip } from "../components/ui.tsx";
+import { domainsPhrase, webDomainsOf } from "./WebDomains.tsx";
 
 export interface Grant {
   mode: ToolMode;
@@ -201,6 +202,7 @@ export function ConnectionGrant({
         <span className="text-[12px] text-muted">
           {summary}
           {!c.enabled ? " · switched off in Settings" : ""}
+          {c.kind === "web" ? ` · the board reads ${domainsPhrase(webDomainsOf(c))} for them` : ""}
         </span>
         {c.tools.length === 0 ? (
           // Nothing discovered yet: grant the whole connection with a mode; pick tools once they are known.

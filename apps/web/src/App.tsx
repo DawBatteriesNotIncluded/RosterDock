@@ -357,6 +357,25 @@ export function App() {
       onDesign={() => setModal({ kind: "design" })}
       onHire={async () => setModal({ kind: "hire", templates: await run(() => client.templates(cid)) })}
       onOpenBoard={(id) => setUi({ view: "board", departmentId: id, selectedTaskId: null })}
+      {...(data.company.role === "owner" || data.company.role === "admin"
+        ? {
+            onSaveWebDomains: async (id: string, webDomains: string[]) => {
+              const d = data.departments.find((x) => x.id === id);
+              if (!d) return;
+              const { webDomains: _, ...sandbox } = d.sandbox ?? {};
+              await run(
+                () =>
+                  client.updateDepartment(cid, id, {
+                    sandbox: webDomains.length ? { ...sandbox, webDomains } : sandbox,
+                  }),
+                webDomains.length
+                  ? `${d.name}'s runs read the web only within ${webDomains.join(", ")}.`
+                  : `${d.name}'s runs read the company's web sites.`,
+              );
+              await refresh();
+            },
+          }
+        : {})}
       onDissolve={async (id) => {
         const d = data.departments.find((x) => x.id === id);
         if (!d || !window.confirm(`Dissolve ${d.name}? Teammates keep their toolboxes.`)) return;
@@ -534,7 +553,9 @@ export function App() {
         createConnection: async (input) => {
           const c = await run(
             () => client.createConnection(cid, input),
-            `${input.name} added. Discover its tools.`,
+            input.kind === "web"
+              ? `${input.name} added. Grant it in a teammate's toolbox.`
+              : `${input.name} added. Discover its tools.`,
           );
           await refresh();
           return c;

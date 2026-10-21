@@ -26,6 +26,7 @@ import {
 import { capFor, ClientPoliciesPanel } from "../src/views/ClientPoliciesPanel.tsx";
 import { messageWithIssues } from "../src/api/client.ts";
 import {
+  AddWebForm,
   checkLine,
   confirmAsRead,
   ConnectionsPanel,
@@ -33,6 +34,9 @@ import {
   heldReads,
   stdioListed,
 } from "../src/views/ConnectionsPanel.tsx";
+import { ConnectionGrant } from "../src/views/ToolboxEditor.tsx";
+import { domainsText, parseDomains, webDomainsOf } from "../src/views/WebDomains.tsx";
+import { policyNarrows, withWebDomains } from "../src/views/ClientPoliciesPanel.tsx";
 import { BoardView } from "../src/views/BoardView.tsx";
 import { CompanyView } from "../src/views/CompanyView.tsx";
 import {
@@ -1224,6 +1228,163 @@ describe("views render with sample data", () => {
     expect(render(<CreateTaskModal data={fixture} onClose={noop} onCreate={asyncNoop} />)).toContain(
       "VMS architecture map",
     );
+  });
+});
+
+describe("the web connection", () => {
+  const web = {
+    ...connectionFixtures[0]!,
+    id: "c-web",
+    name: "web",
+    catalogId: null,
+    kind: "web" as const,
+    url: null,
+    authEnvName: null,
+    tools: [
+      { name: "fetch", description: "Read a public web page", write: false, source: "catalog" as const },
+    ],
+    manifest: { domains: ["gong.io"] },
+    discoveredAt: null,
+    lastCheck: null,
+  };
+  const props = {
+    loadCatalog: async () => [],
+    createConnection: async () => web,
+    previewOpenApi: async () => ({ operations: [], errors: [] }),
+    createOpenApiConnection: async () => web,
+    updateConnection: async () => web,
+    discoverConnection: async () => web,
+    checkConnection: async () => web,
+    deleteConnection: asyncNoop,
+    startOAuth: async () => ({ url: "https://auth.example.test/authorize" }),
+    initialCatalog: [],
+  };
+
+  it("reads a typed list of sites, and the company's list off the connection", () => {
+    expect(parseDomains(" Gong.io, https://developers.hubspot.com/docs\n*.example.org gong.io ")).toEqual({
+      domains: ["gong.io", "developers.hubspot.com", "example.org"],
+      bad: null,
+    });
+    expect(parseDomains("gong.io, localhost")).toEqual({ domains: ["gong.io"], bad: "localhost" });
+    expect(parseDomains("")).toEqual({ domains: [], bad: null });
+    expect(domainsText(["gong.io", "hubspot.com"])).toBe("gong.io, hubspot.com");
+    expect(domainsText(null)).toBe("");
+    expect(webDomainsOf(web)).toEqual(["gong.io"]);
+    expect(webDomainsOf({ manifest: { domains: [] } })).toBeNull();
+    expect(webDomainsOf({ manifest: null })).toBeNull();
+  });
+
+  it("shows on its card what it reads, with no credential and nothing to discover, and when the board is off the web", () => {
+    expect(connectionSummary(web)).toBe(
+      "Web · the board's own fetch · reads only gong.io and the sites under it",
+    );
+    expect(connectionSummary({ ...web, manifest: { domains: null } })).toBe(
+      "Web · the board's own fetch · reads any public site",
+    );
+    const html = render(<ConnectionsPanel {...props} connections={[web]} canEdit />);
+    expect(html).toContain("Web · the board&#x27;s own fetch");
+    expect(html).toContain("Sites");
+    expect(html).toContain('aria-label="web sites"');
+    expect(html).toContain('value="gong.io"');
+    expect(html).not.toContain("Discover");
+    expect(html).not.toContain("no credential");
+    expect(html).toContain("Web, built in");
+    const offline = render(
+      <ConnectionsPanel
+        {...props}
+        connections={[web]}
+        features={{ oauth: false, objectStore: false, web: false }}
+        canEdit
+      />,
+    );
+    expect(offline).toContain("operator keeps it off the web: it reads no page");
+    const viewer = render(<ConnectionsPanel {...props} connections={[web]} canEdit={false} />);
+    expect(viewer).toContain("only gong.io and the sites under it");
+    expect(viewer).not.toContain('aria-label="web sites"');
+  });
+
+  it("is added once: the form asks a name and the sites, and says when the company has it", () => {
+    const fresh = render(<AddWebForm existing={undefined} offline={false} onCreate={async () => true} />);
+    expect(fresh).toContain("Add the web connection");
+    expect(fresh).toContain('value="web"');
+    expect(fresh).toContain("empty for any public site");
+    expect(fresh).toContain("never what it says");
+    const had = render(<AddWebForm existing={web} offline onCreate={async () => true} />);
+    expect(had).toContain("This company has its web connection: web.");
+    expect(had).not.toContain("Add the web connection");
+    expect(had).toContain("keeps it off the web");
+  });
+
+  it("client policies and departments narrow its sites; the toolbox says what it reads", () => {
+    const data: CompanyData = { ...connectionsFixture, connections: [...connectionFixtures, web] };
+    const policies = render(<ClientPoliciesPanel data={data} canEdit saveClientPolicy={asyncNoop} />);
+    expect(policies).toContain("Web sites");
+    expect(policies).toContain("narrows what web may read for that client");
+    expect(
+      render(<ClientPoliciesPanel data={connectionsFixture} canEdit saveClientPolicy={asyncNoop} />),
+    ).not.toContain("Web sites");
+    const policy = { default: null, caps: {} };
+    expect(withWebDomains(policy, ["gong.io"])).toEqual({ default: null, caps: {}, webDomains: ["gong.io"] });
+    expect(withWebDomains({ ...policy, webDomains: ["gong.io"] }, [])).toEqual(policy);
+    expect(policyNarrows(policy)).toBe(false);
+    expect(policyNarrows({ ...policy, webDomains: ["gong.io"] })).toBe(true);
+    const departments = {
+      ...data,
+      departments: data.departments.map((d, i) =>
+        i === 0 ? { ...d, sandbox: { webDomains: ["help.gong.io"] } } : d,
+      ),
+    };
+    const view = (onSave?: (id: string, domains: string[]) => Promise<void>) =>
+      render(
+        <DepartmentsView
+          data={departments}
+          onNewDepartment={noop}
+          onDissolve={asyncNoop}
+          onOpenBoard={noop}
+          onCycleCell={asyncNoop}
+          onHire={noop}
+          onDesign={noop}
+          {...(onSave ? { onSaveWebDomains: onSave } : {})}
+        />,
+      );
+    expect(view(asyncNoop)).toContain('value="help.gong.io"');
+    expect(view()).toContain("help.gong.io");
+    expect(view()).toContain("Its web sites narrow what web reads for its tasks");
+    const grant = render(
+      <ConnectionGrant connection={web} grant={{ mode: "read", picked: null }} onChange={noop} />,
+    );
+    expect(grant).toContain("the board reads only gong.io and the sites under it for them");
+  });
+
+  it("names each page in Activity, never what it says", () => {
+    const at = "2026-10-21T12:00:00.000Z";
+    const ev = (payload: Record<string, unknown>) => ({
+      id: "e-web",
+      companyId: fixture.company.id,
+      seq: 900,
+      type: "tool.called" as const,
+      actor: { kind: "teammate" as const, id: fixture.teammates[0]!.id },
+      subject: { kind: "connection" as const, id: "c-web" },
+      payload: { connection: "web", tool: "fetch", number: 140, ...payload },
+      createdAt: at,
+    });
+    expect(
+      describeEvent(ev({ url: "https://help.gong.io/calls", ok: true, status: 200, bytes: 34_816 }), fixture)
+        .text,
+    ).toContain("read https://help.gong.io/calls for #140 · 200 · 34 KB");
+    expect(
+      describeEvent(
+        ev({
+          url: "https://intranet.gong.io/",
+          ok: false,
+          status: null,
+          bytes: 0,
+          note: "intranet.gong.io resolves to 10.0.0.5",
+        }),
+        fixture,
+      ).text,
+    ).toContain("could not read https://intranet.gong.io/ for #140: intranet.gong.io resolves to 10.0.0.5");
+    expect(describeEvent(ev({ ok: true }), fixture).text).toContain("read web · fetch for #140");
   });
 });
 

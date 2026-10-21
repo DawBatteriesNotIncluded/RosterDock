@@ -24,6 +24,7 @@ import { stdioRefusal } from "../operator.js";
 import { notSetForCompany } from "../secrets/company.js";
 import type { SecretStore } from "../secrets/store.js";
 import { isExpiring, refreshTokens, type TokenAuth } from "./oauth.js";
+import type { WebReader } from "../web/transport.js";
 
 export const MCP_CALL_TIMEOUT_MS = 30_000;
 export const MCP_RESULT_MAX_CHARS = 200_000;
@@ -69,6 +70,8 @@ export interface McpClientDeps {
   stdioCommands?: readonly StdioCommand[];
   /** Whose pooled children these are: the company (withCompanyEnv). A child never serves another scope. */
   poolScope?: string;
+  /** What the web connection reads pages with (web/transport.ts). Null or absent: the board is kept off the web. */
+  web?: WebReader | null;
 }
 
 export const MCP_POOL_IDLE_MS = 5 * 60_000;

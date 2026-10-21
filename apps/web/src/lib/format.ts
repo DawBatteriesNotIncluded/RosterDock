@@ -612,6 +612,15 @@ export function describeEvent(
             : `A needs-you notification went out through ${p(ev).target}`,
       };
     case "tool.called":
+      // The web connection's record names the page: where, the status and the size, never what it says.
+      if (typeof p(ev).url === "string")
+        return {
+          text:
+            p(ev).ok === false
+              ? `${who} could not read ${p(ev).url} for ${n}: ${p(ev).note ?? p(ev).error ?? "no answer"}`
+              : `${who} read ${p(ev).url} for ${n} · ${p(ev).status} · ${byteSize(Number(p(ev).bytes ?? 0))}`,
+          go: { view: "board", taskId: p(ev).taskId },
+        };
       return {
         text: `${who} read ${p(ev).connection} · ${p(ev).tool} for ${n}${p(ev).ok === false ? ` · failed: ${p(ev).error ?? ""}` : ""}`,
         go: { view: "board", taskId: p(ev).taskId },
@@ -619,6 +628,13 @@ export function describeEvent(
     default:
       return { text: `${who}: ${ev.type}` };
   }
+}
+
+/** A size in bytes as people read it: 812 B, 34 KB, 1.2 MB. */
+export function byteSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function lowerFirst(s: string): string {

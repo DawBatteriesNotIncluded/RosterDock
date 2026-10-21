@@ -11,3 +11,4 @@ export * from "./otel.js";
 export * from "./queue.js";
 export * from "./operator.js";
 export * from "./text.js";
+export * from "./web.js";

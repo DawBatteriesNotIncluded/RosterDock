@@ -17,6 +17,10 @@
     "./text": {
       "types": "./dist/text.d.ts",
       "default": "./dist/text.js"
+    },
+    "./web": {
+      "types": "./dist/web.d.ts",
+      "default": "./dist/web.js"
     }
   },
   "scripts": {
