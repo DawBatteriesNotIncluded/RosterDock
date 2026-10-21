@@ -31,7 +31,19 @@ export interface EngineResult {
   error?: string;
 }
 
+/** Why an engine will not run under a department's sandbox: what the task's blocker says, why, and the way out. */
+export interface EngineRefusal {
+  what: string;
+  why: string;
+  fix: string;
+}
+
 export interface EngineAdapter {
   readonly id: string;
+  /**
+   * Null when the engine can keep to the department's tool list; else why it will not run under it. The
+   * worker asks before it prepares the workspace, so a refused run starts nothing: no clone, no process.
+   */
+  refuse?(allowedTools: string[] | null, department: string | null): EngineRefusal | null;
   run(ctx: EngineContext): Promise<EngineResult>;
 }

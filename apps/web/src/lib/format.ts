@@ -571,13 +571,18 @@ export function describeEvent(
     case "connection.updated": {
       const n = p(ev).discovered as number | undefined;
       const flipped = (p(ev).reclassified as string[] | undefined) ?? [];
+      // Tools only the server calls read-only: held as writes at discovery, and a person's word that they read.
+      const held = ((p(ev).unconfirmed as string[] | undefined) ?? []).length;
+      const confirmed = (p(ev).confirmed as string[] | undefined) ?? [];
       return {
         text:
           n !== undefined
-            ? `${who} discovered ${n} tool${n === 1 ? "" : "s"} on ${p(ev).name} · ${((p(ev).writes as string[]) ?? []).length} write`
-            : flipped.length
-              ? `${who} reclassified ${flipped.join(", ")} on ${p(ev).name}`
-              : `${who} changed the connection ${p(ev).name}${p(ev).enabled === false ? " · switched off" : ""}`,
+            ? `${who} discovered ${n} tool${n === 1 ? "" : "s"} on ${p(ev).name} · ${((p(ev).writes as string[]) ?? []).length} write${held ? ` · ${held} to confirm as read${held === 1 ? "" : "s"}` : ""}`
+            : confirmed.length && confirmed.length === flipped.length
+              ? `${who} confirmed ${confirmed.join(", ")} on ${p(ev).name} as ${confirmed.length === 1 ? "a read" : "reads"}`
+              : flipped.length
+                ? `${who} reclassified ${flipped.join(", ")} on ${p(ev).name}`
+                : `${who} changed the connection ${p(ev).name}${p(ev).enabled === false ? " · switched off" : ""}`,
       };
     }
     case "connection.deleted":

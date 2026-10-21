@@ -1,16 +1,26 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { RunEventInput } from "@rosterdock/shared";
+import { codexReach, type CodexReach } from "@rosterdock/shared";
 import {
   buildArgs,
+  codexControls,
   createCodexEngine,
   errorText,
   parseCodexStream,
   resolveCodexBin,
 } from "../src/engines/codex.js";
+
+/** What the department's list leaves Codex; the list must be one Codex keeps to. */
+function reachOf(list: string[]): CodexReach {
+  const reach = codexReach(list);
+  if (!reach.ok) throw new Error(reach.reason);
+  return reach;
+}
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -89,9 +99,15 @@ describe("invocation", () => {
       "workspace-write",
       "-c",
       'approval_policy="never"',
+      // No MCP server but the board's: ChatGPT sign-ins otherwise bring their apps, and plugins their servers.
+      "-c",
+      "features.apps=false",
+      "-c",
+      "features.plugins=false",
       "--skip-git-repo-check",
       "--ephemeral",
       "--ignore-user-config",
+      "--ignore-rules",
       "--color",
       "never",
       "-c",
@@ -122,6 +138,59 @@ describe("invocation", () => {
     );
   });
 
+  it("holds Codex to a department's tool list with its own controls, never wider than the worker's sandbox", () => {
+    const workspace = ["Read(./**)", "Write(./**)", "Edit(./**)", "Glob(./**)", "Grep(./**)"];
+    // No write tool: read-only. No WebFetch: no network for its commands. No WebSearch: no web search.
+    expect(codexControls("workspace-write", reachOf(["Bash", "Read(./**)", "Grep(./**)"]))).toEqual({
+      sandbox: "read-only",
+      config: [
+        "features.apps=false",
+        "features.plugins=false",
+        "sandbox_workspace_write.network_access=false",
+        'web_search="disabled"',
+      ],
+    });
+    // A worker that runs Codex without its sandbox brings it back to workspace-write for a list without WebFetch.
+    expect(codexControls("danger-full-access", reachOf([...workspace, "Bash"])).sandbox).toBe(
+      "workspace-write",
+    );
+    // WebFetch on its own keeps the worker's network, WebSearch the search.
+    expect(
+      codexControls("danger-full-access", reachOf([...workspace, "Bash", "WebFetch", "WebSearch"])),
+    ).toEqual({ sandbox: "danger-full-access", config: ["features.apps=false", "features.plugins=false"] });
+    // Never wider than the worker's: a read-only worker stays so, and workspace-write gains no network.
+    expect(codexControls("read-only", reachOf([...workspace, "Bash", "WebFetch"])).sandbox).toBe("read-only");
+    expect(codexControls("workspace-write", reachOf([...workspace, "Bash", "WebFetch"]))).toEqual({
+      sandbox: "workspace-write",
+      config: ["features.apps=false", "features.plugins=false", 'web_search="disabled"'],
+    });
+    // On the command line, after approvals.
+    const args = buildArgs(
+      { bin: "codex", sandbox: "workspace-write" },
+      "m",
+      null,
+      "/w",
+      null,
+      reachOf(["Bash", "Read"]),
+    );
+    expect(args.slice(0, 14)).toEqual([
+      "exec",
+      "--json",
+      "--sandbox",
+      "read-only",
+      "-c",
+      'approval_policy="never"',
+      "-c",
+      "features.apps=false",
+      "-c",
+      "features.plugins=false",
+      "-c",
+      "sandbox_workspace_write.network_access=false",
+      "-c",
+      'web_search="disabled"',
+    ]);
+  });
+
   it("resolves the Windows npm shim to codex.js run by this Node", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-codex-shim-"));
     try {
@@ -149,9 +218,10 @@ const chunks = [];
 for await (const c of process.stdin) chunks.push(c);
 const prompt = Buffer.concat(chunks).toString("utf8");
 const args = process.argv.slice(2);
-const must = ["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--model", "gpt-5-codex", "--output-last-message", "-"];
+const must = ["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--model", "gpt-5-codex", "--output-last-message", "-"];
 const cfg = args.filter((a, i) => args[i - 1] === "-c");
 if (!cfg.includes('mcp_servers.rosterdock.url="http://board.test/api/mcp"') || !cfg.includes('mcp_servers.rosterdock.bearer_token_env_var="ROSTERDOCK_RUN_TOKEN"') || process.env.ROSTERDOCK_RUN_TOKEN !== "run-token") { process.stderr.write("stub: mcp not wired"); process.exit(8); }
+if (!cfg.includes("features.apps=false") || !cfg.includes("features.plugins=false")) { process.stderr.write("stub: an MCP server besides the board's"); process.exit(7); }
 if (must.some((a) => !args.includes(a)) || args.at(-1) !== "-" || !prompt.includes("# Fixture task") || process.env.LEAKED_SECRET || args.some((a) => a.includes("run-token"))) {
   process.stderr.write("stub: bad invocation\\n");
   process.exit(9);
@@ -256,29 +326,102 @@ process.exit(1);`,
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("says in the run log that a department's tool list does not narrow Codex", async () => {
+  it("runs Codex as the department's tool list narrows it, and says how in the run log", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-codex-"));
-    const quiet = path.join(dir, "quiet.mjs");
-    await writeFile(quiet, "for await (const c of process.stdin) {}", "utf8");
+    const replay = path.join(dir, "replay.mjs");
+    await writeFile(
+      replay,
+      `import { readFile, writeFile } from "node:fs/promises";
+for await (const c of process.stdin) {}
+await writeFile(process.env.ARGV_PATH, JSON.stringify(process.argv.slice(2)), "utf8");
+process.stdout.write(await readFile(process.env.FIXTURE_PATH, "utf8"));`,
+      "utf8",
+    );
     const events: RunEventInput[] = [];
     try {
-      await createCodexEngine({ bin: process.execPath, sandbox: "read-only", prefixArgs: [quiet] }).run({
+      const result = await createCodexEngine({
+        bin: process.execPath,
+        sandbox: "danger-full-access",
+        prefixArgs: [replay],
+      }).run({
         workdir: dir,
         pack: "x",
         model: "m",
         signal: new AbortController().signal,
         emit: (e) => events.push(e),
         onUsage: () => {},
-        env: {},
-        allowedTools: ["Read(./**)"],
+        env: {
+          ARGV_PATH: path.join(dir, "argv.json"),
+          FIXTURE_PATH: path.join(fixtures, "codex-success.jsonl"),
+        },
+        allowedTools: ["Bash", "Read(./**)", "Grep(./**)", "WebSearch"],
         mcp: null,
       });
-      expect(events).toContainEqual({
+      expect(result.ok).toBe(true);
+      const argv = JSON.parse(await readFile(path.join(dir, "argv.json"), "utf8")) as string[];
+      expect(argv[argv.indexOf("--sandbox") + 1]).toBe("read-only");
+      const cfg = argv.filter((_, i) => argv[i - 1] === "-c");
+      expect(cfg).toContain("sandbox_workspace_write.network_access=false");
+      expect(cfg).not.toContain('web_search="disabled"');
+      expect(events[0]).toEqual({
         type: "stderr",
         payload: {
-          text: "The department's tool list applies to Claude Code teammates; Codex runs in this worker's read-only sandbox.",
+          text: "The department's tool list runs Codex in the read-only sandbox (this worker's is danger-full-access): no network for its commands, web search on.",
         },
       });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a tool list it cannot keep to and starts nothing, naming the department and the way out", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-codex-"));
+    const started = path.join(dir, "started");
+    const mark = path.join(dir, "mark.mjs");
+    await writeFile(
+      mark,
+      `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(started)}, "yes");`,
+      "utf8",
+    );
+    const engine = createCodexEngine({
+      bin: process.execPath,
+      sandbox: "workspace-write",
+      prefixArgs: [mark],
+    });
+    const workspace = ["Read(./**)", "Write(./**)", "Edit(./**)", "Glob(./**)", "Grep(./**)"];
+    try {
+      expect(engine.refuse?.(workspace, "Research")).toEqual({
+        what: "Codex cannot keep to Research's tool list.",
+        why: "It reads files and runs commands only through its shell, and the list leaves out Bash.",
+        fix: "Name Bash on its own in the list, or pick another engine in the teammate's editor.",
+      });
+      expect(engine.refuse?.([...workspace, "Bash(npm test:*)"], null)).toMatchObject({
+        what: "Codex cannot keep to the department's tool list.",
+        why: "It cannot hold its shell to some commands, and the list allows only Bash(npm test:*).",
+      });
+      expect(engine.refuse?.([...workspace, "Bash"], "Research")).toBeNull();
+      expect(engine.refuse?.(null, "Research")).toBeNull();
+      // Run anyway, it still starts nothing.
+      const result = await engine.run({
+        workdir: dir,
+        pack: "x",
+        model: "m",
+        signal: new AbortController().signal,
+        emit: () => {},
+        onUsage: () => {},
+        env: {},
+        allowedTools: workspace,
+        mcp: null,
+      });
+      expect(result).toEqual({
+        ok: false,
+        exitCode: null,
+        usage: {},
+        resultText: null,
+        error:
+          "Codex cannot keep to the department's tool list. It reads files and runs commands only through its shell, and the list leaves out Bash. Name Bash on its own in the list, or pick another engine in the teammate's editor.",
+      });
+      expect(existsSync(started)).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

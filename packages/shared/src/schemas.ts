@@ -685,7 +685,10 @@ export const ConnectionToolSchema = z.object({
   name: z.string().trim().min(1).max(128),
   description: z.string().max(2000).default(""),
   write: z.boolean(),
-  source: z.enum(["annotation", "catalog", "name", "default", "person", "method"]).default("default"),
+  /** What classified it (ToolClassSource); "method" for an OpenAPI operation. */
+  source: z
+    .enum(["annotation", "catalog", "name", "default", "person", "method", "unconfirmed"])
+    .default("default"),
   /** Switched off by a person: refused for everyone, whatever the toolbox grants; survives discovery. */
   off: z.boolean().optional(),
 });

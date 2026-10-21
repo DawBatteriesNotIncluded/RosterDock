@@ -58,7 +58,7 @@ var name in Settings) and a row in the Approvals or Company page:
 
 | Sentence                                   | What to do                                                                                               |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| A teammate asks approval to write …        | Approvals: read the exact payload and its hash; Approve and run, or Reject with a note (Peter re-plans). |
+| A teammate asks approval to write …        | Approvals: read the exact payload and its hash; Approve and run, or Reject with a note (see below).      |
 | The approved write could not be sent       | The connection is off, gone or refusing: Settings, Connections; fix and let the teammate propose again.  |
 | Peter has questions before planning …      | The goal card: answer them; Peter plans.                                                                 |
 | Peter needs you on … (a goal turned amber) | The goal card: a task failed three times; read the runs, fix the brief or the toolbox, restart the task. |
@@ -83,8 +83,11 @@ branch you give it, and Peter plans changes to code only on a project that has o
 project after the goal that opened it closed is work outside that goal.
 
 A write a person rejects leaves its task Blocked on the rejection, with the note: nothing waits for a decision
-any more, and Peter re-plans a teammate's task without that write. A task nobody will finish is cancelled from
-its status menu (owners and admins); a cancelled task is reopened from Details.
+any more. Peter (or the department's lead) re-plans a teammate's task without that write, unless its goal was
+stopped or closed or he has re-planned it twice already; any other task waits with the rejection for its
+assignee when a person is, or for any person to start it again with a note, reassign it or cancel it. The
+rejected card on Approvals, and the toast, say which. A task nobody will finish is cancelled from its status
+menu (owners and admins); a cancelled task is reopened from Details.
 
 ## Runs that go wrong
 
@@ -109,6 +112,11 @@ its status menu (owners and admins); a cancelled task is reopened from Details.
   worker), or move the teammate to Codex.
 - **Failed at once with "no engine adapter"**: the teammate's engine is not on that worker image
   (`stub`, `claude_code` and `codex` ship).
+- **Failed at once with "Codex cannot keep to <department>'s tool list"**: the department's tool list leaves
+  out Bash, or allows only some shell commands, and Codex reads files and runs commands only through its
+  shell. Nothing started: no clone, no Codex. Name Bash on its own in the list (Codex's own sandbox still
+  holds it to the rest of the list, `docs/security.md`), or give the work to a Claude Code teammate. The
+  board refuses to seat a Codex teammate in such a department; Peter's audit names one seated before.
 - **"runs on opencode, which is not available"**: OpenCode has no worker yet, so the board starts no run on it
   and the pickers no longer offer it. Pick another engine in the teammate's editor.
 - **Failed with "git clone failed"**: the project's repository URL or branch, or the worker's git token
@@ -199,6 +207,7 @@ setting with no value of its own from `board.extraEnv`. The ones an operator cha
 | Worker: `ROSTERDOCK_ENGINE_PASS_ENV`         | Env var NAMES handed to the engine process.                                                                                                                                                                                                                                                                                                                            |
 | Worker: `ROSTERDOCK_GIT_TOKEN_HOSTS`         | The git hosts the worker's git token (`ROSTERDOCK_GIT_TOKEN`) is sent to, comma-separated, with a port where it is not 443 (chart `worker.gitSecret.hosts`). Default `github.com`; a repository on any other host clones without the token.                                                                                                                            |
 | Worker: `ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`    | The most a Claude Code teammate may use (chart `worker.claudeAllowedTools`, per pool too). A department's sandbox only narrows it: Lighthouse's Research names WebSearch and WebFetch, which run only on a fleet that lists them.                                                                                                                                      |
+| Worker: `ROSTERDOCK_CODEX_SANDBOX`           | The widest sandbox Codex runs in: `workspace-write` (default), `read-only`, or `danger-full-access` for a pod that is sandboxed already (chart `worker.extraEnv`). A department's tool list only narrows it, and a list Codex cannot keep to stops its runs (`docs/security.md`). A mode Codex does not know stops the worker at start.                                |
 | Worker: `ROSTERDOCK_RUN_REPO_TESTS`          | Run the repository's tests after the harvest (a review check). The test script gets PATH, HOME, the temp directory, the locale and `CI=1`: no model key, board token or git token, so a private registry install fails there. `0` turns it off (chart `worker.extraEnv`; `docs/security.md`).                                                                          |
 | Worker: `ROSTERDOCK_POD_METRICS`             | Read the pod's CPU and memory from the metrics API instead of the cgroup (the chart sets it with `worker.podMetrics.enabled`, with the token and the Role it needs).                                                                                                                                                                                                   |
 | Worker: `ROSTERDOCK_LOG_FORMAT`              | `json` (default in a cluster) or `text` (chart `worker.extraEnv`).                                                                                                                                                                                                                                                                                                     |

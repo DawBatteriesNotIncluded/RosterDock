@@ -239,11 +239,20 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
   });
   try {
     const engine = deps.engines[run.engine];
+    // An engine that cannot keep to the department's tool list starts nothing: no clone, no process.
+    const refused = engine?.refuse?.(sandbox.allowedTools, spec.department?.name ?? null) ?? null;
     if (!engine) {
       completion = {
         status: "failed",
         error: `no engine adapter for ${run.engine} on this worker`,
         blocker: { code: "adapter_unavailable" },
+      };
+    } else if (refused) {
+      deps.log.info(`run ${runId}: not started: ${refused.what} ${refused.why}`);
+      completion = {
+        status: "failed",
+        error: `${refused.what} ${refused.why} ${refused.fix}`,
+        blocker: { code: "adapter_unavailable", what: refused.what, why: refused.why },
       };
     } else {
       // The time limit runs from here: a clone that stalls counts against it like the engine.

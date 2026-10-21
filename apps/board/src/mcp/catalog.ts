@@ -20,7 +20,7 @@ export interface CatalogEntry {
   /** "oauth": the server authorises by OAuth only, so the Add flow starts there and needs the board's secret store. */
   auth?: "oauth";
   docsUrl?: string;
-  /** Tools known to read; anything else on the server is a write until a person or an annotation says otherwise. */
+  /** Tools known to read; anything else on the server is a write unless its name reads as one or a person says so. */
   reads: string[];
   /** Tools known to write, whatever their name suggests. */
   writes: string[];

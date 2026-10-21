@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { otlpHeaders, otlpTracesEndpoint, queueNameForPool, type OtlpTarget } from "@rosterdock/shared";
+import { CODEX_SANDBOXES, type CodexSandbox } from "./engines/codex.js";
 import type { GitCredential } from "./workspace.js";
 
 export interface WorkerConfig {
@@ -13,8 +14,11 @@ export interface WorkerConfig {
   claudeBin: string;
   claudeAllowedTools: string;
   codexBin: string;
-  /** Codex sandbox for model-generated commands: workspace-write (default), read-only, or danger-full-access for a pod that is sandboxed already. */
-  codexSandbox: string;
+  /**
+   * The widest Codex sandbox for model-generated commands: workspace-write (default), read-only, or
+   * danger-full-access for a pod that is sandboxed already. A department's tool list only narrows it.
+   */
+  codexSandbox: CodexSandbox;
   /** Env var NAMES passed through to engines. Values never appear in logs or the board. */
   passEnvNames: string[];
   /** The git token (ROSTERDOCK_GIT_TOKEN) and the hosts it is sent to (ROSTERDOCK_GIT_TOKEN_HOSTS). Null: no token. */
@@ -57,6 +61,16 @@ function wholeNumber(
   return n;
 }
 
+/** The Codex sandbox the worker allows at most; a department's tool list narrows from it, so it is one Codex knows. */
+function codexSandbox(env: NodeJS.ProcessEnv): CodexSandbox {
+  const raw = env.ROSTERDOCK_CODEX_SANDBOX?.trim() || "workspace-write";
+  if (!(CODEX_SANDBOXES as readonly string[]).includes(raw))
+    throw new Error(
+      `ROSTERDOCK_CODEX_SANDBOX must be read-only, workspace-write or danger-full-access, not "${raw}"`,
+    );
+  return raw as CodexSandbox;
+}
+
 /** A host name, lower case, with a port where it is not 443: what a clone URL's host is compared with. */
 const GIT_HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/;
 
@@ -96,7 +110,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
       env.ROSTERDOCK_CLAUDE_ALLOWED_TOOLS?.trim() ||
       "Read(./**),Write(./**),Edit(./**),Glob(./**),Grep(./**)",
     codexBin: env.ROSTERDOCK_CODEX_BIN?.trim() || "codex",
-    codexSandbox: env.ROSTERDOCK_CODEX_SANDBOX?.trim() || "workspace-write",
+    codexSandbox: codexSandbox(env),
     passEnvNames: (
       env.ROSTERDOCK_ENGINE_PASS_ENV ??
       "ANTHROPIC_API_KEY,CLAUDE_CODE_OAUTH_TOKEN,OPENAI_API_KEY,CODEX_API_KEY"

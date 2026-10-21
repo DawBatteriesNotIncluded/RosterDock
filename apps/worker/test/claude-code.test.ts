@@ -11,7 +11,6 @@ import {
   narrowTools,
   parseStream,
   resolveClaudeBin,
-  splitToolList,
 } from "../src/engines/claude-code.js";
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -160,14 +159,6 @@ describe("invocation", () => {
     });
     // No department list: the worker's list as it is.
     expect(narrowTools("Read,Write", null).tools).toEqual(["Read", "Write"]);
-  });
-
-  it("splits a tool list on commas and spaces, never inside a rule", () => {
-    expect(splitToolList("Bash(git diff:*), Read  Edit(./a,b/**)")).toEqual([
-      "Bash(git diff:*)",
-      "Read",
-      "Edit(./a,b/**)",
-    ]);
   });
 
   it("gives Claude Code only the list's built-in tools, so a list without Bash leaves it no shell", () => {

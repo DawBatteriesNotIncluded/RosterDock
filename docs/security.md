@@ -206,15 +206,24 @@ their own, each with its own database and workers.
   narrowed list is the whole of Claude Code's built-in tools for the run (`--tools`), not only the ones it
   may use without asking, so a list without Bash leaves the engine no shell, read-only commands
   included; the rules on it (`Read(./**)`) are what it may do with them without asking. Codex
-  has no per-tool list: it runs in the worker's Codex sandbox (`ROSTERDOCK_CODEX_SANDBOX`) whatever the
-  department lists.
+  has no per-tool list, so the worker holds it to the department's with Codex's own controls, which only
+  narrow the worker's Codex sandbox (`ROSTERDOCK_CODEX_SANDBOX`): without Write or Edit it runs
+  read-only, without WebFetch its commands get no network (a worker on `danger-full-access` comes down
+  to `workspace-write`, so Codex's own sandbox has to work in that pod), and without WebSearch its web
+  search is off. Codex reads files and runs commands only through its shell, so it does not run under a
+  list that leaves out Bash or allows only some commands (`Bash(npm test:*)`): the worker fails the run
+  before it clones anything, and the board refuses to seat a Codex teammate in such a department, to set
+  such a list where one sits, or to move a teammate who sits there to Codex.
 - A run cannot file its way out of its department. A task a teammate files from a run, in any project,
   takes the department of the run's task, so its run gets the same sandbox, pool and write policy; the
   board refuses another department, or none, over MCP and REST alike. Outside a run a teammate names only
   a department it belongs to.
 - Claude Code starts with no settings file (`--setting-sources` empty): not the operator's, and not the
   cloned repository's `.claude/settings.json`, so a repository cannot allow itself a tool or add a hook.
-  Codex starts with `--ignore-user-config`.
+  Codex starts with `--ignore-user-config` and `--ignore-rules`, so no rules file in its home or the
+  repository lets a command out of its sandbox (a rule that allows a command runs it unsandboxed), and with
+  its ChatGPT apps and plugins off, so a worker signed in to ChatGPT brings none of that account's
+  connectors into a run.
 - After the engine, the worker runs the repository's own `test` script in the workspace
   (`ROSTERDOCK_RUN_REPO_TESTS`, on by default), once the diff is captured. That script is the
   repository's code and the run may have rewritten it, so it gets PATH, HOME, the temp directory, the
@@ -223,10 +232,13 @@ their own, each with its own database and workers.
   `/proc` included, and its output becomes the review's tests check as written. Turn the step off on a
   fleet that runs repositories you would not run yourself.
 - The engine reaches no external MCP server. Every tool call goes to the board (`board_tool_call`),
-  where the broker decides: run a read, propose a write, or refuse. A tool is a read only when the server
-  marks it read-only, the connector's catalog lists it as one, a person classified it so, or its name
-  starts with a reading verb (get, list, search, read and the like) and joins no second verb to it
-  (`get_or_create` writes). Export, preview and check are not reading verbs. Anything else is a write.
+  where the broker decides: run a read, propose a write, or refuse. A tool is a read only when the
+  connector's catalog lists it as one, a person classified it so, or its name starts with a reading verb
+  (get, list, search, read and the like) and joins no second verb to it (`get_or_create` writes). Export,
+  preview and check are not reading verbs. A server's own read-only label (`readOnlyHint`) counts only with
+  the catalog's list or such a name: a tool the label alone calls a read is a write until an owner or admin
+  confirms it under Settings > Connections, a decision recorded under their name that discovery keeps. A
+  server's word that a tool writes or destroys outweighs the catalog and the name. Anything else is a write.
 - A run's diff is scanned for secret-shaped values before review, anywhere in an added line (a key after
   `NAME=`, in a string, behind `Bearer`), and for values given to secret-named keys, quoted or as
   `NAME=value`; a hit fails the check.

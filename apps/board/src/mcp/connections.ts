@@ -384,9 +384,11 @@ export async function updateConnection(
     )
       assertStdioCommand(stdioCommands, next.command, next.args);
     // A person's classification is recorded as theirs and survives the next discovery; so does a tool
-    // they switched off, which stays classified by whatever classified it.
+    // they switched off, which stays classified by whatever classified it. A tool held as a write because
+    // only the server called it read-only becomes a read here once a person confirms it.
     let tools = row.tools ?? [];
     const reclassified: string[] = [];
+    const confirmed: string[] = [];
     const switchedOff: string[] = [];
     const switchedOn: string[] = [];
     if (input.tools) {
@@ -397,6 +399,7 @@ export async function updateConnection(
         if (existing) {
           if (t.write !== undefined && (existing.write !== t.write || existing.source !== "person"))
             reclassified.push(t.name);
+          if (t.write === false && existing.source === "unconfirmed") confirmed.push(t.name);
           tools = tools.map((x) =>
             x.name === t.name
               ? {
@@ -443,6 +446,7 @@ export async function updateConnection(
         changes: Object.keys(input),
         enabled: updated.enabled,
         reclassified,
+        confirmed,
         switchedOff,
         switchedOn,
         writes: tools.filter((t) => t.write).map((t) => t.name),
@@ -486,8 +490,9 @@ export async function deleteConnection(
 
 /**
  * tools/list against the live server. Each tool is classified from its
- * annotations, the catalog and its name; a classification a person set earlier
- * for a tool of the same name is kept. Replaces the stored tools.
+ * annotations, the catalog and its name (a read-only label alone holds it as a
+ * write for a person to confirm); a classification a person set earlier for a
+ * tool of the same name is kept. Replaces the stored tools.
  */
 export async function discoverConnectionTools(
   db: Db,
@@ -535,6 +540,8 @@ export async function discoverConnectionTools(
         discovered: tools.length,
         reads: tools.filter((t) => !t.write).map((t) => t.name),
         writes: tools.filter((t) => t.write).map((t) => t.name),
+        // Held for a person to confirm as reads; one switched off waits for nothing.
+        unconfirmed: tools.filter((t) => t.source === "unconfirmed" && !t.off).map((t) => t.name),
       },
     );
     return updated;
