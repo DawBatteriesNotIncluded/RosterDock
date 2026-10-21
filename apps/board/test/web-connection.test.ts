@@ -318,6 +318,9 @@ describe("the web connection", () => {
       departmentDomains: ["gong.io", "evil.org"],
       clientPolicy: { webDomains: ["help.gong.io"] },
     });
+    // The project says what its client allows, as Settings shows it.
+    const projects = (await api.get(`${base}/projects`)).body as { clientPolicy: unknown }[];
+    expect(projects[0]!.clientPolicy).toEqual({ default: null, caps: {}, webDomains: ["help.gong.io"] });
     const listed = text(await client.callTool({ name: "board_list_tools", arguments: {} }));
     expect(listed.value[0]).toMatchObject({
       connection: "web",

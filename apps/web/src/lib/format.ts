@@ -1,5 +1,6 @@
 // Pure helpers: names, avatars, relative time, and event sentences. No React.
 import type { ActorRef, EventRecord } from "@rosterdock/shared";
+import { domainsPhrase } from "@rosterdock/shared/web";
 import type { CompanyData, Task, Teammate } from "../api/types.ts";
 
 export function relativeTime(iso: string, now: number = Date.now()): string {
@@ -567,13 +568,23 @@ export function describeEvent(
         go: { view: "approvals", approvalId: ev.subject?.id, taskId },
       };
     case "connection.created":
-      return { text: `${who} connected ${p(ev).name} (${p(ev).kind === "openapi" ? "OpenAPI" : "MCP"})` };
+      return {
+        text:
+          p(ev).kind === "web"
+            ? `${who} added the web connection ${p(ev).name}: the board reads the web for the teammates granted it`
+            : `${who} connected ${p(ev).name} (${p(ev).kind === "openapi" ? "OpenAPI" : "MCP"})`,
+      };
     case "connection.updated": {
       const n = p(ev).discovered as number | undefined;
       const flipped = (p(ev).reclassified as string[] | undefined) ?? [];
       // Tools only the server calls read-only: held as writes at discovery, and a person's word that they read.
       const held = ((p(ev).unconfirmed as string[] | undefined) ?? []).length;
       const confirmed = (p(ev).confirmed as string[] | undefined) ?? [];
+      // The web connection's list of sites changed: say what it reads now.
+      if ("domains" in p(ev))
+        return {
+          text: `${who} set the sites ${p(ev).name} reads: ${domainsPhrase((p(ev).domains as string[] | null) ?? null)}`,
+        };
       return {
         text:
           n !== undefined
@@ -599,7 +610,9 @@ export function describeEvent(
         .join(", ");
       return {
         text: p(ev).ok
-          ? `${who} checked ${p(ev).name}: answered in ${p(ev).latencyMs} ms${drift ? ` · ${drift}` : ""}`
+          ? p(ev).kind === "web"
+            ? `${who} checked ${p(ev).name}: the board reads the web`
+            : `${who} checked ${p(ev).name}: answered in ${p(ev).latencyMs} ms${drift ? ` · ${drift}` : ""}`
           : `${who} checked ${p(ev).name}: ${p(ev).error ?? "no answer"}`,
         attention: !p(ev).ok,
       };

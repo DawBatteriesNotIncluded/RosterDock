@@ -71,7 +71,7 @@ export function DomainsField({
         onChange={(e) => setText(e.target.value)}
         placeholder={placeholder}
         className="mono"
-        style={{ fontSize: 12, padding: "3px 6px", minWidth: 180 }}
+        style={{ fontSize: 12, padding: "3px 6px", width: 320, maxWidth: "100%" }}
       />
       {dirty ? (
         <Button size="sm" type="submit" disabled={busy}>

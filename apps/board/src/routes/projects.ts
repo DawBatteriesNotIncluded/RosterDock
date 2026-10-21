@@ -38,7 +38,12 @@ function toJson(row: ProjectRow, counts?: Counts) {
     status: row.status,
     repoUrl: row.repo_url,
     defaultBranch: row.default_branch,
-    clientPolicy: { default: row.client_policy?.default ?? null, caps: row.client_policy?.caps ?? {} },
+    clientPolicy: {
+      default: row.client_policy?.default ?? null,
+      caps: row.client_policy?.caps ?? {},
+      // The web sites the client lets the web connection read, when it names some.
+      ...(row.client_policy?.webDomains?.length ? { webDomains: row.client_policy.webDomains } : {}),
+    },
     chargebackTag: row.chargeback_tag,
     counts: counts ?? { open: 0, running: 0, blocked: 0, review: 0, done: 0 },
     createdAt: row.created_at.toISOString(),

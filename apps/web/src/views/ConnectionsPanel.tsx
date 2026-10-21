@@ -69,6 +69,8 @@ export function checkLine(c: Connection): string | null {
   if (!k) return null;
   const when = relativeTime(k.at);
   if (!k.ok) return `Check failed ${when}: ${k.error ?? "no answer"}`;
+  // Nothing is asked of the web connection: the board reads the web itself, or its operator keeps it off.
+  if (c.kind === "web") return `Checked ${when} · the board reads the web`;
   const parts = [`Checked ${when} · answered in ${k.latencyMs} ms`];
   if (c.kind === "mcp") {
     parts.push(`${k.tools.seen} tool${k.tools.seen === 1 ? "" : "s"} listed`);

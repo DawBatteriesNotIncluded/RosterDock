@@ -202,7 +202,7 @@ export function ConnectionGrant({
         <span className="text-[12px] text-muted">
           {summary}
           {!c.enabled ? " · switched off in Settings" : ""}
-          {c.kind === "web" ? ` · the board reads ${domainsPhrase(webDomainsOf(c))} for them` : ""}
+          {c.kind === "web" ? ` · the board's fetch: ${domainsPhrase(webDomainsOf(c))}` : ""}
         </span>
         {c.tools.length === 0 ? (
           // Nothing discovered yet: grant the whole connection with a mode; pick tools once they are known.

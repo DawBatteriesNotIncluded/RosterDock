@@ -1353,7 +1353,7 @@ describe("the web connection", () => {
     const grant = render(
       <ConnectionGrant connection={web} grant={{ mode: "read", picked: null }} onChange={noop} />,
     );
-    expect(grant).toContain("the board reads only gong.io and the sites under it for them");
+    expect(grant).toContain("the board&#x27;s fetch: only gong.io and the sites under it");
   });
 
   it("names each page in Activity, never what it says", () => {
@@ -1385,6 +1385,25 @@ describe("the web connection", () => {
       ).text,
     ).toContain("could not read https://intranet.gong.io/ for #140: intranet.gong.io resolves to 10.0.0.5");
     expect(describeEvent(ev({ ok: true }), fixture).text).toContain("read web · fetch for #140");
+    const made = { ...ev({}), type: "connection.created" as const, payload: { name: "web", kind: "web" } };
+    expect(describeEvent(made, fixture).text).toContain("added the web connection web");
+    const checked = {
+      ...ev({}),
+      type: "connection.checked" as const,
+      payload: { name: "web", kind: "web", ok: true, latencyMs: 0 },
+    };
+    expect(describeEvent(checked, fixture).text).toContain("checked web: the board reads the web");
+    const sites = {
+      ...ev({}),
+      type: "connection.updated" as const,
+      payload: { name: "web", domains: ["gong.io"] },
+    };
+    expect(describeEvent(sites, fixture).text).toContain(
+      "set the sites web reads: only gong.io and the sites under it",
+    );
+    expect(describeEvent({ ...sites, payload: { name: "web", domains: null } }, fixture).text).toContain(
+      "set the sites web reads: any public site",
+    );
   });
 });
 

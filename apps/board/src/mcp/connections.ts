@@ -676,6 +676,7 @@ export async function checkConnection(
       { kind: "connection", id },
       {
         name: updated.name,
+        kind: updated.kind,
         ok: check.ok,
         latencyMs: check.latencyMs,
         error: check.error,
