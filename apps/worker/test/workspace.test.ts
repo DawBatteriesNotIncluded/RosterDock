@@ -1,6 +1,17 @@
 // Workspace against a local bare repository: no network.
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { applyFilePatch, parseUnifiedDiff, renderNewFileDiff } from "@rosterdock/shared";
@@ -16,6 +27,10 @@ import {
   redactGit,
   withToken,
 } from "../src/workspace.js";
+import { skipWithoutSymlinks } from "./helpers.js";
+
+/** A path as a shell command or a git config value takes it on every platform: with forward slashes. */
+const forShell = (p: string) => p.split(path.sep).join("/");
 
 let root: string;
 let bare: string;
@@ -234,8 +249,30 @@ describe("workspace", () => {
       LANG: "C.UTF-8",
       GIT_TERMINAL_PROMPT: "0",
       GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
+      // Git for Windows reads /dev/null as its NUL device too.
+      GIT_CONFIG_GLOBAL: "/dev/null",
     });
+  });
+
+  it("runs the git on PATH, never one the run left in its directory", async () => {
+    // Windows looks for a program in the directory it starts in before PATH, unless told not to.
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-own-git",
+      { repoUrl: null, defaultBranch: "main" },
+      null,
+    );
+    if (process.platform === "win32") {
+      // Any program will do as the impostor: a small one every Windows has.
+      const windows = process.env.SystemRoot ?? "C:\\Windows";
+      await copyFile(path.join(windows, "System32", "whoami.exe"), path.join(ws.dir, "git.exe"));
+    } else {
+      await writeFile(path.join(ws.dir, "git"), "#!/bin/sh\necho not git\n", { mode: 0o755 });
+    }
+    const res = await git(["--version"], ws.dir);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toMatch(/^git version /);
+    await cleanupWorkspace(ws);
   });
 
   it("never lets an inherited GIT_DIR, work tree, index or -c config point git at another repository", async () => {
@@ -257,7 +294,9 @@ describe("workspace", () => {
       ws.dir,
       outer,
     );
-    expect(where.stdout.trim().split("\n")).toEqual([
+    // git writes paths with forward slashes on Windows too.
+    const [gitDir, top, isBare] = where.stdout.trim().split("\n");
+    expect([path.resolve(gitDir!), path.resolve(top!), isBare]).toEqual([
       path.join(await realpath(ws.dir), ".git"),
       await realpath(ws.dir),
       "false",
@@ -266,7 +305,8 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
-  it("runs nothing the run wrote into .git when it reads the changes back", async () => {
+  it("runs nothing the run wrote into .git when it reads the changes back", async (ctx) => {
+    await skipWithoutSymlinks(ctx, root);
     const ws = await prepareWorkspace(
       path.join(root, "work"),
       "run-gitconfig",
@@ -279,9 +319,9 @@ describe("workspace", () => {
     const evil = path.join(root, "evil-config");
     const evilConfig =
       (await readFile(path.join(ws.dir, ".git", "config"), "utf8")) +
-      `[core]\n\tfsmonitor = "touch '${marker("fsmonitor")}'; false"\n` +
-      `[filter "evil"]\n\tclean = "touch '${marker("filter")}'; cat"\n` +
-      `[diff "evil"]\n\ttextconv = "touch '${marker("textconv")}'; cat"\n`;
+      `[core]\n\tfsmonitor = "touch '${forShell(marker("fsmonitor"))}'; false"\n` +
+      `[filter "evil"]\n\tclean = "touch '${forShell(marker("filter"))}'; cat"\n` +
+      `[diff "evil"]\n\ttextconv = "touch '${forShell(marker("textconv"))}'; cat"\n`;
     await writeFile(evil, evilConfig, "utf8");
     await rm(path.join(ws.dir, ".git", "config"));
     await symlink(evil, path.join(ws.dir, ".git", "config"));
@@ -294,6 +334,32 @@ describe("workspace", () => {
     // The config is the clone's again, a plain file, and what the symlink pointed at is untouched.
     expect((await lstat(path.join(ws.dir, ".git", "config"))).isSymbolicLink()).toBe(false);
     expect(await readFile(evil, "utf8")).toBe(evilConfig);
+    await cleanupWorkspace(ws);
+  });
+
+  it("runs no hook the run left in .git when it reads the changes back", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-hook",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    // git runs post-index-change whenever it writes the index, as the harvest's `git add` does.
+    const marker = path.join(root, "hook-ran");
+    await writeFile(
+      path.join(ws.dir, ".git", "hooks", "post-index-change"),
+      `#!/bin/sh\necho ran > '${forShell(marker)}'\n`,
+      { mode: 0o755 },
+    );
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    // git without the worker's settings runs it, so the hook works here and the check below means something.
+    const plain = spawnSync("git", ["add", "README.md"], { cwd: ws.dir, env: gitEnvironment() });
+    expect(plain.status, plain.stderr.toString()).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+    await rm(marker);
+    const h = await harvestWorkspace(ws, []);
+    expect(h.artifacts.find((a) => a.kind === "diff")?.content).toContain("+changed");
+    expect(existsSync(marker)).toBe(false);
     await cleanupWorkspace(ws);
   });
 
@@ -365,7 +431,8 @@ describe("the harvest never reads through a link", () => {
       .join("\n")
       .includes("hunter2");
 
-  it("refuses declared outputs that are links, inside or outside the workspace, or reached through one", async () => {
+  it("refuses declared outputs that are links, inside or outside the workspace, or reached through one", async (ctx) => {
+    await skipWithoutSymlinks(ctx, root);
     const ws = await prepareWorkspace(
       path.join(root, "work"),
       "run-links",
@@ -407,7 +474,8 @@ describe("the harvest never reads through a link", () => {
     expect(existsSync(path.join(outside, "environ"))).toBe(true);
   });
 
-  it("without declared outputs, refuses the links a run left in a repository; the diff holds only their targets", async () => {
+  it("without declared outputs, refuses the links a run left in a repository; the diff holds only their targets", async (ctx) => {
+    await skipWithoutSymlinks(ctx, root);
     const ws = await prepareWorkspace(
       path.join(root, "work"),
       "run-repo-links",

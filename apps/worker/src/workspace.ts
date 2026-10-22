@@ -8,7 +8,8 @@
 // credentials.
 
 import { spawn } from "node:child_process";
-import { constants, type Stats } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { constants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +19,13 @@ import {
   renderNewFileDiff,
   type RunArtifactInput,
 } from "@rosterdock/shared";
+import { killTree } from "./kill.js";
 import { clip } from "./text.js";
+
+// Windows looks for a program in the directory it starts in before PATH, and the worker starts git and the
+// engine in a run's directory: a git.exe or claude.exe the repository holds would run in their place. With
+// this set, Windows and the libuv under Node look on PATH only, for every program this process starts.
+if (process.platform === "win32") process.env.NoDefaultCurrentDirectoryInExePath = "1";
 
 export const HANDOVER_FILE = "handover-summary.md";
 export const BLOCKED_FILE = "blocked.md";
@@ -49,14 +56,18 @@ const GIT_ENV_KEYS = [
   "TZ",
 ];
 
-/** git's environment: the keys above, no prompt, and no system or global config (a credential helper, an include, a ~/.gitconfig an earlier run wrote). */
+/**
+ * git's environment: the keys above, no prompt, and no system or global config (a credential helper, an
+ * include, a ~/.gitconfig an earlier run wrote). The global config is /dev/null on Windows too, where Git
+ * for Windows reads that name as its NUL device; it refuses the name Node gives NUL there (`\\.\nul`).
+ */
 export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of GIT_ENV_KEYS) {
     const v = env[key];
     if (v !== undefined) out[key] = v;
   }
-  return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull };
+  return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
 }
 
 /**
@@ -66,12 +77,23 @@ export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<str
  */
 const GIT_KEY_ALLOWED = /^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL|DATE)$/;
 
-/** Every command: no fsmonitor and no hooks, whatever the repository's config says. */
-const GIT_SAFE_ARGS = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${os.devNull}`];
+/**
+ * Every command: no fsmonitor and no hooks, whatever the repository's config says. git looks for hooks
+ * where there can be none: under /dev/null, which is no directory; on Windows, which has no such path, in
+ * a directory that does not exist, under a name made up for each command.
+ */
+function gitSafeArgs(): string[] {
+  const hooks =
+    process.platform === "win32"
+      ? path.join(os.tmpdir(), `rosterdock-no-hooks-${randomUUID()}`)
+      : "/dev/null";
+  return ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${hooks}`];
+}
 
 /**
  * Run git with gitEnvironment; `extraEnv` is for the worker's own tests (an author for a commit). An abort
- * kills git and the helpers it started (the network side of a clone is a process of its own).
+ * kills git and the helpers it started (the network side of a clone is a process of its own): its process
+ * group, or on Windows its process tree.
  */
 export function git(
   args: string[],
@@ -83,7 +105,7 @@ export function git(
     if (signal?.aborted) return resolve({ code: null, stdout: "", stderr: "stopped" });
     // Its own process group where there are groups, so a stop reaches the helpers too.
     const group = process.platform !== "win32";
-    const child = spawn("git", [...GIT_SAFE_ARGS, ...args], {
+    const child = spawn("git", [...gitSafeArgs(), ...args], {
       cwd,
       env: {
         ...gitEnvironment(),
@@ -111,7 +133,8 @@ export function git(
     };
     const onAbort = () => {
       try {
-        if (group && child.pid) process.kill(-child.pid, "SIGKILL");
+        if (process.platform === "win32") killTree(child);
+        else if (group && child.pid) process.kill(-child.pid, "SIGKILL");
         else child.kill("SIGKILL");
       } catch {
         // gone
@@ -162,7 +185,8 @@ export async function prepareWorkspace(
   signal?: AbortSignal,
 ): Promise<Workspace> {
   const dir = path.join(workRoot, runId);
-  await rm(dir, { recursive: true, force: true });
+  // Retried: Windows removes no directory a process (git ending after a stop, a virus scan) still holds.
+  await rm(dir, { recursive: true, force: true, maxRetries: 3 });
   await mkdir(dir, { recursive: true });
   if (!project.repoUrl) return { dir, repo: false };
   const res = await git(
@@ -254,11 +278,18 @@ export function fitDiff(diffText: string, maxBytes: number): { text: string; omi
 }
 
 /**
+ * How a checked file is opened: no link at the last step even if one appeared since the check (O_NOFOLLOW),
+ * and a pipe swapped in never blocks the open (O_NONBLOCK). Windows has neither flag, so there the open
+ * follows a link that appeared since, and the identity check after it is what refuses the file.
+ */
+const READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+
+/**
  * A file the run left, by its path in the workspace, read only as a regular file reached without a symbolic
- * link and inside the workspace. A run that leaves `report.md -> /proc/self/environ`, or a linked directory on
- * the way, would otherwise hand the worker's own environment (the database URL, its token, the model keys) to
- * the company as an artifact. Such a path goes into `refused` and is never opened. Null: not there, not a
- * regular file, or over the cap.
+ * link (a junction, on Windows) and inside the workspace. A run that leaves `report.md -> /proc/self/environ`,
+ * or a linked directory on the way, would otherwise hand the worker's own environment (the database URL, its
+ * token, the model keys) to the company as an artifact. Such a path goes into `refused` and is never opened.
+ * Null: not there, not a regular file, or over the cap.
  */
 async function readInWorkspace(
   root: string,
@@ -275,10 +306,10 @@ async function readInWorkspace(
   try {
     // lstat every step, the file included: a link anywhere on the way is refused.
     let at = root;
-    let last: Stats | null = null;
+    let last: BigIntStats | null = null;
     for (const part of inner.split(path.sep)) {
       at = path.join(at, part);
-      last = await lstat(at);
+      last = await lstat(at, { bigint: true });
       if (last.isSymbolicLink()) {
         refused.push(rel);
         return null;
@@ -291,12 +322,12 @@ async function readInWorkspace(
       refused.push(rel);
       return null;
     }
-    // No link at the last step even if one appeared since, a pipe swapped in never blocks the read, and
-    // the file opened must be the one checked above.
-    const handle = await open(at, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const handle = await open(at, READ_FLAGS);
     try {
-      const s = await handle.stat();
-      if (s.dev !== last.dev || s.ino !== last.ino) {
+      // The file opened must be the one checked above: the same device and file id, compared whole (an
+      // NTFS file id does not fit in a number), and a real id, since 0 (none) would match any file.
+      const s = await handle.stat({ bigint: true });
+      if (s.ino === 0n || s.dev !== last.dev || s.ino !== last.ino) {
         refused.push(rel);
         return null;
       }
