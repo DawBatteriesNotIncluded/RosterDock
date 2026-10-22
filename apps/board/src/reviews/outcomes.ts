@@ -96,10 +96,10 @@ async function approvedFiles(
 }
 
 /**
- * A binary file in the diff travels as the bytes the run reported under that path, base64 by path, and only as
- * the bytes its review's secrets check scanned, by their sha256; one whose bytes the review could not show
- * (not text), only where a person approved it. One the run sent no bytes for is left out, and the provider
- * refuses the change naming it. A reason where they are refused.
+ * A binary file in the diff travels as the bytes the run reported under that path, base64 by path: only as the
+ * bytes its review's secrets check scanned, by their sha256, and only where a person approved, as the review
+ * shows none of them. One the run sent no bytes for is left out, and the provider refuses the change naming it.
+ * A reason where they are refused.
  */
 async function approvedBinaries(
   db: Db,
@@ -123,7 +123,7 @@ async function approvedBinaries(
       if (scanned.unshown?.includes(f.path)) continue;
       return `the review did not scan the bytes of ${f.path} (an older board opened it): veto the approval and request changes, for a round this board reads`;
     }
-    if (scanned.unshown?.includes(f.path) && review.decided_by_kind !== "user")
+    if (review.decided_by_kind !== "user")
       return `${f.path} is binary, which the review cannot show: only a person approves it`;
     const art = (
       await db.query<{ content: string | null; object_key: string | null; encoding: string | null }>(

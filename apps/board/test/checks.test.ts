@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   evaluationCheck,
   outputsCheck,
+  scanBinary,
   scoreCriteria,
   secretsCheck,
   sourcesCheck,
@@ -253,57 +254,41 @@ describe("secretsCheck", () => {
     });
   });
 
-  it("scans a binary file's bytes, binds their sha256, and leaves to a person one the review cannot show", () => {
+  it("scans every binary file's bytes, binds their sha256, and names them as files the review cannot show", () => {
     const stanza = (p: string) =>
       `diff --git a/${p} b/${p}\nnew file mode 100644\nBinary files /dev/null and b/${p} differ\n`;
     const binary = (...paths: string[]) => parseUnifiedDiff(paths.map(stanza).join(""));
     const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
     // Text git calls binary (an attribute): scanned like an added line, reported by its line, never its value.
     const text = Buffer.from('{\n  "smtp_password": "not-a-real-value-123"\n}\n');
-    expect(secretsCheck(binary("config.json"), undefined, [{ path: "config.json", bytes: text }])).toEqual({
+    expect(secretsCheck(binary("config.json"), undefined, [scanBinary("config.json", text)])).toEqual({
       kind: "secrets",
       ok: false,
       title: "1 secret-shaped string in the diff",
       detail: {
-        scannedChars: text.length,
+        scannedChars: text.toString().length,
         binaries: [{ path: "config.json", sha256: sha(text) }],
-        unshown: [],
+        unshown: ["config.json"],
         lines: [{ path: "config.json", line: 2 }],
       },
     });
-    // Text with a NUL byte: scanned all the same.
+    // With a NUL byte in it, and as UTF-16, where every other byte is one: scanned all the same.
     const nul = Buffer.concat([Buffer.from([0]), Buffer.from('\napi_key = "not-a-real-value-123"\n')]);
-    expect(secretsCheck(binary("data.bin"), undefined, [{ path: "data.bin", bytes: nul }])).toMatchObject({
-      ok: false,
-      detail: { lines: [{ path: "data.bin", line: 2 }], unshown: ["data.bin"] },
-    });
-    // Clean text git calls binary passes; bytes that are not text, or none, are a person's to approve.
-    const clean = Buffer.from("plain words\n");
+    expect(scanBinary("data.bin", nul).lines).toEqual([2]);
+    const utf16 = Buffer.from('\ufeffname: x\npassword = "not-a-real-value-123"\n', "utf16le");
+    expect(scanBinary("notes.txt", utf16).lines).toEqual([2]);
+    // Clean bytes pass, named as files the review cannot show; one the run sent no bytes for is named too.
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]);
     expect(
-      secretsCheck(binary("notes.lock"), undefined, [{ path: "notes.lock", bytes: clean }]),
-    ).toMatchObject({
-      ok: true,
-      title: "No credential values in the diff",
-      detail: { binaries: [{ path: "notes.lock", sha256: sha(clean) }], unshown: [] },
-    });
-    const latin1 = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
-    expect(
-      secretsCheck(binary("logo.png", "gone.bin", "cafe.txt"), undefined, [
-        { path: "logo.png", bytes: png },
-        { path: "gone.bin", bytes: null },
-        { path: "cafe.txt", bytes: latin1 },
+      secretsCheck(binary("logo.png", "gone.bin"), undefined, [
+        scanBinary("logo.png", png),
+        scanBinary("gone.bin", null),
       ]),
     ).toMatchObject({
-      ok: false,
-      title: "3 binary files the review cannot show, so a person approves them: logo.png, gone.bin, cafe.txt",
-      detail: {
-        binaries: [
-          { path: "logo.png", sha256: sha(png) },
-          { path: "cafe.txt", sha256: sha(latin1) },
-        ],
-        unshown: ["logo.png", "gone.bin", "cafe.txt"],
-      },
+      ok: true,
+      title:
+        "No credential values in the diff; the review cannot show 2 binary files, which a pull request takes only with a person's approval: logo.png, gone.bin",
+      detail: { binaries: [{ path: "logo.png", sha256: sha(png) }], unshown: ["logo.png", "gone.bin"] },
     });
   });
 });

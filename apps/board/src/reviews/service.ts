@@ -24,7 +24,7 @@ import {
 } from "@rosterdock/shared";
 import { describeActor } from "../actors.js";
 import type { Db, Queryable } from "../db/pool.js";
-import { closeChange, parseRepo, type GitHosts } from "../git/hosts.js";
+import { closeChange, parseRepo, type GitHosts, type RepoRef } from "../git/hosts.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate, type MutationContext } from "../mutate.js";
 import type { RunQueue } from "../queue.js";
@@ -36,12 +36,14 @@ import {
   BLOCKING_CHECKS,
   evaluationCheck,
   outputsCheck,
+  scanBinary,
   scoreCriteria,
   secretsCheck,
   sourcesCheck,
   testsCheck,
-  type BinaryFile,
+  type BinaryDetail,
   type CheckResult,
+  type ScannedBinary,
   type CriterionScore,
 } from "./checks.js";
 
@@ -544,8 +546,8 @@ export async function openReviewRound(
     );
   }
   // A binary file's bytes, as a pull request would write them: the review cannot show them, so the secrets check
-  // scans them and binds their sha256.
-  const binaries: BinaryFile[] = [];
+  // scans them and binds their sha256. One file at a time.
+  const binaries: ScannedBinary[] = [];
   for (const f of files) {
     if (!f.binary || f.status === "deleted") continue;
     const row = (
@@ -554,7 +556,7 @@ export async function openReviewRound(
         [run.id, f.path],
       )
     ).rows[0];
-    binaries.push({ path: f.path, bytes: row ? await artifactBytes(store, row) : null });
+    binaries.push(scanBinary(f.path, row ? await artifactBytes(store, row) : null));
   }
   const checks: CheckResult[] = [
     secretsCheck(files, unread, binaries),
@@ -856,6 +858,27 @@ function changeTitle(task: { number: number; title: string }): string {
  * research documents are delivered on the board. Executed by the caller after
  * the transaction commits.
  */
+/**
+ * Where approving the review opens a pull request: build work on a project whose repository is on a host the
+ * board opens changes on, from a run that recorded a base sha. Null where it opens none.
+ */
+async function pullRequestTarget(
+  db: Queryable,
+  review: Pick<ReviewRow, "task_id" | "base_sha">,
+  hosts: GitHosts | null,
+): Promise<{ repo: RepoRef; project: { default_branch: string } } | null> {
+  const project = (
+    await db.query<{ repo_url: string | null; default_branch: string; work_kind: string }>(
+      `SELECT p.repo_url, p.default_branch, t.work_kind FROM projects p JOIN tasks t ON t.project_id = p.id
+       WHERE t.id = $1`,
+      [review.task_id],
+    )
+  ).rows[0];
+  const repo = parseRepo(project?.repo_url, hosts);
+  if (!project || project.work_kind !== "build" || !repo || !review.base_sha) return null;
+  return { repo, project };
+}
+
 async function proposePullRequest(
   ctx: MutationContext,
   review: ReviewRow,
@@ -864,15 +887,9 @@ async function proposePullRequest(
   summary: string | null,
   hosts: GitHosts | null = null,
 ): Promise<string | null> {
-  const project = (
-    await ctx.client.query<{ repo_url: string | null; default_branch: string; work_kind: string }>(
-      `SELECT p.repo_url, p.default_branch, t.work_kind FROM projects p JOIN tasks t ON t.project_id = p.id
-       WHERE t.id = $1`,
-      [review.task_id],
-    )
-  ).rows[0];
-  const repo = parseRepo(project?.repo_url, hosts);
-  if (!project || project.work_kind !== "build" || !repo || !review.base_sha) return null;
+  const target = await pullRequestTarget(ctx.client, review, hosts);
+  if (!target) return null;
+  const { repo, project } = target;
   const checks = await listChecks(ctx.client, review);
   const body = [
     `RosterDock review of task ${task.number}, round ${review.round}, approved by ${approverName ?? "a reviewer"}.`,
@@ -953,13 +970,24 @@ export async function approveReview(
     if (task.status === "doing")
       throw new HttpError(409, `#${task.number} is being worked on; wait for the run to finish`);
     // A credential in the diff or failing tests are a person's to wave through, never a teammate's.
-    const overrode = (await listChecks(ctx.client, review))
+    const checks = await listChecks(ctx.client, review);
+    const overrode = checks
       .filter((c) => c.ok === false && BLOCKING_CHECKS.includes(c.kind))
       .map((c) => ({ kind: c.kind, title: c.title }));
     if (overrode.length && actor.kind === "teammate")
       throw new HttpError(
         409,
         `#${task.number} has a failed check a teammate cannot approve over (${overrode.map((c) => c.title).join("; ")}): request changes, or leave the decision to a person`,
+      );
+    // Nor binary files into a pull request: the review shows none of their bytes.
+    const unshown = (
+      (checks.find((c) => c.kind === "secrets")?.detail ?? {}) as Partial<BinaryDetail>
+    ).unshown?.filter((p) => typeof p === "string");
+    const binaries = unshown?.length && (await pullRequestTarget(ctx.client, review, hosts)) ? unshown : [];
+    if (binaries.length && actor.kind === "teammate")
+      throw new HttpError(
+        409,
+        `#${task.number} would put binary files the review cannot show into a pull request (${binaries.slice(0, 5).join(", ")}${binaries.length > 5 ? ` and ${binaries.length - 5} more` : ""}): leave the decision to a person`,
       );
     const who = await describeActor(ctx.client, companyId, actor);
     const updated = (
@@ -993,7 +1021,12 @@ export async function approveReview(
     await ctx.emit(
       "review.approved",
       { kind: "review", id: review.id },
-      overrode.length ? { ...payload, overrodeChecks: overrode } : payload,
+      {
+        ...payload,
+        ...(overrode.length ? { overrodeChecks: overrode } : {}),
+        // A person's approval of binary files for the pull request, on the record.
+        ...(binaries.length ? { binaryFiles: binaries } : {}),
+      },
     );
     await ctx.emit(
       "task.moved",

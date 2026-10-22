@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { renderNewFileDiff } from "@rosterdock/shared";
+import { renderBinaryFileDiff, renderNewFileDiff } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fakeGitHub } from "./github-fake.js";
 import { fakeGitLab } from "./gitlab-fake.js";
@@ -1134,7 +1134,11 @@ describe("reviews", () => {
     // Clean text git calls binary passes, and the pull request writes the bytes the check scanned.
     const lock = Buffer.from("plain words\n");
     const clean = await open("Clean", [{ path: "yarn.lock", bytes: lock }]);
-    expect(clean.secrets).toMatchObject({ ok: true, title: "No credential values in the diff" });
+    expect(clean.secrets).toMatchObject({
+      ok: true,
+      title:
+        "No credential values in the diff; the review cannot show 1 binary file, which a pull request takes only with a person's approval: yarn.lock",
+    });
     github.requests.length = 0;
     expect(await approve(clean.review.id)).toMatchObject({ status: "opened" });
     expect(blobs()).toEqual([lock.toString("base64")]);
@@ -1159,27 +1163,34 @@ describe("reviews", () => {
         "the review did not scan the bytes of yarn.lock (an older board opened it): veto the approval and request changes, for a round this board reads",
     });
 
-    // Bytes that are not text: the review cannot show them, so a teammate cannot approve them; a person can.
+    // The review shows no binary file's bytes: a teammate cannot put one into a pull request; a person can, on
+    // the record.
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]);
     const logo = await open("Logo", [{ path: "logo.png", bytes: png }]);
-    expect(logo.secrets).toMatchObject({
-      ok: false,
-      title: "1 binary file the review cannot show, so a person approves it: logo.png",
-    });
+    expect(logo.secrets).toMatchObject({ ok: true, detail: { unshown: ["logo.png"] } });
     const reviewerToken = async (taskId: string) => {
       const runs = (await api.get(`${base}/tasks/${taskId}/runs`)).body as { id: string; kind: string }[];
       return (await claim(runs.find((r) => r.kind === "review")!.id)).token;
     };
     const asVerifier = board.api(await reviewerToken(logo.task.id));
-    expect((await asVerifier.post(`${base}/reviews/${logo.review.id}/approve`, {})).status).toBe(409);
+    const refused = await asVerifier.post(`${base}/reviews/${logo.review.id}/approve`, {});
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe(
+      `#${logo.task.number} would put binary files the review cannot show into a pull request (logo.png): leave the decision to a person`,
+    );
     github.requests.length = 0;
     expect(await approve(logo.review.id)).toMatchObject({ status: "opened" });
     expect(blobs()).toEqual([png.toString("base64")]);
-    // Where a teammate approved one all the same (a check row that says otherwise), the pull request refuses it.
+    const approvedEvent = (await api.get(`${base}/events?limit=200`)).body.find(
+      (e: any) => e.type === "review.approved" && e.subject.id === logo.review.id,
+    );
+    expect(approvedEvent.payload.binaryFiles).toEqual(["logo.png"]);
+    // Where a teammate approved one all the same (a check row that names none), the pull request refuses it.
     const stale = await open("Logo again", [{ path: "logo.png", bytes: png }]);
-    await board.db.query("UPDATE review_checks SET ok = true WHERE review_id = $1 AND kind = 'secrets'", [
-      stale.review.id,
-    ]);
+    await board.db.query(
+      `UPDATE review_checks SET detail = jsonb_set(detail, '{unshown}', '[]') WHERE review_id = $1 AND kind = 'secrets'`,
+      [stale.review.id],
+    );
     const asVerifier2 = board.api(await reviewerToken(stale.task.id));
     const byTeammate = await asVerifier2.post(`${base}/reviews/${stale.review.id}/approve`, {});
     expect(byTeammate.status).toBe(200);
@@ -1187,6 +1198,38 @@ describe("reviews", () => {
       status: "failed",
       error: "logo.png is binary, which the review cannot show: only a person approves it",
     });
+
+    // Where approving opens no pull request (no repository), a teammate approves a binary deliverable as before.
+    const plain = await addProject(api, base, "Charts");
+    const chartTask = (
+      await api.post(`${base}/tasks`, {
+        projectId: plain.id,
+        title: "Chart",
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    const chartRun = (await api.post(`${base}/tasks/${chartTask.id}/runs`, {})).body;
+    const asChartRun = board.api((await claim(chartRun.id)).token);
+    await asChartRun.post(`/api/worker/runs/${chartRun.id}/artifacts`, {
+      path: "chart.png",
+      kind: "file",
+      content: png.toString("base64"),
+      encoding: "base64",
+    });
+    await asChartRun.post(`/api/worker/runs/${chartRun.id}/artifacts`, {
+      path: "changes.diff",
+      kind: "diff",
+      content: renderBinaryFileDiff("chart.png"),
+    });
+    await asChartRun.post(`/api/worker/runs/${chartRun.id}/complete`, {
+      status: "completed",
+      summary: "Done.",
+    });
+    const chartReview = (await api.get(`${base}/tasks/${chartTask.id}/review`)).body;
+    const asVerifier3 = board.api(await reviewerToken(chartTask.id));
+    const chartApproved = await asVerifier3.post(`${base}/reviews/${chartReview.id}/approve`, {});
+    expect(chartApproved.status).toBe(200);
+    expect(chartApproved.body).toMatchObject({ status: "approved", taskStatus: "done", pullRequests: [] });
   });
 
   it("a diff with a binary file opens a pull request when the run reported the bytes, and says which file when not", async () => {

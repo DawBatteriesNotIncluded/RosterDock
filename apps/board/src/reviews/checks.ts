@@ -4,7 +4,6 @@
 // evidence is the diff itself, the declared outputs, the repository's tests and
 // the reviewer's scores against the task's weighted criteria.
 
-import { isUtf8 } from "node:buffer";
 import {
   addedText,
   containsRawSecret,
@@ -40,27 +39,51 @@ function secretShaped(text: string): boolean {
   return findRawSecrets({ text }).length > 0 || containsRawSecret(text) || ASSIGNED_SECRET_RE.test(text);
 }
 
-/** A file the diff calls binary, with the bytes a pull request would write for it: null where the run sent none. */
-export interface BinaryFile {
-  path: string;
-  bytes: Buffer | null;
-}
-
-/** What the secrets check records of the round's binary files, for the pull request to hold their bytes to. */
+/** What the secrets check records of the round's binary files, for a pull request to hold their bytes to. */
 export interface BinaryDetail {
   /** The sha256 of each binary file's bytes as scanned. */
   binaries: { path: string; sha256: string }[];
-  /** The binary files the review cannot show: bytes that are not UTF-8 text, or none. */
+  /** Every binary file: the review shows none of their bytes. */
   unshown: string[];
 }
 
+/** A binary file's bytes, scanned: their sha256, and the lines that hold a secret-shaped string. */
+export interface ScannedBinary {
+  path: string;
+  /** Null where the run sent no bytes for it. */
+  sha256: string | null;
+  lines: number[];
+  chars: number;
+}
+
 /**
- * Secret-shaped strings anywhere in the added lines, and in every binary file's bytes, which the review cannot
- * show: a file git calls binary (an attribute, a NUL byte) may be text all the same. Reports lines, never
- * values. A binary file whose bytes are not text fails the check too, so a person approves it. `unread`: why the
- * run's diff could not be read (parseUnifiedDiff threw), so nothing of it was scanned, and the check fails.
+ * Scan the bytes a pull request would write for a file the diff calls binary, as lines of text: a file git calls
+ * binary (an attribute, a NUL byte) may be text all the same. Again without its NUL bytes, so UTF-16 text reads
+ * too. Kept to the result, so a round's files are read one at a time.
  */
-export function secretsCheck(files: DiffFile[], unread?: string, binaries: BinaryFile[] = []): CheckResult {
+export function scanBinary(path: string, bytes: Buffer | null): ScannedBinary {
+  if (!bytes) return { path, sha256: null, lines: [], chars: 0 };
+  const lines = new Set<number>();
+  let chars = 0;
+  for (const view of bytes.includes(0) ? [bytes, bytes.filter((b) => b !== 0)] : [bytes]) {
+    const text = Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString("utf8");
+    chars += text.length;
+    for (const [i, line] of text.split("\n").entries()) if (secretShaped(line)) lines.add(i + 1);
+  }
+  return { path, sha256: sha256Hex(bytes), lines: [...lines], chars };
+}
+
+/**
+ * Secret-shaped strings anywhere in the added lines, and in every binary file's bytes (scanBinary). Reports
+ * lines, never values. The review shows no binary file's bytes: the check names them, and a pull request takes
+ * them only where a person approved. `unread`: why the run's diff could not be read (parseUnifiedDiff threw),
+ * so nothing of it was scanned, and the check fails.
+ */
+export function secretsCheck(
+  files: DiffFile[],
+  unread?: string,
+  binaries: ScannedBinary[] = [],
+): CheckResult {
   if (unread !== undefined)
     return {
       kind: "secrets",
@@ -79,16 +102,10 @@ export function secretsCheck(files: DiffFile[], unread?: string, binaries: Binar
   let scanned = addedText(files).length;
   const bound: BinaryDetail = { binaries: [], unshown: [] };
   for (const b of binaries) {
-    if (!b.bytes) {
-      bound.unshown.push(b.path);
-      continue;
-    }
-    bound.binaries.push({ path: b.path, sha256: sha256Hex(b.bytes) });
-    const text = b.bytes.toString("utf8");
-    scanned += text.length;
-    for (const [i, line] of text.split("\n").entries())
-      if (secretShaped(line)) lines.push({ path: b.path, line: i + 1 });
-    if (b.bytes.includes(0) || !isUtf8(b.bytes)) bound.unshown.push(b.path);
+    bound.unshown.push(b.path);
+    if (b.sha256) bound.binaries.push({ path: b.path, sha256: b.sha256 });
+    scanned += b.chars;
+    for (const line of b.lines) lines.push({ path: b.path, line });
   }
   const detail = binaries.length ? { scannedChars: scanned, ...bound } : { scannedChars: scanned };
   if (lines.length) {
@@ -99,17 +116,16 @@ export function secretsCheck(files: DiffFile[], unread?: string, binaries: Binar
       detail: { ...detail, lines: lines.slice(0, 20) },
     };
   }
-  if (bound.unshown.length) {
-    const n = bound.unshown.length;
-    const named = bound.unshown.slice(0, 5).join(", ") + (n > 5 ? ` and ${n - 5} more` : "");
-    return {
-      kind: "secrets",
-      ok: false,
-      title: `${n} binary ${n === 1 ? "file" : "files"} the review cannot show, so a person approves ${n === 1 ? "it" : "them"}: ${named}`,
-      detail,
-    };
-  }
-  return { kind: "secrets", ok: true, title: "No credential values in the diff", detail };
+  const n = bound.unshown.length;
+  const named = bound.unshown.slice(0, 5).join(", ") + (n > 5 ? ` and ${n - 5} more` : "");
+  return {
+    kind: "secrets",
+    ok: true,
+    title: n
+      ? `No credential values in the diff; the review cannot show ${n} binary ${n === 1 ? "file" : "files"}, which a pull request takes only with a person's approval: ${named}`
+      : "No credential values in the diff",
+    detail,
+  };
 }
 
 /** Every declared output is in the diff or among the run's artifacts. */
