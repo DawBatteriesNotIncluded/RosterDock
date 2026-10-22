@@ -262,16 +262,21 @@ describe("workspace", () => {
     expect(gitEnvironment({ LANG: "de_DE.UTF-8", LC_ALL: "de_DE.UTF-8" })).toMatchObject({ LC_ALL: "C" });
   });
 
-  it("reads git's NUL-separated names as UTF-8, and none at all where one is not", () => {
+  it("reads git's NUL-separated names as UTF-8, and spells one that is not apart, in ASCII", () => {
     const names = (...parts: (string | number[])[]) =>
       Buffer.concat(parts.map((p) => (typeof p === "string" ? Buffer.from(p, "utf8") : Buffer.from(p))));
-    expect(decodeNames(names("?? résumé.md", [0], "?? はじめに.md", [0]))).toEqual([
-      "?? résumé.md",
-      "?? はじめに.md",
-    ]);
-    expect(decodeNames(names(""))).toEqual([]);
+    expect(decodeNames(names("?? résumé.md", [0], "?? はじめに.md", [0]))).toEqual({
+      names: ["?? résumé.md", "?? はじめに.md"],
+      notUtf8: [],
+    });
+    expect(decodeNames(names(""))).toEqual({ names: [], notUtf8: [] });
     // bad\xff.md and bad\xfe.md: loosely decoded, both would be "bad\ufffd.md", the name of a third file.
-    expect(decodeNames(names("?? bad", [0xff], ".md", [0], "?? bad", [0xfe], ".md", [0]))).toBeNull();
+    expect(
+      decodeNames(names("?? bad", [0xff], ".md", [0], "?? ok.md", [0], "?? bad", [0xfe], ".md", [0])),
+    ).toEqual({
+      names: ["?? ok.md"],
+      notUtf8: ["?? bad\\xff.md", "?? bad\\xfe.md"],
+    });
   });
 
   it.runIf(process.platform === "linux")(
@@ -288,12 +293,15 @@ describe("workspace", () => {
         Buffer.concat([Buffer.from(`${ws.dir}/bad`), Buffer.from([0xff]), Buffer.from(".md")]),
         "x\n",
       );
-      for (const declared of [[], ["README.md"]]) {
+      await writeFile(path.join(ws.dir, "report.md"), "The report.\n", "utf8");
+      for (const declared of [[], ["report.md"]]) {
         const h = await harvestWorkspace(ws, declared);
         expect(h.unreadable).toBe(
-          "the run's changes could not be read back for review (a file's name is not UTF-8)",
+          "the run's changes could not be read back for review (a file's name is not UTF-8: bad\\xff.md)",
         );
         expect(h.artifacts.find((a) => a.kind === "diff")).toBeUndefined();
+        // The run's other files are still its files: a blocked run keeps them.
+        expect(h.filesWritten).toEqual(["report.md"]);
       }
       await cleanupWorkspace(ws);
     },

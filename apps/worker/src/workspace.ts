@@ -39,7 +39,7 @@ export interface Workspace {
   gitConfig?: string;
 }
 
-/** Where programs live, the temp directory, the locale: all git needs from the worker's environment. */
+/** Where programs live, the temp directory, the locale (whose messages LC_ALL=C sets to English): all git needs. */
 const GIT_ENV_KEYS = [
   "PATH",
   "Path",
@@ -176,23 +176,29 @@ export function gitBytes(
 }
 
 /**
- * NUL-separated entries as git prints them with -z, each decoded as UTF-8. Null where one is not: decoded loosely,
- * every such name would be one and the same name, U+FFFD where its bytes were, and collide with the others.
+ * NUL-separated entries as git prints them with -z: those that decode as UTF-8, and, apart and spelled in ASCII
+ * (`unz\x82.txt`), those that do not. Decoded loosely, every such name would be one and the same, U+FFFD where
+ * its bytes were, and collide with the others.
  */
-export function decodeNames(out: Buffer): string[] | null {
+export function decodeNames(out: Buffer): { names: string[]; notUtf8: string[] } {
   const strict = new TextDecoder("utf-8", { fatal: true });
-  const names: string[] = [];
+  const decoded = { names: [] as string[], notUtf8: [] as string[] };
   for (let at = 0, end = out.indexOf(0); end >= 0; at = end + 1, end = out.indexOf(0, at)) {
+    const entry = out.subarray(at, end);
     try {
-      names.push(strict.decode(out.subarray(at, end)));
+      decoded.names.push(strict.decode(entry));
     } catch {
-      return null;
+      decoded.notUtf8.push(
+        [...entry]
+          .map((b) =>
+            b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : `\\x${b.toString(16).padStart(2, "0")}`,
+          )
+          .join(""),
+      );
     }
   }
-  return names;
+  return decoded;
 }
-
-const NOT_UTF8 = "the run's changes could not be read back for review (a file's name is not UTF-8)";
 
 /** The fleet's git token and the hosts it is for (ROSTERDOCK_GIT_TOKEN, ROSTERDOCK_GIT_TOKEN_HOSTS). */
 export interface GitCredential {
@@ -569,13 +575,13 @@ export async function harvestWorkspace(
       ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"],
       ws.dir,
     );
-    const entries = decodeNames(status.stdout);
-    if (!entries) out.unreadable = NOT_UTF8;
+    // One whose name is not UTF-8 is left out here; the read-back below fails a run that would complete on it.
+    const entries = decodeNames(status.stdout).names;
     // A path git calls deleted is not a file the run wrote, whatever is on disk there: a file the run took out of
     // the index and kept, ignored (a local .env), is listed only so. One it kept and git does not ignore is
     // listed again as untracked. A merge conflict's side (UD, DU) is a file the run may have resolved.
     const deleted = (xy: string) => xy.includes("D") && !xy.includes("U");
-    candidates = (entries ?? [])
+    candidates = entries
       .filter((entry) => entry.length > 3 && !deleted(entry.slice(0, 2)))
       .map((entry) => entry.slice(3))
       .filter((p) => p !== HANDOVER_FILE && p !== BLOCKED_FILE)
@@ -620,12 +626,13 @@ export async function harvestWorkspace(
     const skipped = /^warning: could not open directory .*$/m.exec(add.stderr)?.[0];
     const staged = add.code === 0 && !skipped;
     // Every name the diff will carry, read as bytes: one that is not UTF-8 is no name the review can hold.
-    const names = staged
+    const notUtf8 = staged
       ? decodeNames(
           (await gitBytes(["diff", "--cached", "--name-only", "-z", "--no-renames"], ws.dir)).stdout,
-        )
+        ).notUtf8
       : [];
-    if (!names) out.unreadable = NOT_UTF8;
+    if (notUtf8.length)
+      out.unreadable = `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
     else {
       const diff = staged
         ? await git(

@@ -126,11 +126,11 @@ install built from that tree changes each of these:
   a control character) by git's escaped spelling, and dropped a trailing space from a name: a new
   `résumé.md` was created under its escapes, a change to such a file failed the pull request, and a new
   `README.md ` replaced `README.md`. Names are read back as they are.
-- A review read a deleted line that starts `-- ` (a SQL or Lua comment) or an added one that starts `++ ` as
-  a file's header: the review lost the line and gave the file another name, and the pull request failed, or
-  deleted another file. An empty or binary new file in a folder whose name ends in ` b` took another file's
-  name. And files whose names are not UTF-8 (Linux allows any bytes) shared one name in the review; the
-  run now fails, saying so.
+- A review read a deleted line that starts `-- ` (a SQL or Lua comment) or an added one that starts `++ ` as a
+  file's header: the review lost the line and gave the file another name, and the pull request failed, or
+  deleted another file. A file whose diff has no lines (an empty or binary one, added, changed or deleted, or
+  a mode change) in a folder whose name ends in ` b` took another file's name. And files whose names are not
+  UTF-8 (Linux allows any bytes) shared one name in the review; the run now fails, saying so.
 - On Windows, 0.1.0-rc.1 and 0.1.0-rc.2 ran the repository's tests without the job object: Windows
   PowerShell never made it (kernel32's functions were declared without PreserveSig), so what the tests left
   running when they ended by themselves carried on, as without one. The worker now makes it, and its log
