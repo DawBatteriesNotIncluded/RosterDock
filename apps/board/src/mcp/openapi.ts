@@ -240,37 +240,73 @@ function deepRedact(value: unknown, depth = 0): unknown {
   return value;
 }
 
-// How JSON may write a character besides \uXXXX: the short escapes, and a slash escaped as PHP writes it.
+// What a JSON escape of one character reads as: the short escapes, a slash escaped as PHP writes it.
 const SHORT_ESCAPES: Record<string, string> = {
-  '"': '\\"',
-  "\\": "\\\\",
-  "/": "\\/",
-  "\n": "\\n",
-  "\r": "\\r",
-  "\t": "\\t",
-  "\b": "\\b",
-  "\f": "\\f",
+  '"': '"',
+  "\\": "\\",
+  "/": "/",
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
 };
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/**
- * The credential as an answer may hold it: each character as it is or as JSON escapes it (\uXXXX in either
- * case, or a short escape), so an encoder that escapes `+` or `/` hides nothing.
- */
-function secretPattern(secret: string): RegExp {
-  const char = (c: string) => {
-    const hex = [...c.charCodeAt(0).toString(16).padStart(4, "0")]
-      .map((d) => (/[a-f]/.test(d) ? `[${d}${d.toUpperCase()}]` : d))
-      .join("");
-    const short = SHORT_ESCAPES[c];
-    return `(?:${escapeRe(c)}|\\\\u${hex}${short ? `|${escapeRe(short)}` : ""})`;
-  };
-  return new RegExp(secret.split("").map(char).join(""), "g");
+/** Where `needle` occurs in `hay`, as [start, end) pairs. */
+function occurrences(hay: string, needle: string): [number, number][] {
+  const out: [number, number][] = [];
+  for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + needle.length))
+    out.push([i, i + needle.length]);
+  return out;
 }
 
+/**
+ * Where the credential is in a text, as [start, end) in the text: as it is, and as JSON may escape any of its
+ * characters (\uXXXX in either case, a short escape), so an encoder that escapes `+` or `/` hides nothing.
+ * One pass reads the escapes and keeps where each read character began and ended; then a plain search. Linear
+ * in the text, whatever the credential holds: no pattern that can backtrack.
+ */
+function secretSpans(text: string, secret: string): [number, number][] {
+  const spans = occurrences(text, secret);
+  if (!text.includes("\\")) return spans;
+  let read = "";
+  const starts: number[] = [];
+  const ends: number[] = [];
+  for (let i = 0; i < text.length;) {
+    let c = text[i]!;
+    let width = 1;
+    if (c === "\\" && i + 1 < text.length) {
+      const next = text[i + 1]!;
+      if (next === "u" && /^[\da-fA-F]{4}$/.test(text.slice(i + 2, i + 6))) {
+        c = String.fromCharCode(parseInt(text.slice(i + 2, i + 6), 16));
+        width = 6;
+      } else if (next in SHORT_ESCAPES) {
+        c = SHORT_ESCAPES[next]!;
+        width = 2;
+      }
+    }
+    read += c;
+    starts.push(i);
+    ends.push(i + width);
+    i += width;
+  }
+  for (const [s, e] of occurrences(read, secret)) spans.push([starts[s]!, ends[e - 1]!]);
+  return spans;
+}
+
+/** The credential out of a text, as it is or JSON-escaped; nothing for a credential shorter than 6. */
 function scrub(text: string, secret: string | null): string {
-  return secret && secret.length >= 6 ? text.replace(secretPattern(secret), "[redacted]") : text;
+  if (!secret || secret.length < 6) return text;
+  const spans = secretSpans(text, secret).sort((a, b) => a[0] - b[0]);
+  if (!spans.length) return text;
+  let out = "";
+  let at = 0;
+  for (const [s, e] of spans) {
+    if (e <= at) continue;
+    out += `${text.slice(at, Math.max(at, s))}[redacted]`;
+    at = Math.max(at, e);
+  }
+  return out + text.slice(at);
 }
 
 /** How much of a cut answer's end is dropped: room for the whole credential at its longest escaped, 256 at least. */
@@ -288,15 +324,19 @@ function scrubCut(text: string, secret: string | null): string {
   return whole.slice(0, Math.max(0, whole.length - cutTail(secret)));
 }
 
-/** The credential out of every string in a parsed answer, keys and values, where JSON escapes no longer hide it. */
+/**
+ * The credential out of every string in a parsed answer, keys and values. Parsing has read every escape, so a
+ * plain search per string is all it takes: one split, no pattern built.
+ */
 function deepScrub(value: unknown, secret: string | null, depth = 0): unknown {
   if (!secret || secret.length < 6 || depth > 12) return value;
-  if (typeof value === "string") return scrub(value, secret);
+  const plain = (s: string) => (s.includes(secret) ? s.split(secret).join("[redacted]") : s);
+  if (typeof value === "string") return plain(value);
   if (Array.isArray(value)) return value.map((v) => deepScrub(v, secret, depth + 1));
   if (value && typeof value === "object")
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([k, v]) => [
-        scrub(k, secret),
+        plain(k),
         deepScrub(v, secret, depth + 1),
       ]),
     );

@@ -481,7 +481,22 @@ describe("the pinned transport for a company's destinations", () => {
         } else if (req.url === "/mcp") mcpServer(req.method!, body, res);
         else if (req.url === "/mcp-huge") mcpServer(req.method!, body, res, "tools/list");
         else if (req.url === "/mcp-huge-init") mcpServer(req.method!, body, res, "initialize");
-        else if (req.url === "/mcp-empty") {
+        else if (req.url === "/mcp-paged") {
+          // tools/list two at a time, 600 in all, as JSON.
+          if (req.method !== "POST") return void res.writeHead(405).end();
+          const msg = JSON.parse(body) as { id?: number; method: string; params?: { cursor?: string } };
+          if (msg.id === undefined) return void res.writeHead(202).end();
+          const from = Number(msg.params?.cursor ?? 0);
+          const result =
+            msg.method === "initialize"
+              ? fixture("initialize.json").result
+              : {
+                  tools: [from, from + 1].map((n) => ({ name: `t${n}`, inputSchema: { type: "object" } })),
+                  ...(from + 2 < 600 ? { nextCursor: String(from + 2) } : {}),
+                };
+          res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "session-1" });
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+        } else if (req.url === "/mcp-empty") {
           // Never an answer and never a byte of one: a priming event, then the end, every time.
           res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
           res.end(`id: ${seen.length}\nretry: 0\ndata: \n\n`);
@@ -727,7 +742,7 @@ describe("the pinned transport for a company's destinations", () => {
     expect(seen.filter((s) => s.endsWith("/mcp-resume")).length).toBeLessThanOrEqual(3);
   });
 
-  it("ends an MCP call whose stream the SDK resumes empty again and again, every request costing the budget", async () => {
+  it("ends an MCP call whose stream the SDK resumes empty again and again, after 2000 requests", async () => {
     seen.length = 0;
     const started = Date.now();
     await expect(
@@ -736,12 +751,19 @@ describe("the pinned transport for a company's destinations", () => {
         { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
       ),
     ).rejects.toThrow(
-      `mcp.cluster.test:${port} answered more than 16 MB in all for one call; the board read no further`,
+      `mcp.cluster.test:${port} got more than 2000 requests for one call, too many requests; the board read no further`,
     );
-    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(Date.now() - started).toBeLessThan(15_000);
     await new Promise((r) => setTimeout(r, 300));
-    // 16 MB at 64 KB a request: 256 at most.
-    expect(seen.filter((s) => s.endsWith("/mcp-empty")).length).toBeLessThanOrEqual(256);
+    expect(seen.filter((s) => s.endsWith("/mcp-empty")).length).toBeLessThanOrEqual(2000);
+  });
+
+  it("reads a tools list paged two at a time, 600 tools, whole", async () => {
+    const tools = await discoverTools(
+      { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-paged` },
+      { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
+    );
+    expect(tools).toHaveLength(600);
   });
 
   it("carries MCP's streamable HTTP, its answers as event streams, to a listed name and to no other", async () => {

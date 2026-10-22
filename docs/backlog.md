@@ -35,3 +35,7 @@ scheduled; delete it when it ships.
 - A rework run starts from the round sent back only on a repository (`apps/worker/src/rework.ts`). Without
   one it starts empty, though the round's documents are new-file diffs in its `changes.diff`; and a round with
   a binary file never carries over, since the diff has no bytes for it (the run's artifacts do).
+- An MCP connection's authorization server metadata is used when the document's own `issuer` differs from
+  the issuer the board asked (`discoverAuthorizationServer` in `apps/board/src/mcp/oauth.ts` keeps the one
+  asked); RFC 8414 §3.3 says not to use it. Refuse a mismatch, once it is known which servers in use publish
+  one (an OpenID document read for an issuer with a path is the usual case).

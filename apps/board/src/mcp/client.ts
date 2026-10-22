@@ -35,6 +35,8 @@ export const MCP_RESULT_MAX_CHARS = 200_000;
 export const MCP_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
 /** The most every answer of one call reads together, decoded: a stream the SDK resumes again and again included. */
 export const MCP_CALL_MAX_BYTES = 16 * 1024 * 1024;
+/** The most requests one call makes: a tools/list paged a few at a time fits; a stream resumed for ever does not. */
+export const MCP_CALL_MAX_REQUESTS = 2000;
 
 export interface McpTarget {
   transport: "http" | "stdio";
@@ -267,7 +269,7 @@ function buildTransport(target: McpTarget, deps: McpClientDeps, secret: string |
         timeoutMs: deps.timeoutMs ?? MCP_CALL_TIMEOUT_MS,
         stream: true,
         maxBytes: MCP_ANSWER_MAX_BYTES,
-        budget: readBudget(MCP_CALL_MAX_BYTES),
+        budget: readBudget(MCP_CALL_MAX_BYTES, MCP_CALL_MAX_REQUESTS),
       }),
       requestInit: secret ? { headers: { authorization: `Bearer ${secret}` } } : {},
     });

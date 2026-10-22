@@ -3,7 +3,7 @@
 // attempt, exchange the code, keep the tokens in the secret store, mark the
 // row). The row keeps what is not secret; the store keeps the client secret
 // and the tokens under the connection's name; events name neither.
-import type { ActorRef } from "@rosterdock/shared";
+import { trimTrailingSlashes, type ActorRef } from "@rosterdock/shared";
 import { randomToken } from "../auth/oidc.js";
 import type { Db } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
@@ -24,6 +24,7 @@ import {
   exchangeCode,
   OAuthError,
   registerClient,
+  type AuthorizationServer,
   resourceAllowed,
   tokenAuthFor,
   type OAuthDeps,
@@ -115,19 +116,51 @@ export async function startAuthorization(
     let scopesHint: string[] | null = null;
     let issuer = meta.authorizationServer;
     let declared = meta.resource ?? null;
-    // The resource identifier is read with the issuer, and again for a row from before it was kept, or that
-    // keeps one this server may not speak for (resourceAllowed), from before the board checked that.
-    if (!issuer || meta.resource == null || (meta.resource && !resourceAllowed(meta.resource, row.url))) {
+    // A row may keep, from before the board checked them, a resource this server may not speak for, or an
+    // issuer that is refused now or publishes nothing: what it was authorised for is not this server's, so
+    // both are found again from the server's own document, and its tokens go (below).
+    let replaced = !!meta.resource && !resourceAllowed(meta.resource, row.url);
+    // The resource identifier is read with the issuer, and again for a row from before it was kept.
+    if (!issuer || meta.resource == null || replaced) {
       const found = await discoverResource(row.url, oauth);
-      issuer ??= found.authorizationServer;
+      issuer = replaced || !issuer ? found.authorizationServer : issuer;
       scopesHint = found.scopes;
       declared = found.resource;
     }
+    let as: AuthorizationServer;
+    try {
+      as = await discoverAuthorizationServer(issuer, oauth);
+    } catch (err) {
+      if (!(err instanceof OAuthError) || err.code !== "server" || issuer !== meta.authorizationServer)
+        throw err;
+      // What the kept issuer said is the answer, unless the server now names another.
+      const found = await discoverResource(row.url, oauth).catch(() => null);
+      if (!found || trimTrailingSlashes(found.authorizationServer) === trimTrailingSlashes(issuer)) throw err;
+      issuer = found.authorizationServer;
+      scopesHint = found.scopes;
+      declared = found.resource;
+      as = await discoverAuthorizationServer(issuer, oauth);
+      replaced = true;
+    }
     const resource = declared ?? row.url;
-    const as = await discoverAuthorizationServer(issuer, oauth);
     const tokenAuth = tokenAuthFor(as);
     let clientId = meta.clientId;
     let registered = meta.registered;
+    const issuerChanged =
+      !!meta.authorizationServer &&
+      trimTrailingSlashes(meta.authorizationServer) !== trimTrailingSlashes(as.issuer);
+    if (replaced) {
+      // Nothing kept for the old resource or issuer is sent again, Authorise abandoned or not: the tokens go
+      // now, before anyone is sent to consent; a client the board registered at another issuer goes too.
+      const name = connectionSecretName(row.id);
+      const kept = (await deps.store.get(name)) ?? {};
+      const keepSecret = !issuerChanged && kept.client_secret;
+      await deps.store.put(name, keepSecret ? { client_secret: kept.client_secret! } : {});
+      if (issuerChanged && registered) {
+        clientId = null;
+        registered = false;
+      }
+    }
     if (!clientId) {
       const reg = await registerClient(as, input.redirectUri, oauth, tokenAuth);
       clientId = reg.clientId;
@@ -146,6 +179,7 @@ export async function startAuthorization(
       scopes,
       resource: declared,
       tokenAuth,
+      ...(replaced ? { authorizedAt: null } : {}),
     };
     if (JSON.stringify(next) !== JSON.stringify(meta)) {
       await saveOAuth(db, row, input.actor, next, {

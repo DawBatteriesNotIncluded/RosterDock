@@ -32,6 +32,9 @@ export default tseslint.config(
     // and a value imported from it left the page blank. Browser-safe modules have entries of their own.
     files: ["apps/web/src/**"],
     rules: {
+      // `import { type X } from "m"` keeps `import "m"` under verbatimModuleSyntax, so the module still loads
+      // in the browser; only `import type { X }` leaves nothing behind.
+      "@typescript-eslint/no-import-type-side-effects": "error",
       "no-restricted-syntax": [
         "error",
         {
@@ -103,6 +106,7 @@ export default tseslint.config(
           ],
         },
       ],
+      "@typescript-eslint/no-import-type-side-effects": "error",
       "no-restricted-globals": [
         "error",
         ...[

@@ -84,20 +84,20 @@ export interface ReachOptions {
   budget?: ReadBudget;
 }
 
-/** Bytes several answers share: what is left, and what there was. Every request costs ANSWER_COST before it is sent. */
+/**
+ * What several answers share: the bytes left of a total, and the requests left of a number, so a server that
+ * answers empty again and again (an event stream the SDK resumes at once) runs a budget out too, while a
+ * list paged small is still read whole.
+ */
 export interface ReadBudget {
   left: number;
   readonly total: number;
+  requestsLeft: number;
+  readonly requests: number;
 }
 
-/**
- * What every request charges a budget before it is sent, whatever its answer holds: a server that answers
- * empty again and again (an event stream the SDK resumes at once) runs a budget out too.
- */
-export const ANSWER_COST = 64 * 1024;
-
-export function readBudget(bytes: number): ReadBudget {
-  return { left: bytes, total: bytes };
+export function readBudget(bytes: number, requests: number): ReadBudget {
+  return { left: bytes, total: bytes, requestsLeft: requests, requests };
 }
 
 export const MAX_HOPS = 3;
@@ -180,11 +180,11 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
     try {
       for (let hop = 0; ; hop++) {
         if (opts.budget) {
-          if (opts.budget.left < ANSWER_COST)
+          if (opts.budget.requestsLeft <= 0)
             throw new Error(
-              `${url.host} answered more than ${sizePhrase(opts.budget.total)} in all for one call; ${READ_NO_FURTHER}`,
+              `${url.host} got more than ${opts.budget.requests} requests for one call, too many requests; ${READ_NO_FURTHER}`,
             );
-          opts.budget.left -= ANSWER_COST;
+          opts.budget.requestsLeft -= 1;
         }
         await admit(egress, url, signal);
         const res = await egress.fetch(url.toString(), {

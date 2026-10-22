@@ -200,7 +200,7 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
     const entry = company === null ? written : written.slice(eq + 1).trim();
     const out =
       company === null ? all : ((all.companies ??= {})[company] ??= { names: [], ranges: [], entries: [] });
-    // The same entry twice is one entry.
+    // The same entry twice is one entry, and so is the same destination spelled another way (below).
     if (out.entries.includes(entry)) continue;
     const [addr, bitsText, extra] = entry.replace(/^\[|\](?=\/|$)/g, "").split("/");
     const bytes = entry.includes("%") ? null : addressBytes(addr!);
@@ -222,8 +222,15 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
       const bits = given - over;
       // The range's own address with its host bits cleared: 10.1.2.3/8 is 10.0.0.0/8.
       const prefix = bytes.map((b, i) => b & (0xff << (8 - Math.max(0, Math.min(8, bits - i * 8)))) & 0xff);
+      if (
+        out.ranges.some(
+          ([p, b]) => b === bits && p.length === prefix.length && p.every((x, i) => x === prefix[i]),
+        )
+      )
+        continue;
       out.ranges.push([prefix, bits, entry]);
     } else if (bitsText === undefined && NAME_RE.test(name) && !NUMERIC_TAIL.test(name)) {
+      if (out.names.includes(name)) continue;
       out.names.push(name);
     } else {
       // A zone (%eth0) names an interface, not a destination.

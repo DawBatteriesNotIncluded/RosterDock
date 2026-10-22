@@ -123,6 +123,8 @@ import {
   reviewFixture,
   reviewListFixture,
 } from "./fixtures.ts";
+import { loadFeatures } from "../src/App.tsx";
+import type { Features } from "../src/api/types.ts";
 
 const noop = () => {};
 const asyncNoop = async () => {};
@@ -2881,5 +2883,42 @@ describe("the pixel office: people, their words and their ways", () => {
     );
     expect(quiet).toContain("Nobody has said anything here yet.");
     expect(quiet).toContain('aria-label="Pixel office"');
+  });
+});
+
+describe("what the board offers, company by company", () => {
+  it("drops the last company's private destinations at once, asks for this one's, and ignores a late answer", async () => {
+    const a: Features = {
+      oauth: true,
+      objectStore: false,
+      privateDestinations: ["10.20.0.0/16", "ollama.a.internal"],
+      companyPrivateDestinations: ["ollama.a.internal"],
+    };
+    let state = a;
+    const set = (next: Features | ((f: Features) => Features)) => {
+      state = typeof next === "function" ? next(state) : next;
+    };
+    // The board cannot be asked: the other company's destinations are gone all the same.
+    const asked: (string | undefined)[] = [];
+    loadFeatures(
+      { features: (id) => (asked.push(id), Promise.reject(new Error("offline"))) },
+      "company-b",
+      set,
+    );
+    expect(state).toEqual({ oauth: true, objectStore: false });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(state).toEqual({ oauth: true, objectStore: false });
+    expect(asked).toEqual(["company-b"]);
+    // An answer for a company the person has already left does not land.
+    let answer!: (f: Features) => void;
+    const stop = loadFeatures({ features: () => new Promise((r) => (answer = r)) }, "company-c", set);
+    stop();
+    answer(a);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(state.privateDestinations).toBeUndefined();
+    // The answer for the company still shown does.
+    loadFeatures({ features: () => Promise.resolve({ ...a, companyPrivateDestinations: [] }) }, null, set);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(state.privateDestinations).toEqual(["10.20.0.0/16", "ollama.a.internal"]);
   });
 });

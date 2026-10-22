@@ -137,5 +137,13 @@ describe("addresses without node", () => {
     expect(twice.entries).toEqual(["10.20.0.0/16"]);
     expect(twice.ranges).toHaveLength(1);
     expect(twice.companies?.["4f1aee73-e65e-4c8d-83f7-aa1169379d7f"]?.entries).toEqual(["x.internal"]);
+    // Spelled another way, it is still one destination, listed as first written.
+    const spelled = parsePrivateDestinations(
+      "ollama.internal,OLLAMA.internal.,10.20.0.0/16,10.20.9.9/16,[::ffff:10.20.0.0]/112,10.20.0.0/17,4f1aee73-e65e-4c8d-83f7-aa1169379d7f=x.internal.,4f1aee73-e65e-4c8d-83f7-aa1169379d7f=X.Internal",
+    );
+    expect(spelled.entries).toEqual(["ollama.internal", "10.20.0.0/16", "10.20.0.0/17"]);
+    expect(spelled.names).toEqual(["ollama.internal"]);
+    expect(spelled.ranges).toHaveLength(2);
+    expect(spelled.companies?.["4f1aee73-e65e-4c8d-83f7-aa1169379d7f"]?.entries).toEqual(["x.internal."]);
   });
 });

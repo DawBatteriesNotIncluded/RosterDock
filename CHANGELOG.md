@@ -83,7 +83,8 @@ Against the images built from the pre-release tree (then called Pharo, not publi
   http-to-https rule sends, would turn the call into a GET, so it fails and says what to change (over https,
   or with or without the trailing slash). An answer is read only up to its call site's cap,
   decoded. OAuth endpoints must be https (http only to a listed destination), and the resource an MCP server
-  declares must be on its own origin, at or above its MCP URL's path. The board's own destinations (git hosts, OIDC, OTLP, the bucket, the
+  declares must be on its own origin, at or above its MCP URL's path; a connection that kept one that is not,
+  or an issuer now refused, is discovered again at its next Authorise, its old tokens dropped. The board's own destinations (git hosts, OIDC, OTLP, the bucket, the
   API server, the model API, its webhook and SMTP server) are not checked. An entry may be one company's
   alone (`<company id>=<entry>`, or `{ company, destination }` in the chart), which no other company's
   connections reach, unless an entry for every company covers it too, and no other company sees (a stdio

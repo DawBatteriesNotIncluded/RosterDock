@@ -430,5 +430,13 @@ export function safeReturnTo(value: unknown): string {
     [...value].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)
   )
     return "/";
-  return value.slice(0, 500);
+  // A Location header carries no character past Latin-1, so what the browser has not encoded already is
+  // encoded here; a lone surrogate encodes to nothing and is refused. The cut never leaves half an escape.
+  let encoded: string;
+  try {
+    encoded = value.replace(/[^ -~]+/g, encodeURIComponent);
+  } catch {
+    return "/";
+  }
+  return encoded.slice(0, 500).replace(/%[0-9A-F]?$/, "");
 }

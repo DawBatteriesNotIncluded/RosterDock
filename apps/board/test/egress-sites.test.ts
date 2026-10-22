@@ -26,6 +26,8 @@ import {
 import { rawUrl, STYLE_PACKS } from "../src/styles/catalog.js";
 import { parsePrivateDestinations } from "../src/web/address.js";
 import { companyEgress } from "../src/web/egress.js";
+import { fileSecretStore } from "../src/secrets/file.js";
+import { connectionSecretName } from "../src/secrets/store.js";
 import { fakeMcp } from "./mcp-fake.js";
 import { createOAuthFake } from "./oauth-fake.js";
 import { fakeOpenApi } from "./openapi-fake.js";
@@ -508,19 +510,47 @@ describe("OAuth for a company's connection", () => {
       oauth: {},
     });
     expect((await api.post(`${base}/connections/${created.body.id}/oauth/start`, {})).status).toBe(200);
-    // What a row kept before: another service's resource.
-    await board.db.query(
-      `UPDATE connections SET oauth = jsonb_set(oauth, '{resource}', '"https://api.other.test/mcp"') WHERE id = $1 AND company_id = $2`,
-      [created.body.id, companyId],
-    );
+    const store = fileSecretStore(dir);
+    const name = connectionSecretName(created.body.id);
+    const registeredSecret = (await store.get(name))?.client_secret;
+    const row = async () =>
+      (
+        await board.db.query<{ oauth: Record<string, unknown> }>(
+          "SELECT oauth FROM connections WHERE id = $1",
+          [created.body.id],
+        )
+      ).rows[0]!.oauth;
+    // What a row kept before: tokens, minted for another service's resource.
+    const authorised = async (patch: Record<string, unknown>) => {
+      await store.put(name, {
+        ...(registeredSecret ? { client_secret: registeredSecret } : {}),
+        access_token: "old-access-000000",
+        refresh_token: "old-refresh-000000",
+      });
+      await board.db.query(
+        "UPDATE connections SET oauth = oauth || $3::jsonb WHERE id = $1 AND company_id = $2",
+        [created.body.id, companyId, JSON.stringify({ authorizedAt: "2026-10-01T00:00:00.000Z", ...patch })],
+      );
+    };
+    await authorised({ resource: "https://api.other.test/mcp" });
     const again = await api.post(`${base}/connections/${created.body.id}/oauth/start`, {});
     expect(again.status).toBe(200);
     expect(new URL(again.body.url).searchParams.get("resource")).toBe("https://mcp.reauth.test/mcp");
-    const kept = await board.db.query<{ resource: string | null }>(
-      "SELECT oauth->>'resource' AS resource FROM connections WHERE id = $1",
-      [created.body.id],
-    );
-    expect(kept.rows[0]!.resource).toBe("https://mcp.reauth.test/mcp");
+    expect((await row()).resource).toBe("https://mcp.reauth.test/mcp");
+    // Before anyone consents, the old tokens are gone and the row is not authorised: nothing old is sent if the
+    // person never comes back. The client the board registered there stays.
+    expect((await row()).authorizedAt).toBeNull();
+    expect(await store.get(name)).toEqual(registeredSecret ? { client_secret: registeredSecret } : {});
+    // A row that kept an issuer that is refused now (the document's own word, from before the board kept the one
+    // it asked for): found again from the server's document, its tokens gone, its client registered there anew.
+    const clientBefore = (await row()).clientId;
+    await authorised({ authorizationServer: "http://keycloak.internal:8080/realms/x", registered: true });
+    const healed = await api.post(`${base}/connections/${created.body.id}/oauth/start`, {});
+    expect(healed.status).toBe(200);
+    expect((await row()).authorizationServer).toBe("https://auth.reauth.test");
+    expect((await row()).authorizedAt).toBeNull();
+    expect((await row()).clientId).not.toBe(clientBefore);
+    expect((await store.get(name))?.access_token).toBeUndefined();
   });
 
   it("follows discovery's redirects with every hop checked, follows none for registration or a token, and reaches a listed server", async () => {

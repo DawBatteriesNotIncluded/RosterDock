@@ -354,7 +354,9 @@ their own, each with its own database and workers.
   own origin and at or above its MCP URL's path (the MCP SDK's rule: Notion's origin-only identifier passes,
   a sibling's on a shared gateway does not), so the board never asks for a token named for another server; a
   token a connection kept for a resource that fails this, from before the board checked it, is neither sent
-  nor refreshed until a person authorises the connection again. Which authorization server it names stays
+  nor refreshed until a person authorises the connection again. That Authorise drops the kept tokens and asks
+  the MCP server afresh which resource and authorization server it names, as it does when a kept issuer is
+  refused or publishes no metadata. Which authorization server it names stays
   the server's choice, and a person consents on that server's page before any token is issued.
 - **Redirects.** An MCP server is followed within its own server (`/mcp` to `/mcp/`, or http to https on
   the same host and the default ports), its credential kept and every hop checked again, when the call
@@ -370,9 +372,8 @@ their own, each with its own database and workers.
   headers that say what is wanted (no credential, whatever it is called).
 - **Size.** The board reads no more of an answer than its call site's cap, decoded, so a small compressed
   body cannot fill the board's memory: an MCP answer 8 MB (an event stream counts every event on it) and
-  every answer of one MCP call 16 MB together, each request counting 64 KB at least (a stream the SDK
-  resumes again and again included, empty or not),
-  OAuth metadata and token answers 256 KB, an OpenAPI operation its manifest's response cap (the answer is
+  every answer of one MCP call 16 MB together, in 2,000 requests at most (a stream the SDK resumes again
+  and again counts each time, empty or not), OAuth metadata and token answers 256 KB, an OpenAPI operation its manifest's response cap (the answer is
   cut there and read no further), a style pack 256 KB, an SMTP reply's line 1,000 characters and a reply
   100 lines. A webhook's answer and an OpenAPI check's body are never read.
 - **Time.** One deadline per request, looking names up included: an MCP request's is the call's timeout

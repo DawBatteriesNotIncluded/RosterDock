@@ -173,6 +173,44 @@ describe("the OpenAPI runtime", () => {
     expect(keyed).toEqual({ ok: true, result: { "[redacted]": 2 } });
   });
 
+  it("scrubs a large answer in one linear pass, whatever its strings or the credential hold", async () => {
+    const manifest = {
+      ...buildOpenApiManifest(spec, { allow: ["listContacts"] }).manifest!,
+      maxResponseBytes: 2_000_000,
+    };
+    const call = async (body: string, secret: string) => {
+      const answering = (async () =>
+        new Response(body, { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+      const started = performance.now();
+      const outcome = await callOpenApiOperation(
+        { url: "https://crm.example.test/v1", authEnvName: "CRM_API_TOKEN" },
+        manifest,
+        { egress: testEgress(answering), env: { CRM_API_TOKEN: secret } },
+        "list_contacts",
+        {},
+      );
+      return { outcome, ms: performance.now() - started };
+    };
+    // Half a megabyte of empty strings, and a credential of backslashes in a run of escaped backslashes: a
+    // pattern built per string held the board's event loop 2.3 s for the first, a backtracking one 5.3 s for
+    // the second. A few tens of milliseconds now; the bound leaves room for a slow machine.
+    const empties = await call(
+      `[${Array.from({ length: 170_000 }, () => '""').join(",")}]`,
+      env.CRM_API_TOKEN!,
+    );
+    expect(empties.outcome.ok).toBe(true);
+    expect(empties.ms).toBeLessThan(250);
+    const backslashes = await call(`{"v":"${"\\\\".repeat(120_000)}"}`, `${"\\".repeat(24)}tail00`);
+    expect(backslashes.outcome.ok).toBe(true);
+    expect(backslashes.ms).toBeLessThan(250);
+    // And the scan finds what the pattern found: escaped or not, wherever it starts.
+    const mixed = await call(
+      `{"a":"x${"\\u0041bC+dEf+GhI\\/jKl="}y","b":"AbC\\u002bdEf+GhI/jKl="}`,
+      "AbC+dEf+GhI/jKl=",
+    );
+    expect(mixed.outcome).toEqual({ ok: true, result: { a: "x[redacted]y", b: "[redacted]" } });
+  });
+
   it("calls an operation with path and query parameters, the credential by name, and redacts the answer", async () => {
     const manifest = buildOpenApiManifest(spec, {
       allow: ["listContacts", "getContact", "createContact"],
