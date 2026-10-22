@@ -52,6 +52,13 @@ it("takes no job where Windows PowerShell is not there, cannot start, or cannot 
     works: false,
     why: expect.stringMatching(/^Windows PowerShell exited 1 /),
   });
+  // PowerShell ran, but could not make the job (a Windows that cannot nest jobs): no job, though it would run.
+  vi.mocked(existsSync).mockReturnValueOnce(true);
+  vi.mocked(spawn).mockImplementationOnce(() => exiting(8));
+  expect(await probeJob()).toMatchObject({
+    works: false,
+    why: expect.stringMatching(/could not make a job/),
+  });
   // The command ran, and its code came back through the job.
   vi.mocked(existsSync).mockReturnValueOnce(true);
   vi.mocked(spawn).mockImplementationOnce(() => exiting(7));

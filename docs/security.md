@@ -255,10 +255,11 @@ their own, each with its own database and workers.
   (`report.md -> /proc/self/environ`, a linked directory on the way) or a path out of the directory is never
   opened, so the worker's own environment never becomes an artifact; a completed run's summary names what was
   refused. In a repository, the diff carries such a link as the path it points at, as git stores it. With no
-  outputs declared, the changed files are those git status lists, but never a path it calls deleted: a file
-  the run took out of the index and kept there (a local `.env` that `.gitignore` matches) is not delivered,
-  whatever it holds. Where git cannot stage the changes (a lock a git the time limit ended left behind), the
-  run fails rather than send part of them for review.
+  outputs declared, the changed files are those git status lists, each by its name as it is (a moved one by
+  its new name), but never a path it calls deleted: a file the run took out of the index and kept there (a
+  local `.env` that `.gitignore` matches) is not delivered, whatever it holds. Where git cannot read the
+  changes back (a lock left by a git that something ended part-way), a run that would complete fails rather
+  than send part of them for review; one that is blocked or failed says so as it would.
 - A run sent back with changes requested starts from that round only as its diff, checked against the
   sha256 the review recorded and applied with `git apply`, which writes nothing outside the clone, into
   `.git` or through a link. A round that would leave a link in the clone is undone, and the run starts
@@ -275,29 +276,29 @@ their own, each with its own database and workers.
   names the path. A round that deletes such a link or replaces it with a file carries over, as on Linux, and
   the harvest records a link the run changed as the file it now is, staged by the run or not (changed again
   since, too), at a path `.gitignore` matches as well: git add would keep it a link. A link the run took out
-  of the index itself is not forced back in, so at a path `.gitignore` matches it and the file kept there stay
-  out of the review. Windows looks for a program in the directory it starts in before PATH; the worker turns
-  that off (`NoDefaultCurrentDirectoryInExePath`), so a `git.exe` or `claude.exe` in a clone never runs in
-  place of the real one. Windows has no `O_NOFOLLOW`: a symbolic link or a junction anywhere on a file's way
-  is refused, and the file is read only when the one opened has the file id of the one checked, compared
+  of the index itself is not forced back in: the review shows it deleted, and at a path `.gitignore` matches
+  never the file kept there. Windows looks for a program in the directory it starts in before PATH; the worker
+  turns that off (`NoDefaultCurrentDirectoryInExePath`), so a `git.exe` or `claude.exe` in a clone never runs
+  in place of the real one. Windows has no `O_NOFOLLOW`: a symbolic link or a junction anywhere on a file's
+  way is refused, and the file is read only when the one opened has the file id of the one checked, compared
   whole, on the workspace's volume as a handle reads it. A file without an id is refused: 0, or the all-ones
   id ReFS gives a file whose own does not fit in 64 bits, so on a Dev Drive such a file is not delivered. By
   path, libuv 1.49 and 1.50 (Node 22.12 to 22.16, 23.1 to 23.11 and 24.0 to 24.1) misread the volume on
   Windows 11 24H2 and Server 2025. A stopped git ends with the helpers it started that still run
   (`taskkill /t`, where Linux has the process group). The repository's tests run in a job object, which ends
   every process they started, one whose parent has already ended included (not a program started for them by a
-  service, WMI or the task scheduler). The worker asks once when it starts whether the job works there, and
-  its log says so (no answer within 30 s is asked again at the next tests, and that wait counts against the
-  tests' time limit). Without the job (Windows PowerShell blocked, or in the Constrained Language mode
-  AppLocker and WDAC put it in, and the tests run under cmd.exe as before; or a Windows that cannot nest
-  jobs), taskkill ends what it can still walk to past the time limit or on Stop, and what the tests leave
-  running when they end by themselves carries on. File modes do nothing there: the MCP config that carries the
-  run token is written to the temp directory and is private only while that directory is, as `%TEMP%` in your
-  profile is by default. A `TEMP` outside the profile (`C:\Temp`) takes its folder's permissions, which under
-  a drive's root let other users read it: keep the worker's `TEMP` in its profile. What does not carry over is
-  the pod: the engine, its shell and the repository's tests run as your Windows user, with your files, your
-  credentials and your other programs within reach, and nothing the engine leaves running ends with the run.
-  Run anything but your own repositories in Docker or WSL2.
+  service, WMI or the task scheduler). Where it runs the repository's tests, the worker asks once when it
+  starts whether the job works there, and its log says so (no answer within 30 s is asked again at the next
+  tests, and that wait counts against the tests' time limit). Without the job (Windows PowerShell blocked, or
+  in the Constrained Language mode AppLocker and WDAC put it in, and the tests run under cmd.exe as before; or
+  a Windows that cannot nest jobs), taskkill ends what it can still walk to past the time limit or on Stop,
+  and what the tests leave running when they end by themselves carries on. File modes do nothing there: the
+  MCP config that carries the run token is written to the temp directory and is private only while that
+  directory is, as `%TEMP%` in your profile is by default. A `TEMP` outside the profile (`C:\Temp`) takes its
+  folder's permissions, which under a drive's root let other users read it: keep the worker's `TEMP` in its
+  profile. What does not carry over is the pod: the engine, its shell and the repository's tests run as your
+  Windows user, with your files, your credentials and your other programs within reach, and nothing the engine
+  leaves running ends with the run. Run anything but your own repositories in Docker or WSL2.
 
 ## The board
 

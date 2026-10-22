@@ -234,17 +234,20 @@ describe("runRepoTests", () => {
         'const fs = require("node:fs");',
         // Whole or not at all: a stop between the file's creation and its write left it empty.
         "const write = (pid) => { fs.writeFileSync(`${process.argv[2]}.part`, String(pid)); fs.renameSync(`${process.argv[2]}.part`, process.argv[2]); };",
+        // Detached on Windows, where a child otherwise dies with its parent (libuv's job): the step's job, not that,
+        // is what must end it. Elsewhere in the script's group, as a test runner's worker would be.
+        `const detached = ${JSON.stringify(process.platform === "win32")};`,
         "const go = () => {",
         exit === undefined ? "  setTimeout(() => {}, 60000);" : `  process.exit(${exit});`,
         "};",
         ...(stubborn
           ? [
               // It says it is there only once it outlives SIGTERM: one that came before would end it as any other.
-              'const held = spawn(process.execPath, ["-e", "process.on(`SIGTERM`, () => {}); process.stdout.write(`up`); setTimeout(() => {}, 60000)"], { stdio: ["ignore", "pipe", "ignore"] });',
+              'const held = spawn(process.execPath, ["-e", "process.on(`SIGTERM`, () => {}); process.stdout.write(`up`); setTimeout(() => {}, 60000)"], { stdio: ["ignore", "pipe", "ignore"], detached });',
               'held.stdout.once("data", () => { held.stdout.destroy(); write(held.pid); go(); });',
             ]
           : [
-              'const held = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "inherit" });',
+              'const held = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "inherit", detached });',
               "write(held.pid);",
               "go();",
             ]),
@@ -322,19 +325,23 @@ describe("runRepoTests", () => {
     }
   });
 
-  it("sends a group's SIGKILL at once when the worker exits before its grace is over", async () => {
-    const h = await holder("stubborn-worker-exits", { exit: 0, stubborn: true });
-    await execCommand(process.execPath, [h.script, h.pidFile], {
-      cwd: root,
-      env: testEnvironment(process.env),
-      timeoutMs: 60_000,
-    });
-    // What the worker's exit does: the grace's timer would not fire after it.
-    const started = Date.now();
-    killDue();
-    expect(await ended(h.held())).toBe(true);
-    expect(Date.now() - started).toBeLessThan(1500);
-  });
+  // On Windows the job has ended the group already.
+  it.runIf(process.platform !== "win32")(
+    "sends a group's SIGKILL at once when the worker exits before its grace is over",
+    async () => {
+      const h = await holder("stubborn-worker-exits", { exit: 0, stubborn: true });
+      await execCommand(process.execPath, [h.script, h.pidFile], {
+        cwd: root,
+        env: testEnvironment(process.env),
+        timeoutMs: 60_000,
+      });
+      // What the worker's exit does: the grace's timer would not fire after it.
+      const started = Date.now();
+      killDue();
+      expect(await ended(h.held())).toBe(true);
+      expect(Date.now() - started).toBeLessThan(1500);
+    },
+  );
 
   it("ends a command, and every process it started, at once when the run stops", async () => {
     const h = await holder("stopped");

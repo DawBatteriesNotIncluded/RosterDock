@@ -367,7 +367,7 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
-  it("fails the harvest when git cannot stage the changes, never a review of part of them", async () => {
+  it("says git could not read the changes back, and sends no part of them, when it cannot stage them", async () => {
     const ws = await prepareWorkspace(
       path.join(root, "work"),
       "run-index-lock",
@@ -375,11 +375,29 @@ describe("workspace", () => {
       null,
     );
     await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
-    // What a git the time limit ended leaves behind.
+    // What a git ended part-way leaves behind.
     await writeFile(path.join(ws.dir, ".git", "index.lock"), "", "utf8");
-    await expect(harvestWorkspace(ws, [])).rejects.toThrow(
-      /^the run's changes could not be read back for review \(git: .+\)$/,
+    const h = await harvestWorkspace(ws, []);
+    // git's own reason, its first error line, not its advice.
+    expect(h.unreadable).toMatch(
+      /^the run's changes could not be read back for review \(git: (?:error|fatal): .+\)$/,
     );
+    expect(h.artifacts.find((a) => a.kind === "diff")).toBeUndefined();
+    await cleanupWorkspace(ws);
+  });
+
+  it("delivers, with no outputs declared, a changed file by its name as it is and a moved one by its new name", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-names",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "my notes.md"), "notes\n", "utf8");
+    await writeFile(path.join(ws.dir, "naïve.md"), "café\n", "utf8");
+    await git(["mv", "README.md", "READ-ME.md"], ws.dir, { GIT_AUTHOR_NAME: "t" });
+    const h = await harvestWorkspace(ws, []);
+    expect([...h.filesWritten].sort()).toEqual(["READ-ME.md", "my notes.md", "naïve.md"]);
     await cleanupWorkspace(ws);
   });
 

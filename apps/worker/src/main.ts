@@ -25,7 +25,7 @@ const log = createLog(logFormatFrom(process.env, process.stdout.isTTY === true),
 });
 
 // Windows: whether the repository's tests run in a job object, asked now so no run's tests wait for it, and said.
-if (process.platform === "win32") {
+if (process.platform === "win32" && config.runRepoTests) {
   onJobAnswer((answer) =>
     answer.works
       ? log.info("the repository's tests run in a job object: what they start ends with them")
