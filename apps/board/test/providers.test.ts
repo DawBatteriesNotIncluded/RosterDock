@@ -139,7 +139,7 @@ describe("model providers", () => {
     expect(events[1]!.payload.changes).toEqual(["label", "models"]);
     expect(events[2]!.payload).toMatchObject({ changes: ["enabled", "archived"], archived: true });
     expect(events[3]!.payload).toMatchObject({ changes: ["archived"], archived: false });
-    expect(events[4]!.payload).toEqual({ name: "acme", kind: "anthropic" });
+    expect(events[4]!.payload).toEqual({ name: "acme", label: "Acme Anthropic (prod)", kind: "anthropic" });
     // No value anywhere: not the company's, not the board's.
     const everything = JSON.stringify([events, created.body, one.body, changed.body]);
     for (const value of [SET, BOARD_OWN, SHARED]) expect(everything).not.toContain(value);
@@ -357,6 +357,17 @@ describe("model providers", () => {
     expect(
       changes.every((c) => JSON.stringify(c) === '["label"]' || JSON.stringify(c) === '["models"]'),
     ).toBe(true);
+    // Models with every field, which Postgres keeps with their keys in its own order: a change that names
+    // none of them is no change to them.
+    await api.patch(url, {
+      models: [{ id: "gpt-x", label: "GPT X", family: "openai", contextWindow: 400_000 }],
+    });
+    const listed = (await providerEvents(api, base)).length;
+    expect((await api.patch(url, {})).status).toBe(200);
+    expect((await providerEvents(api, base)).length).toBe(listed);
+    await api.patch(url, { enabled: false });
+    expect((await providerEvents(api, base))[0]!.payload.changes).toEqual(["enabled"]);
+    await api.patch(url, { enabled: true, label: "O 4", models: [{ id: "gpt-4", family: "openai" }] });
     // Nothing to change: the provider as it is, and no event.
     const before = (await providerEvents(api, base)).length;
     const same = await api.patch(url, { label: "O 4", enabled: true });

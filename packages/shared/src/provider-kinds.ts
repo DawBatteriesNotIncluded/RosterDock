@@ -142,7 +142,8 @@ export function compatibleEndpoint(raw: string): string | null {
   if (url.username || url.password || url.search || url.hash || !url.hostname) return null;
   // A key in the path would be kept, sent in events and shown: refused like one anywhere else.
   if (containsRawSecret(url.pathname)) return null;
-  return url.toString().replace(/\/+$/, "");
+  // Built from its parts, so an empty "?" or "#" left at the end is gone: a path added later stays a path.
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
 }
 
 /**

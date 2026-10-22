@@ -59,6 +59,8 @@ describe("model provider events", () => {
     expect(said("model_provider.updated", { ...acme, changes: ["archived"], archived: false })).toBe(
       "Daniel brought back the model provider Acme Azure",
     );
+    expect(said("model_provider.deleted", { ...acme })).toBe("Daniel removed the model provider Acme Azure");
+    // A removal written before the label was carried names the provider by its name.
     expect(said("model_provider.deleted", { name: "acme-azure", kind: "azure_openai" })).toBe(
       "Daniel removed the model provider acme-azure",
     );

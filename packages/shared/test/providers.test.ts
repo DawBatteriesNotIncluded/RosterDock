@@ -128,6 +128,9 @@ describe("a provider's schema", () => {
 
   it("takes a compatible server's base URL, never one with a credential or a query in it", () => {
     expect(compatibleEndpoint("https://llm.example.com/v1")).toBe("https://llm.example.com/v1");
+    // An empty query or fragment left at the end goes, so a path added later stays a path.
+    expect(compatibleEndpoint("https://llm.example.com/v1?")).toBe("https://llm.example.com/v1");
+    expect(compatibleEndpoint("http://ollama:11434/v1/#")).toBe("http://ollama:11434/v1");
     for (const bad of [
       "ftp://llm.example.com",
       "https://key:x@llm.example.com/v1",
@@ -238,6 +241,17 @@ describe("a provider's schema", () => {
     expect(JSON.stringify(r.error?.issues)).not.toContain("a3f9c2e1b4d5f60718293a4b5c6d7e8f");
   });
 
+  it("takes a name of one long word in one case: the names the paste flow builds", () => {
+    expect(nameLooksLikeKey("MODELS_ACMEPRODUCTIONOPENAI_KEY")).toBe(false);
+    expect(nameLooksLikeKey("AZUREOPENAIPRODUCTIONKEY")).toBe(false);
+    expect(nameLooksLikeKey("githubPersonalAccessToken")).toBe(false);
+    // In both cases with digits, or flipping case as a key does, it is a key.
+    expect(nameLooksLikeKey("TOKEN_aB3dE5fG7hJ9kL1mN3pQ5rS7")).toBe(true);
+    expect(nameLooksLikeKey("aBcDeFgHiJkLmNoPqRsTuVwXyZ")).toBe(true);
+    // Built here, so the repository holds no string a secret scanner would stop a push for.
+    expect(nameLooksLikeKey(["hf", "AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh"].join("_"))).toBe(true);
+  });
+
   it("keeps a key out of a server's address, and an account id in it", () => {
     expect(
       compatibleEndpoint("https://llm.example.com/v1/sk-proj-abcdefghijklmnopqrstuvwxyz0123"),
@@ -318,6 +332,24 @@ describe("a provider's schema", () => {
         models: [{ id: "openai.example-model", family: "openai" }],
       }),
     ).toEqual([expect.stringContaining("Mantle")]);
+    // Any other id that is not a cross-Region profile or its ARN, too.
+    const bedrockOpenAi = (id: string) =>
+      issues({
+        kind: "bedrock",
+        name: "b",
+        label: "B",
+        region: "us-east-1",
+        credentials: { bearerToken: "K" },
+        models: [{ id, family: "openai" }],
+      });
+    expect(bedrockOpenAi("gpt-oss-120b")).toEqual([
+      expect.stringContaining("cross-Region inference profile"),
+    ]);
+    expect(bedrockOpenAi("global.openai.example-model")).toEqual([]);
+    expect(bedrockOpenAi("us.openai.example-model")).toEqual([]);
+    expect(
+      bedrockOpenAi("arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.openai.example-model"),
+    ).toEqual([]);
   });
 
   it("puts a compatible server's header with its key only", () => {
