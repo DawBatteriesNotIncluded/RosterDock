@@ -42,7 +42,8 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
   Playwright, the MCP reference fetch server), and the brief tells each teammate which web tools it has.
 - A worker that runs natively on Windows (`pnpm dev:worker` with Git for Windows), tested there in CI, with
   the worker's git and file rules kept by Windows' own means; Docker or WSL2 stays the place for
-  repositories you would not run yourself (`docs/security.md`).
+  repositories you would not run yourself (`docs/security.md`). A board there plans with Claude Code or Codex
+  as npm installs them.
 
 ### Changed
 

@@ -7,11 +7,11 @@
 // could otherwise allow tools or run hooks beyond the run's allowlist.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { splitToolList, toolName, type RunEventInput, type RunUsage } from "@rosterdock/shared";
+import { resolveEngineBin } from "./bin.js";
 import type { EngineAdapter, EngineContext, EngineResult } from "./types.js";
 import { clip, tail } from "../text.js";
 
@@ -26,23 +26,6 @@ export interface ClaudeCodeOptions {
   permissionMode?: string;
   /** Extra leading argv (tests use it to load a stub script with the same Node). */
   prefixArgs?: string[];
-}
-
-// Windows npm exposes claude only as a .cmd shim, which spawn(shell:false)
-// cannot execute. Resolve the shim's cli.js from PATH and run it with this Node.
-export function resolveClaudeBin(
-  bin: string,
-  env: NodeJS.ProcessEnv = process.env,
-  platform = process.platform,
-): { bin: string; prefix: string[] } {
-  if (bin !== "claude" || platform !== "win32") return { bin, prefix: [] };
-  const pathValue = env.Path || env.PATH || "";
-  for (const dir of pathValue.split(path.delimiter)) {
-    if (!dir) continue;
-    const js = path.join(dir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
-    if (existsSync(js)) return { bin: process.execPath, prefix: [js] };
-  }
-  return { bin, prefix: [] };
 }
 
 /** Why an engine did not start, in the run's words. No binary is a worker image without that CLI: the
@@ -317,7 +300,7 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
   return {
     id: "claude_code",
     async run(ctx: EngineContext): Promise<EngineResult> {
-      const resolved = resolveClaudeBin(opts.bin);
+      const resolved = resolveEngineBin(opts.bin);
       // The MCP config (with the run token) lives outside the workdir so it is never harvested. Its mode keeps
       // it the user's own on Unix; Windows ignores the mode, and the file takes the temp directory's
       // permissions, which in a user's profile are that user's (and the administrators').
