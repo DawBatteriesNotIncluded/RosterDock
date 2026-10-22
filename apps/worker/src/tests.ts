@@ -10,6 +10,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { WorkerCheckInput } from "@rosterdock/shared";
+import { killTree } from "./kill.js";
 import { tail } from "./text.js";
 import type { Workspace } from "./workspace.js";
 
@@ -22,10 +23,13 @@ export interface ExecResult {
 export type Exec = (
   command: string,
   args: string[],
-  opts: { cwd: string; env: Record<string, string>; timeoutMs: number },
+  /** `signal`: the run's (Stop, its time limit, the worker's shutdown), which ends the command. */
+  opts: { cwd: string; env: Record<string, string>; timeoutMs: number; signal?: AbortSignal },
 ) => Promise<ExecResult>;
 
 export const MAX_TEST_OUTPUT_CHARS = 20_000;
+/** How long an ended command may still hold the step: past it the worker reads on without its output. */
+const STOP_GRACE_MS = 2000;
 
 /** All a package manager needs: where programs live, a home, a temp directory, the locale. */
 const TEST_ENV_KEYS = [
@@ -57,9 +61,15 @@ export function testEnvironment(env: Record<string, string | undefined>): Record
   return { ...out, CI: "1" };
 }
 
-/** Run a package-manager command, capturing interleaved stdout and stderr. */
+/**
+ * Run a package-manager command, capturing interleaved stdout and stderr. Past the time limit, or when the run
+ * stops, it is ended: on Windows with every process under it, since there it runs under cmd.exe, which would
+ * go alone and leave npm running. A process it started that is still alive may hold its output open; the step
+ * waits for that STOP_GRACE_MS at most, then ends the command for good and reads no more of it.
+ */
 export const execCommand: Exec = (command, args, opts) =>
   new Promise((resolve) => {
+    if (opts.signal?.aborted) return resolve({ code: null, output: "", timedOut: false });
     const win = process.platform === "win32";
     const child = spawn(command, args, {
       cwd: opts.cwd,
@@ -78,18 +88,34 @@ export const execCommand: Exec = (command, args, opts) =>
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", keep);
     child.stderr.on("data", keep);
+    let grace: NodeJS.Timeout | undefined;
+    let settled = false;
+    const settle = (code: number | null, more = "") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(grace);
+      opts.signal?.removeEventListener("abort", stop);
+      child.stdout.destroy();
+      child.stderr.destroy();
+      resolve({ code, output: output + more, timedOut });
+    };
+    const stop = () => {
+      if (grace) return;
+      if (win) killTree(child);
+      else child.kill();
+      grace = setTimeout(() => {
+        child.kill("SIGKILL");
+        settle(child.exitCode);
+      }, STOP_GRACE_MS);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      stop();
     }, opts.timeoutMs);
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({ code: null, output: `${output}\n${err.message}`, timedOut });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, output, timedOut });
-    });
+    opts.signal?.addEventListener("abort", stop, { once: true });
+    child.on("error", (err) => settle(null, `\n${err.message}`));
+    child.on("close", (code) => settle(code));
   });
 
 async function exists(p: string): Promise<boolean> {
@@ -120,13 +146,14 @@ function tailOf(output: string): string {
 
 /**
  * The tests check for a workspace: null when there is no repository (nothing
- * to run); `ok: null` when the repository has no test script or its
- * dependencies cannot be installed; otherwise the exit status of `<pm> test`.
- * `env` is narrowed to testEnvironment whatever the caller passes.
+ * to run) or `signal` stopped them before they finished; `ok: null` when the
+ * repository has no test script or its dependencies cannot be installed;
+ * otherwise the exit status of `<pm> test`. `env` is narrowed to
+ * testEnvironment whatever the caller passes.
  */
 export async function runRepoTests(
   ws: Workspace,
-  opts: { exec?: Exec; env: Record<string, string>; timeoutMs: number },
+  opts: { exec?: Exec; env: Record<string, string>; timeoutMs: number; signal?: AbortSignal },
 ): Promise<WorkerCheckInput | null> {
   if (!ws.repo) return null;
   const exec = opts.exec ?? execCommand;
@@ -145,7 +172,9 @@ export async function runRepoTests(
       cwd: ws.dir,
       env,
       timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
     });
+    if (opts.signal?.aborted) return null;
     if (install.code !== 0) {
       return {
         kind: "tests",
@@ -157,7 +186,8 @@ export async function runRepoTests(
       };
     }
   }
-  const res = await exec(pm, ["test"], { cwd: ws.dir, env, timeoutMs: opts.timeoutMs });
+  const res = await exec(pm, ["test"], { cwd: ws.dir, env, timeoutMs: opts.timeoutMs, signal: opts.signal });
+  if (opts.signal?.aborted) return null;
   if (res.timedOut) {
     return {
       kind: "tests",
