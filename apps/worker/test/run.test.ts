@@ -592,6 +592,55 @@ describe("repository tests", () => {
     expect(board.shipped.some((e) => e.type === "check")).toBe(true);
   });
 
+  it("fails a run whose changes git could not read back for review, and keeps a blocked run blocked", async () => {
+    for (const blocked of [false, true]) {
+      const bare = await repoWithTests(`locked-${blocked}`);
+      const board = fakeBoard(PACK(), [], { repoUrl: bare });
+      const locking: EngineAdapter = {
+        id: "stub",
+        async run(ctx) {
+          await writeFile(path.join(ctx.workdir, "notes.md"), "notes\n", "utf8");
+          if (blocked)
+            await writeFile(
+              path.join(ctx.workdir, "blocked.md"),
+              "Waiting on @archy for the schema.\n",
+              "utf8",
+            );
+          // What a git the engine ran leaves behind when something ends it part-way.
+          await writeFile(path.join(ctx.workdir, ".git", "index.lock"), "", "utf8");
+          return { ok: true, exitCode: 0, usage: {}, resultText: "Wrote the notes." };
+        },
+      };
+      let tested = false;
+      await executeRun(
+        { runId: "run-1", jobId: "job-1" },
+        deps(board, {
+          engines: { stub: locking },
+          repoTests: {
+            timeoutMs: 1000,
+            exec: async () => {
+              tested = true;
+              return { code: 0, output: "", timedOut: false };
+            },
+          },
+        }),
+      );
+      // No part of the change goes for review, and no tests run on a change nobody can see.
+      expect(board.artifacts.find((a) => a.kind === "diff")).toBeUndefined();
+      expect(tested).toBe(false);
+      if (blocked)
+        expect(board.completion).toMatchObject({
+          status: "blocked",
+          blocker: { code: "waiting_on_teammate" },
+        });
+      else
+        expect(board.completion).toMatchObject({
+          status: "failed",
+          error: expect.stringMatching(/^the run's changes could not be read back for review \(git: /),
+        });
+    }
+  });
+
   it("ends the tests when the run is stopped, and reports the run stopped", async () => {
     const bare = await repoWithTests("stop-tests");
     const board = fakeBoard(PACK(), ["notes.md"], { repoUrl: bare });

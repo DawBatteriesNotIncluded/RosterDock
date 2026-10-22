@@ -343,7 +343,14 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       phases.end();
       // The repository's own tests, after the diff is captured so their output stays out of the review.
       let checks: RunCompleteInput["checks"];
-      if (deps.repoTests && ws.repo && result.ok && !abort.signal.aborted && !harvest.blocked) {
+      if (
+        deps.repoTests &&
+        ws.repo &&
+        result.ok &&
+        !abort.signal.aborted &&
+        !harvest.blocked &&
+        !harvest.unreadable
+      ) {
         emit({ type: "step", payload: { text: "running the repository's tests" } });
         phases.begin("tests");
         // Not the engine's environment: runRepoTests keeps only PATH, HOME, the temp directory and the locale.
@@ -387,10 +394,10 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
               : {}),
           },
         };
-      } else if (!result.ok) {
+      } else if (!result.ok || harvest.unreadable) {
         completion = {
           status: "failed",
-          error: result.error ?? "the engine failed",
+          error: result.ok ? harvest.unreadable! : (result.error ?? "the engine failed"),
           summary: harvest.handover ?? undefined,
           usage,
           durationMs,

@@ -117,6 +117,19 @@ install built from that tree changes each of these:
   the output open after a passing script held the step to its time limit, which it then reported as a
   timeout. The script now leads a process group of its own (a job object on Windows), which the step ends
   past its time limit, on Stop and when the script ends.
+- With no outputs declared, a file a run took out of the index and kept (a local `.env` that `.gitignore`
+  matches) was delivered as one of the run's files, with what it held. A path git calls deleted is no
+  longer delivered, and a file whose name has a space or a character git escapes, or one the run moved, is.
+  And where git could not read the changes back (a lock left by a git that something ended part-way), the
+  review showed part of them; a run that would complete now fails instead.
+- The review's diff, and so the pull request, named a file git quotes (a name past ASCII, or with a quote or
+  a control character) by git's escaped spelling, and dropped a trailing space from a name: a new
+  `résumé.md` was created under its escapes, a change to such a file failed the pull request, and a new
+  `README.md ` replaced `README.md`. Names are read back as they are.
+- On Windows, 0.1.0-rc.1 and 0.1.0-rc.2 ran the repository's tests without the job object: Windows
+  PowerShell never made it (kernel32's functions were declared without PreserveSig), so what the tests left
+  running when they ended by themselves carried on, as without one. The worker now makes it, and its log
+  says whether it did.
 - Handing Peter a goal could fail with an internal error, and leave it half planned, when Peter's loop started
   the plan's first task while the rest were still being filed: filing a task and starting the task it waits on
   took their locks in opposite orders, and Postgres broke the deadlock by cancelling the filing.

@@ -17,7 +17,12 @@ function windows(files: Record<string, string>): WindowsBinFiles {
   return {
     isFile: (p) => names.has(p.toLowerCase()),
     read: (p) => files[p] ?? null,
-    join: (...parts) => parts.join("\\").replace(/\\+/g, "\\"),
+    // One backslash between parts, and a share's two leading ones (\\server\share) kept, as Windows has them.
+    join: (...parts) => {
+      const joined = parts.join("\\");
+      const share = joined.startsWith("\\\\") ? "\\" : "";
+      return share + joined.replace(/\\+/g, "\\");
+    },
     dirname: (p) => p.slice(0, p.lastIndexOf("\\")),
   };
 }

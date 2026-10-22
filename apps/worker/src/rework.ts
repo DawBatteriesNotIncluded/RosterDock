@@ -149,17 +149,18 @@ function numstatPaths(out: string): string[] {
  * index calls what the apply changed, and compared without case where the file system ignores it (Windows,
  * macOS: core.ignorecase), which takes `L` for the link `l`. Null when git cannot say.
  */
-async function linksDeclared(ws: Workspace, patch: string): Promise<string[] | null> {
-  const [summary, numstat, tree, modified, ignorecase] = await Promise.all([
+async function linksDeclared(
+  ws: Workspace,
+  patch: string,
+  fold: (p: string) => string,
+): Promise<string[] | null> {
+  const [summary, numstat, tree, modified] = await Promise.all([
     git(["apply", "--summary", patch], ws.dir),
     git(["apply", "--numstat", "-z", patch], ws.dir),
     git(["ls-tree", "-r", "-z", "--full-tree", "HEAD"], ws.dir),
     git(["ls-files", "--modified", "-z"], ws.dir),
-    git(["config", "--bool", "core.ignorecase"], ws.dir),
   ]);
   if (summary.code !== 0 || numstat.code !== 0 || tree.code !== 0 || modified.code !== 0) return null;
-  // Folded where case does not count, and compared so: a match is a refusal, so folding more is the safe side.
-  const fold = ignorecase.stdout.trim() === "true" ? (p: string) => p.toLowerCase() : (p: string) => p;
   const made: string[] = [];
   const deleted = new Set<string>();
   for (const line of summary.stdout.split("\n")) {
@@ -174,9 +175,21 @@ async function linksDeclared(ws: Workspace, patch: string): Promise<string[] | n
       return link ? [fold(link[1]!)] : [];
     }),
   );
-  const touched = new Set([...numstatPaths(numstat.stdout), ...modified.stdout.split("\0").filter(Boolean)]);
-  const changed = [...touched].filter((p) => committed.has(fold(p)) && !deleted.has(fold(p)));
+  // One name a path: the index's own where it has one (`l`, where the diff said `L`).
+  const touched = new Map<string, string>();
+  for (const p of [...numstatPaths(numstat.stdout), ...modified.stdout.split("\0").filter(Boolean)])
+    touched.set(fold(p), p);
+  const changed = [...touched].filter(([at]) => committed.has(at) && !deleted.has(at)).map(([, p]) => p);
   return [...made, ...changed];
+}
+
+/**
+ * A path as the clone compares it: folded where the file system ignores case (Windows, macOS:
+ * core.ignorecase), so `L` and `l` are one. A match is a refusal, so folding more is the safe side.
+ */
+async function caseFold(ws: Workspace): Promise<(p: string) => string> {
+  const ignorecase = await git(["config", "--bool", "core.ignorecase"], ws.dir);
+  return ignorecase.stdout.trim() === "true" ? (p) => p.toLowerCase() : (p) => p;
 }
 
 /** Where a diff copies or renames files to (or from, where it names no destination). */
@@ -278,13 +291,17 @@ export async function applyPreviousRound(
   const patch = path.join(ws.dir, ".git", PATCH_FILE);
   await writeFile(patch, rework.diff, "utf8");
   const res = await git(["apply", "--whitespace=nowarn", patch], ws.dir);
+  const fold = await caseFold(ws);
   const [left, declared, made] =
     res.code === 0
-      ? await Promise.all([linksLeft(ws), linksDeclared(ws, patch), linksMade(ws.dir, before)])
+      ? await Promise.all([linksLeft(ws), linksDeclared(ws, patch, fold), linksMade(ws.dir, before)])
       : [null, null, null];
   await rm(patch, { force: true });
   if (res.code === 0) {
-    const links = left && declared && made && [...new Set([...left, ...declared, ...made])].sort();
+    // Each link once, by the index's name where git has one (`l`, though the diff or the disk says `L`).
+    const named = new Map<string, string>();
+    for (const p of [...(made ?? []), ...(left ?? []), ...(declared ?? [])]) named.set(fold(p), p);
+    const links = left && declared && made && [...named.values()].sort();
     if (links?.length === 0) return { round, applied: true, files: parseUnifiedDiff(rework.diff).length };
     await undoApply(ws, before);
     return {

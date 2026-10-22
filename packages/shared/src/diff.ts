@@ -45,20 +45,77 @@ export interface DiffFile {
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
 const NO_NEWLINE = "\\ No newline at end of file";
 
-/** Strip git's `a/` or `b/` prefix and the tab git appends after paths containing spaces. */
+const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+
+/**
+ * A name as git quotes one (`"caf\303\251 \"x\".md"`: a quote, a backslash or a control character, and with
+ * core.quotePath every byte past ASCII, escaped C's way, octal escapes being the UTF-8 bytes), read back from
+ * `s` at `from`, which is its opening quote. Null where it is not one.
+ */
+function readQuoted(s: string, from: number): { name: string; end: number } | null {
+  const bytes: number[] = [];
+  const utf8 = new TextEncoder();
+  for (let i = from + 1; i < s.length; i++) {
+    const c = s[i]!;
+    if (c === '"') return { name: new TextDecoder().decode(new Uint8Array(bytes)), end: i + 1 };
+    if (c !== "\\") {
+      bytes.push(...utf8.encode(c));
+      continue;
+    }
+    const next = s[++i];
+    if (next !== undefined && next in C_ESCAPES) bytes.push(C_ESCAPES[next]!);
+    else if (/^[0-7]{3}$/.test(s.slice(i, i + 3))) {
+      bytes.push(parseInt(s.slice(i, i + 3), 8));
+      i += 2;
+    } else return null;
+  }
+  return null;
+}
+
+/**
+ * A path as git prints it in a diff, without its `a/` or `b/` prefix and the tab git appends after a name with
+ * a space in it, unquoted where git quoted it. Never trimmed: `README.md ` is not `README.md`.
+ */
 function cleanPath(raw: string): string {
-  let p = raw.replace(/\t.*$/, "").trim();
-  if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
-  if (p.startsWith("a/") || p.startsWith("b/")) p = p.slice(2);
-  return p;
+  // A name with a tab in it is quoted, so a tab here is git's own.
+  const p = raw.replace(/\t.*$/, "");
+  return unprefixed(p.startsWith('"') ? (readQuoted(p, 0)?.name ?? p) : p);
+}
+
+function unprefixed(p: string): string {
+  return p.startsWith("a/") || p.startsWith("b/") ? p.slice(2) : p;
 }
 
 function pathsFromGitHeader(line: string): { a: string; b: string } | null {
-  // "diff --git a/x b/x"; paths may contain spaces, so split on " b/" from the right.
   const rest = line.slice("diff --git ".length);
-  const cut = rest.lastIndexOf(" b/");
+  // "diff --git \"a/x\" \"b/x\"" where git quoted the names.
+  if (rest.startsWith('"')) {
+    const a = readQuoted(rest, 0);
+    if (!a) return null;
+    return { a: unprefixed(a.name), b: cleanPath(rest.slice(a.end + 1)) };
+  }
+  // "diff --git a/x b/x"; paths may contain spaces, so split on " b/" (or ' "b/') from the right.
+  const quoted = rest.lastIndexOf(' "b/');
+  const cut = quoted >= 0 ? quoted : rest.lastIndexOf(" b/");
   if (cut < 0) return null;
   return { a: cleanPath(rest.slice(0, cut)), b: cleanPath(rest.slice(cut + 1)) };
+}
+
+/**
+ * A name in a diff as git prints it with core.quotePath false: quoted, C's way, where it holds a quote, a
+ * backslash or a control character, as it is otherwise.
+ */
+export function quoteDiffPath(prefixed: string): string {
+  if (!/["\\\u0000-\u001f\u007f]/.test(prefixed)) return prefixed;
+  const named = Object.fromEntries(Object.entries(C_ESCAPES).map(([k, v]) => [v, k]));
+  let out = "";
+  for (const c of prefixed) {
+    const code = c.charCodeAt(0);
+    if (named[code] !== undefined && (code < 32 || c === '"' || c === "\\")) out += `\\${named[code]}`;
+    else if (code < 32 || code === 127) out += `\\${code.toString(8).padStart(3, "0")}`;
+    else out += c;
+  }
+  return `"${out}"`;
 }
 
 /** Parse a unified diff (as `git diff` prints it) into files, hunks and numbered lines. */
@@ -249,10 +306,10 @@ export function applyFilePatch(base: string | null, file: DiffFile): string | nu
 export function renderNewFileDiff(path: string, content: string): string {
   const lines = splitLines(content);
   const out = [
-    `diff --git a/${path} b/${path}`,
+    `diff --git ${quoteDiffPath(`a/${path}`)} ${quoteDiffPath(`b/${path}`)}`,
     "new file mode 100644",
     "--- /dev/null",
-    `+++ b/${path}`,
+    `+++ ${quoteDiffPath(`b/${path}`)}`,
     `@@ -0,0 +1${lines.length === 1 ? "" : `,${lines.length}`} @@`,
   ];
   for (const l of lines) {
@@ -264,7 +321,9 @@ export function renderNewFileDiff(path: string, content: string): string {
 
 /** The stanza git prints for a new binary file; the parser marks it binary and the bytes travel as an artifact. */
 export function renderBinaryFileDiff(path: string): string {
-  return `diff --git a/${path} b/${path}\nnew file mode 100644\nBinary files /dev/null and b/${path} differ\n`;
+  const a = quoteDiffPath(`a/${path}`);
+  const b = quoteDiffPath(`b/${path}`);
+  return `diff --git ${a} ${b}\nnew file mode 100644\nBinary files /dev/null and ${b} differ\n`;
 }
 
 /** Text a diff contributes to the new tree: every added line, for content scans. */
