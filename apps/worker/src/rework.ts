@@ -99,20 +99,37 @@ export function withRework(
   };
 }
 
+/** A file's section of a diff that leaves it a symbolic link: made one, turned into one, or one changed. */
+const LINK_MODE = /^(?:new file mode|new mode|index [0-9a-f]+\.\.[0-9a-f]+) 120000$/m;
+
+/** The paths a diff leaves as symbolic links. */
+function linksIn(diff: string): Set<string> {
+  const links = new Set<string>();
+  for (const section of diff.split(/^(?=diff --git )/m)) {
+    const file = LINK_MODE.test(section) ? parseUnifiedDiff(section)[0] : undefined;
+    if (file) links.add(file.path);
+  }
+  return links;
+}
+
 /**
  * What the apply left as a symbolic link: every path git status lists after it, ignored ones included
- * (a fresh clone has none of its own), checked with lstat. Null when git cannot say.
+ * (a fresh clone has none of its own), that lstat finds a link or that the round's diff makes one. git on
+ * Windows writes such a link as a plain file holding its target (core.symlinks is false there unless the
+ * system's config says otherwise, which the worker never reads). Null when git cannot say.
  */
-async function linksLeft(ws: Workspace): Promise<string[] | null> {
+async function linksLeft(ws: Workspace, diff: string): Promise<string[] | null> {
   const status = await git(
     ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored", "--no-renames"],
     ws.dir,
   );
   if (status.code !== 0) return null;
+  const made = linksIn(diff);
   const links: string[] = [];
   for (const entry of status.stdout.split("\0")) {
     const rel = entry.slice(3);
-    if (rel && (await lstat(path.join(ws.dir, rel)).catch(() => null))?.isSymbolicLink()) links.push(rel);
+    if (rel && (made.has(rel) || (await lstat(path.join(ws.dir, rel)).catch(() => null))?.isSymbolicLink()))
+      links.push(rel);
   }
   return links;
 }
@@ -143,7 +160,7 @@ export async function applyPreviousRound(
   const res = await git(["apply", "--whitespace=nowarn", patch], ws.dir);
   await rm(patch, { force: true });
   if (res.code === 0) {
-    const links = await linksLeft(ws);
+    const links = await linksLeft(ws, rework.diff);
     if (links?.length === 0) return { round, applied: true, files: parseUnifiedDiff(rework.diff).length };
     await undoApply(ws);
     return {

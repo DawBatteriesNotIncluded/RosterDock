@@ -387,6 +387,27 @@ describe("a rework run and links", () => {
     expect(await readFile(secretFile, "utf8")).toBe(`${SECRET}\n`);
   });
 
+  it("refuses a link that git writes as a plain file, as git on Windows does", async (ctx) => {
+    await skipWithoutSymlinks(ctx, root);
+    const diff = await recordRound("plain-link", async (dir) =>
+      symlink(secretFile, path.join(dir, "report.md")),
+    );
+    const ws = await prepareWorkspace(
+      path.join(root, "work-plain-link"),
+      "run-plain-link",
+      { repoUrl: baseRepo, defaultBranch: "main" },
+      null,
+    );
+    // Git for Windows' own default, without the system config the worker never reads.
+    expect((await git(["config", "core.symlinks", "false"], ws.dir, GIT_ENV)).code).toBe(0);
+    expect(await applyPreviousRound(ws, roundOf(diff), "main")).toEqual({
+      round: 1,
+      applied: false,
+      reason: "report.md is a symbolic link, which a rework run does not carry over",
+    });
+    expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
+  });
+
   it("writes nothing through a link: a round that puts a file behind one is refused whole", async (ctx) => {
     await skipWithoutSymlinks(ctx, root);
     // Two real diffs, joined the way a run holding its token could post them: a link out of the

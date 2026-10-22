@@ -346,6 +346,7 @@ describe("workspace", () => {
     );
     // git runs post-index-change whenever it writes the index, as the harvest's `git add` does.
     const marker = path.join(root, "hook-ran");
+    await mkdir(path.join(ws.dir, ".git", "hooks"), { recursive: true });
     await writeFile(
       path.join(ws.dir, ".git", "hooks", "post-index-change"),
       `#!/bin/sh\necho ran > '${forShell(marker)}'\n`,
