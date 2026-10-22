@@ -619,8 +619,9 @@ describe("repository tests", () => {
     const bare = await repoWithTests("slow-tests");
     const board = fakeBoard(PACK(), ["notes.md"], {
       repoUrl: bare,
-      // Long enough for the clone, the engine and the harvest, on Windows too, so the limit falls in the tests.
-      sandbox: { allowedTools: null, envNames: null, timeoutSeconds: 4 },
+      // Long enough for the clone, the engine and the harvest, so the limit falls in the tests: on a Windows
+      // runner, with other files' git and PowerShell beside it, 4 s was not always.
+      sandbox: { allowedTools: null, envNames: null, timeoutSeconds: process.platform === "win32" ? 10 : 4 },
     });
     let testing = false;
     await executeRun(
