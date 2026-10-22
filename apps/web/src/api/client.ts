@@ -7,11 +7,13 @@ import type {
   CreateDepartmentInput,
   CreateGoalInput,
   UpdateGoalCapsInput,
+  UpdateModelProviderInput,
   CreateOpenApiConnectionInput,
   CreateProjectInput,
   CreateTaskInput,
   CreateTeammateInput,
   ModelPriceInput,
+  ModelProviderInput,
   MoveTaskInput,
   ReviewCommentInput,
   ReviewScoreInput,
@@ -33,6 +35,8 @@ import type {
   Company,
   CompanySecret,
   Connection,
+  ModelProvider,
+  ModelProviders,
   CostReport,
   Department,
   Draft,
@@ -249,6 +253,15 @@ export interface Client {
   secrets(companyId: string): Promise<CompanySecret[]>;
   setSecret(companyId: string, name: string, value: string): Promise<CompanySecret>;
   deleteSecret(companyId: string, name: string): Promise<void>;
+  /** Company model providers: what the operator offers, and the company's own, by name. */
+  modelProviders(companyId: string): Promise<ModelProviders>;
+  createModelProvider(companyId: string, input: ModelProviderInput): Promise<ModelProvider>;
+  updateModelProvider(
+    companyId: string,
+    providerId: string,
+    input: UpdateModelProviderInput,
+  ): Promise<ModelProvider>;
+  deleteModelProvider(companyId: string, providerId: string): Promise<void>;
   deleteConnection(companyId: string, connectionId: string): Promise<void>;
   updateCompany(companyId: string, input: { settings?: Record<string, unknown> }): Promise<Company>;
   /** One image of the office pack, as base64 PNG; the board keeps it and names it in settings.officePack. */
@@ -365,6 +378,10 @@ export const httpClient: Client = {
   secrets: (id) => request("GET", `${c(id)}/secrets`),
   setSecret: (id, name, value) => request("PUT", `${c(id)}/secrets/${encodeURIComponent(name)}`, { value }),
   deleteSecret: (id, name) => request("DELETE", `${c(id)}/secrets/${encodeURIComponent(name)}`),
+  modelProviders: (id) => request("GET", `${c(id)}/model-providers`),
+  createModelProvider: (id, input) => request("POST", `${c(id)}/model-providers`, input),
+  updateModelProvider: (id, pid, input) => request("PATCH", `${c(id)}/model-providers/${pid}`, input),
+  deleteModelProvider: (id, pid) => request("DELETE", `${c(id)}/model-providers/${pid}`),
   deleteConnection: (id, cn) => request("DELETE", `${c(id)}/connections/${cn}`),
   updateCompany: (id, input) => request("PATCH", c(id), input),
   putOfficeImage: (id, name, content) => request("PUT", `${c(id)}/office/images/${name}`, { content }),

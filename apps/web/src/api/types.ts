@@ -2,12 +2,15 @@
 import type {
   ActorRef,
   BlockerRecord,
+  CompatibleAuthHeader,
   Criterion,
   DiffHunk,
   DiffLine,
   EventRecord,
   PlannerKind,
   PlannerSettings,
+  ProviderKind,
+  ProviderModel,
   ReviewStatus,
   Role,
   SandboxPreset,
@@ -297,6 +300,40 @@ export interface Features {
   companyPrivateDestinations?: string[];
   /** Whether the board reads the web (the web connection's pages, research sources); false: its operator keeps it off. */
   web?: boolean;
+}
+
+/** Where a provider's credential gets its value, as a person reads it; never the value. */
+export type CredentialState =
+  { state: "set"; setAt: string; setBy: ActorRef } | { state: "shared" } | { state: "missing" };
+
+/** A company model provider: its settings and credential names, and where each name gets its value. */
+export interface ModelProvider {
+  id: string;
+  companyId: string;
+  name: string;
+  label: string;
+  kind: ProviderKind;
+  endpoint: string | null;
+  region: string | null;
+  authHeader: CompatibleAuthHeader | null;
+  /** role -> env var NAME (apiKey, or bearerToken for Bedrock). */
+  credentials: Record<string, string>;
+  credentialStates: Record<string, CredentialState>;
+  models: ProviderModel[];
+  enabled: boolean;
+  /** Whether the operator still offers its kind; one no longer offered is kept, unused. */
+  offered: boolean;
+  lastCheck: { ok: boolean; at: string; latencyMs: number; detail: string | null; listed: number } | null;
+  archivedAt: string | null;
+  createdBy: ActorRef;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What the operator offers companies, and this company's providers. */
+export interface ModelProviders {
+  offered: { kinds: ProviderKind[]; board: boolean };
+  providers: ModelProvider[];
 }
 
 export interface Connection {

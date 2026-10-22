@@ -265,12 +265,14 @@ networkPolicy:
 
 ## Company model providers
 
-A company can keep its own model accounts as providers (`/api/companies/:companyId/model-providers`):
-Anthropic, OpenAI, Azure OpenAI, Amazon Bedrock, or a server that speaks OpenAI's API (vLLM, Ollama,
-LiteLLM). A provider holds its endpoint or region, the models it serves, and the env var names of its
-credentials, never a value: a company sets a value once, write-only, under Settings > Connections > Secrets,
-or names one you share (`board.sharedEnvNames`). Owners and admins add, change and remove providers; everyone
-in the company sees them by name.
+A company can keep its own model accounts as providers, under Settings > Models
+(`/api/companies/:companyId/model-providers`): Anthropic, OpenAI, Azure OpenAI, Amazon Bedrock, or a server
+that speaks OpenAI's API (vLLM, Ollama, LiteLLM). A provider holds its endpoint or region, the models it
+serves, and the env var names of its credentials, never a value: a company pastes a key once, write-only, into
+its secrets (the Models form puts it under a name such as `MODELS_ACME_KEY`, and Settings > Connections >
+Secrets lists it), picks a secret it set before, or names one you share (`board.sharedEnvNames`). Pasting
+needs a secret store (`board.oauth.enabled`). Owners and admins add, change and remove providers; everyone in
+the company sees them by name.
 
 - `board.modelProviders` (`ROSTERDOCK_MODEL_PROVIDERS`) lists the kinds a company may add: `anthropic`,
   `openai`, `azure_openai`, `bedrock`, `openai_compatible`, and `board`, which lends the board's own models to

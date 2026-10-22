@@ -2042,6 +2042,17 @@ describe("pure helpers", () => {
       deleteBudget: asyncNoop,
       initialPrices: priceFixture,
       initialBudgets: budgetFixture,
+      models: {
+        features: { oauth: true, objectStore: false },
+        load: async () => ({ offered: { kinds: [], board: true }, providers: [] }),
+        loadSecrets: async () => [],
+        setSecret: asyncNoop,
+        create: async () => Promise.reject(new Error("not in this test")),
+        update: async () => Promise.reject(new Error("not in this test")),
+        remove: asyncNoop,
+        initial: { offered: { kinds: [], board: true }, providers: [] },
+        initialSecrets: [],
+      },
       connections: {
         loadCatalog: async () => [],
         createConnection: async () => connectionFixtures[0]!,
@@ -2084,6 +2095,7 @@ describe("pure helpers", () => {
     for (const t of SETTINGS_TABS) expect(prices).toContain(t.label);
     expect(SETTINGS_TABS.map((t) => t.value)).toEqual([
       "prices",
+      "models",
       "peter",
       "style",
       "connections",
