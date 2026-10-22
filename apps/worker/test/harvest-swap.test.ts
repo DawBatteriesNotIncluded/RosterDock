@@ -1,5 +1,6 @@
 // The harvest checks a file, then opens it. A link the run swaps in between is refused and never read: by
-// O_NOFOLLOW where there is one, and on Windows, which has none, by the file id of what was opened.
+// O_NOFOLLOW where there is one, and on Windows, which has none, by the file id and the device of what was
+// opened.
 import type * as Fs from "node:fs/promises";
 import { mkdtemp, open, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -49,5 +50,35 @@ it("refuses a file the run swaps for a link between the harvest's check and its 
   expect(h.refusedOutputs).toEqual(["report.md"]);
   expect(h.filesWritten).toEqual([]);
   expect(JSON.stringify(h.artifacts)).not.toContain("hunter2");
+  await cleanupWorkspace(ws);
+});
+
+it("refuses a file opened on another volume, though its file id is the one checked", async () => {
+  const ws = await prepareWorkspace(
+    path.join(root, "work"),
+    "run-volume",
+    { repoUrl: null, defaultBranch: "main" },
+    null,
+  );
+  const report = path.join(ws.dir, "report.md");
+  await writeFile(report, "The report.\n", "utf8");
+  const { open: openFile } = await vi.importActual<typeof Fs>("node:fs/promises");
+  vi.mocked(open).mockClear();
+  vi.mocked(open).mockImplementationOnce(async (file, flags, mode) => {
+    // What the open reaches through a link swapped in to another volume, where ids are numbered apart and
+    // one can repeat: the same id, another device. The stats are made, since no runner has the second volume.
+    const handle = await openFile(file, flags, mode);
+    const stat = handle.stat.bind(handle);
+    handle.stat = (async () => {
+      const st = await stat({ bigint: true });
+      return Object.assign(st, { dev: st.dev + 1n });
+    }) as typeof handle.stat;
+    return handle;
+  });
+  const h = await harvestWorkspace(ws, ["report.md"]);
+  // The made stats were the file's (on Windows the workspace's device is read by a handle after it).
+  expect(vi.mocked(open).mock.calls[0]?.[0]).toBe(report);
+  expect(h.refusedOutputs).toEqual(["report.md"]);
+  expect(h.filesWritten).toEqual([]);
   await cleanupWorkspace(ws);
 });

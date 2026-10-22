@@ -1,11 +1,12 @@
 // A rework run starts from the round the reviewer sent back: that round's diff, checked against the
 // sha256 the review recorded, applied to the fresh clone before the engine starts. Uncommitted, so the
 // harvest still diffs against the base branch and the next round carries the whole change, which keeps
-// the review's hunks and the pull request right. git apply is all or nothing: when the base branch moved
-// and any part no longer applies, the clone stays as it was and the run says which files. It writes
-// nothing outside the clone, into .git or through a link; and a round that would leave a link behind, or
-// whose diff makes one, is undone, so the engine never starts with one the run did not make (the harvest
-// refuses links anyway).
+// the review's hunks and the pull request right. git apply checks it all before it writes: when the base
+// branch moved and any part no longer applies, the clone stays as it was and the run says which files, and
+// what it wrote before it failed to write the rest is undone. It writes nothing outside the clone, into
+// .git or through a link; and a round that would leave a link behind, or
+// whose diff makes one or changes one the repository holds, is undone, so the engine never starts with one
+// the run did not make (the harvest refuses links anyway).
 // The clone is read whole for that, a submodule's folder included: git status and git clean never look
 // inside one, and a clone leaves it empty. A round that copies or renames a file is refused before it is
 // applied: the harvest diffs with --no-renames, so a real round never does, and a copy is how a link the
@@ -122,28 +123,60 @@ async function linksLeft(ws: Workspace): Promise<string[] | null> {
   return links;
 }
 
-/** A file's section of a diff that changes a link in place: its `index` line ends in the link's mode. */
-const LINK_CHANGED = /^index [0-9a-f]+\.\.[0-9a-f]+ 120000$/m;
+/** The paths `git apply --numstat -z` names: one per file, or a rename's two after an empty one. */
+function numstatPaths(out: string): string[] {
+  const fields = out.split("\0");
+  const paths: string[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const m = /^(?:\d+|-)\t(?:\d+|-)\t(.*)$/s.exec(fields[i]!);
+    if (!m) continue;
+    if (m[1]) paths.push(m[1]);
+    else {
+      paths.push(...fields.slice(i + 1, i + 3));
+      i += 2;
+    }
+  }
+  return paths;
+}
 
 /**
- * What the diff makes a symbolic link (mode 120000), as git apply reads it, and the links it changes in
- * place: a new target is recorded as `index a..b 120000`, which git apply --summary does not name. Where the
- * clone has no symlink support (Windows, core.symlinks false) git writes such a link as a plain file holding
- * its target, which linksLeft never sees. Null when git cannot say.
+ * What the diff makes a symbolic link (mode 120000), as git apply reads it, and the links the repository holds
+ * that it changes in place, by their mode in HEAD's tree: a diff need not spell a link's mode (no index line,
+ * another mode, the mode spelled otherwise), and git apply then takes it from the diff or from the file on
+ * disk. Where the clone has no symlink support (Windows, core.symlinks false) that file is a plain one holding
+ * the link's target, and git writes a new target into it, which linksLeft never sees. A link the diff deletes
+ * (or replaces with a file: a delete, then a new file) is not one. What the diff names is read with what the
+ * index calls what the apply changed, and compared without case where the file system ignores it (Windows,
+ * macOS: core.ignorecase), which takes `L` for the link `l`. Null when git cannot say.
  */
-async function linksDeclared(ws: Workspace, patch: string, diff: string): Promise<string[] | null> {
-  const summary = await git(["apply", "--summary", patch], ws.dir);
-  if (summary.code !== 0) return null;
-  const changed = diff
-    .split(/^(?=diff --git )/m)
-    .flatMap((section) => (LINK_CHANGED.test(section) ? parseUnifiedDiff(section).map((f) => f.path) : []));
-  return [
-    ...summary.stdout.split("\n").flatMap((line) => {
-      const link = /^ (?:create mode 120000|mode change \d+ => 120000) (.+)$/.exec(line);
-      return link ? [link[1]!] : [];
+async function linksDeclared(ws: Workspace, patch: string): Promise<string[] | null> {
+  const [summary, numstat, tree, modified, ignorecase] = await Promise.all([
+    git(["apply", "--summary", patch], ws.dir),
+    git(["apply", "--numstat", "-z", patch], ws.dir),
+    git(["ls-tree", "-r", "-z", "--full-tree", "HEAD"], ws.dir),
+    git(["ls-files", "--modified", "-z"], ws.dir),
+    git(["config", "--bool", "core.ignorecase"], ws.dir),
+  ]);
+  if (summary.code !== 0 || numstat.code !== 0 || tree.code !== 0 || modified.code !== 0) return null;
+  // Folded where case does not count, and compared so: a match is a refusal, so folding more is the safe side.
+  const fold = ignorecase.stdout.trim() === "true" ? (p: string) => p.toLowerCase() : (p: string) => p;
+  const made: string[] = [];
+  const deleted = new Set<string>();
+  for (const line of summary.stdout.split("\n")) {
+    const link = /^ (?:create mode 120000|mode change \d+ => 120000) (.+)$/.exec(line);
+    if (link) made.push(link[1]!);
+    const gone = /^ delete mode \d+ (.+)$/.exec(line);
+    if (gone) deleted.add(fold(gone[1]!));
+  }
+  const committed = new Set(
+    tree.stdout.split("\0").flatMap((entry) => {
+      const link = /^120000 \S+ [0-9a-f]+\t(.+)$/s.exec(entry);
+      return link ? [fold(link[1]!)] : [];
     }),
-    ...changed,
-  ];
+  );
+  const touched = new Set([...numstatPaths(numstat.stdout), ...modified.stdout.split("\0").filter(Boolean)]);
+  const changed = [...touched].filter((p) => committed.has(fold(p)) && !deleted.has(fold(p)));
+  return [...made, ...changed];
 }
 
 /** Where a diff copies or renames files to (or from, where it names no destination). */
@@ -247,7 +280,7 @@ export async function applyPreviousRound(
   const res = await git(["apply", "--whitespace=nowarn", patch], ws.dir);
   const [left, declared, made] =
     res.code === 0
-      ? await Promise.all([linksLeft(ws), linksDeclared(ws, patch, rework.diff), linksMade(ws.dir, before)])
+      ? await Promise.all([linksLeft(ws), linksDeclared(ws, patch), linksMade(ws.dir, before)])
       : [null, null, null];
   await rm(patch, { force: true });
   if (res.code === 0) {
@@ -260,6 +293,9 @@ export async function applyPreviousRound(
       reason: links ? linksReason(links) : "git could not list what they changed",
     };
   }
+  // git apply checks everything first, but can still fail while writing (a new file under a path that is a file),
+  // with what it wrote before still there: a link among it, maybe. The run starts from the clean clone it is told of.
+  await undoApply(ws, before);
   const head = (await git(["rev-parse", "HEAD"], ws.dir)).stdout.trim();
   const moved = rework.baseSha !== null && head !== "" && head !== rework.baseSha;
   return { round, applied: false, reason: whyNotApplied(res.stderr, round, branch, moved) };
