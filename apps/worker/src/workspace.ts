@@ -449,8 +449,9 @@ async function unstageLinksMadeFiles(ws: Workspace): Promise<void> {
   const files: string[] = [];
   for (const entry of index.stdout.split("\0")) {
     const link = /^120000 [0-9a-f]+ \d\t(.+)$/s.exec(entry)?.[1];
-    if (link && changed.has(link) && (await lstat(path.join(ws.dir, link)).catch(() => null))?.isFile())
-      files.push(link);
+    // The handover and the blocked note stay out of the add, so out of this too.
+    if (!link || link === HANDOVER_FILE || link === BLOCKED_FILE || !changed.has(link)) continue;
+    if ((await lstat(path.join(ws.dir, link)).catch(() => null))?.isFile()) files.push(link);
   }
   if (files.length) await git(["--literal-pathspecs", "rm", "--cached", "--quiet", "--", ...files], ws.dir);
 }
