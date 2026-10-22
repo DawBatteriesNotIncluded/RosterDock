@@ -19,14 +19,14 @@ For the maintainers. A release is one version for the three images and the chart
    git push origin v0.2.0
    ```
 
-3. The workflow runs CI on the tagged commit (the tests, the image builds, the smoke install on kind, helm
-   lint). Then it builds each image twice, linux/amd64 on `ubuntu-latest` and linux/arm64 on
-   `ubuntu-24.04-arm` (GitHub's arm64 runner, free for a public repository; nothing is emulated), each half
-   with its provenance and SBOM and pushed by its digest alone. A merge per image checks that the two halves
-   make one image with both architectures, their attestations and a description, then pushes it as
-   `0.2.0`, `0.2` and `latest`. Last it packages the chart as version `0.2.0` with appVersion `0.2.0` and
-   pushes it to `oci://ghcr.io/dawbatteriesnotincluded/charts`. A prerelease (`v0.2.0-rc.1`) is pushed under
-   its own version only, never `0.2` or `latest`.
+3. The workflow runs CI on the tagged commit (the tests, the worker's tests on Windows, the image builds, the
+   smoke install on kind, helm lint). Then it builds each image twice, linux/amd64 on `ubuntu-latest` and
+   linux/arm64 on `ubuntu-24.04-arm` (GitHub's arm64 runner, free for a public repository; nothing is
+   emulated), each half with its provenance and SBOM and pushed by its digest alone. A merge per image checks
+   that the two halves make one image with both architectures, their attestations and a description, then
+   pushes it as `0.2.0`, `0.2` and `latest`. Last it packages the chart as version `0.2.0` with appVersion
+   `0.2.0` and pushes it to `oci://ghcr.io/dawbatteriesnotincluded/charts`. A prerelease (`v0.2.0-rc.1`) is
+   pushed under its own version only, never `0.2` or `latest`.
 4. Check what a stranger gets, signed out of GHCR:
 
    ```bash
@@ -89,9 +89,14 @@ their parsers' fixtures were recorded with; moving one means recording the fixtu
 - **Code security.** Private vulnerability reporting is on: `SECURITY.md` and the issue template send
   reporters to `/security/advisories/new`. Secret scanning and push protection are on, and skip only the
   files `.github/secret_scanning.yml` names. CodeQL runs in its default setup.
-- **Rules.** The `main` ruleset takes changes only through a squash-merged pull request whose four CI checks
-  are green (the skipped smoke install counts), with no force-push, no deletion and nobody exempt. The
-  `release tags` ruleset forbids moving or deleting a `v*` tag. Anyone who can push a `v*` tag publishes.
+- **Rules.** The `main` ruleset takes changes only through a squash-merged pull request whose required CI
+  checks are green (typecheck, lint, test; build images; helm lint; smoke install on kind, where skipped
+  counts), with no force-push, no deletion and nobody exempt. CI also runs worker tests on Windows (node
+  22.16) and (node 22), on every pull request and on a tag, where a failure stops the release: add both to the
+  required checks, or a pull request that breaks them merges green and the next tag spends its version. They
+  are named by the matrix's Node versions, so a change to the matrix changes the ruleset with it, or every
+  pull request waits on a check that never runs. The `release tags` ruleset forbids moving or deleting a `v*`
+  tag. Anyone who can push a `v*` tag publishes.
 - **The pre-release sentences.** When 0.1.0 ships, delete the sentence in `README.md`'s Status that says
   nothing is published, and the two sentences directly under "Where the images and the chart come from" in
   `docs/install.md`.
