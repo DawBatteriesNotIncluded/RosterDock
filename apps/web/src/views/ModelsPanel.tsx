@@ -12,12 +12,18 @@ import type {
   UpdateModelProviderInput,
 } from "@rosterdock/shared";
 import {
+  azureEndpoint,
+  BEDROCK_REGION_RE,
   COMPATIBLE_AUTH_HEADERS,
+  compatibleEndpoint,
   engineFor,
   FAMILY_LABELS,
   familiesFor,
+  labelLooksLikeKey,
+  MAX_PROVIDER_LABEL,
   PROVIDER_KIND_LABELS,
   PROVIDER_KINDS,
+  providerNameRefusal,
   type CompatibleAuthHeader,
 } from "@rosterdock/shared/providers";
 import type {
@@ -32,7 +38,7 @@ import { Button, Field, Pill, Tip } from "../components/ui.tsx";
 import { actorInfo, relativeTime } from "../lib/format.ts";
 
 export interface ModelsPanelProps {
-  data: Pick<CompanyData, "teammates" | "members">;
+  data: Pick<CompanyData, "teammates" | "members" | "events">;
   canEdit: boolean;
   /** Without a secret store (features.oauth) a key cannot be pasted here; saved and shared names still work. */
   features: Features;
@@ -106,11 +112,14 @@ export function whereLine(p: Pick<ModelProvider, "kind" | "endpoint" | "region">
   }
 }
 
-/** Whether teammates may keep the board's own models, in a sentence. */
+/**
+ * Whether teammates may keep the board's own models, in a sentence. Until teammates think with a provider,
+ * every one still uses the board's own, whatever the operator lends.
+ */
 export function boardLine(board: boolean): string {
   return board
     ? "This board's own models: available"
-    : "Not lent: every teammate needs one of your providers";
+    : "This board's own models: not lent. Once teammates think with your providers, each will need one.";
 }
 
 /** The last check, in a sentence; nothing checked yet says so. */
@@ -137,40 +146,105 @@ export const KIND_HINTS: Record<ProviderKind, string> = {
 /** How the credential is given: a key pasted now, a secret the company already set, a name the operator shares, or none. */
 export type CredentialChoice = "paste" | "saved" | "shared" | "none";
 
+/** What the add form holds. Only `value` is ever a value, and it goes to the company's secrets alone. */
 export interface ProviderForm {
   kind: ProviderKind;
   label: string;
+  /** The provider's name as typed; empty: made from the label. */
   name: string;
   endpoint: string;
   region: string;
   authHeader: CompatibleAuthHeader;
-  /** The name the credential goes under; null for a compatible server without a key. */
-  credentialName: string | null;
+  how: CredentialChoice;
+  /** The pasted key, with `how` paste. */
+  value: string;
+  /** The saved secret or the shared name, with `how` saved or shared. */
+  picked: string;
 }
 
-/** The body the form saves: names only. */
-export function providerInput(f: ProviderForm): ModelProviderInput {
-  const base = { name: f.name.trim(), label: f.label.trim() };
-  const key = f.credentialName?.trim() ?? "";
-  switch (f.kind) {
-    case "anthropic":
-    case "openai":
-      return { kind: f.kind, ...base, credentials: { apiKey: key } };
-    case "azure_openai":
-      return { kind: f.kind, ...base, endpoint: f.endpoint.trim(), credentials: { apiKey: key } };
-    case "bedrock":
-      return { kind: f.kind, ...base, region: f.region.trim(), credentials: { bearerToken: key } };
-    case "openai_compatible":
-      return key
-        ? {
-            kind: f.kind,
-            ...base,
-            endpoint: f.endpoint.trim(),
-            authHeader: f.authHeader,
-            credentials: { apiKey: key },
-          }
-        : { kind: f.kind, ...base, endpoint: f.endpoint.trim(), credentials: {} };
+/** The provider's name: as typed, or made from the label. */
+export function formName(f: Pick<ProviderForm, "name" | "label">): string {
+  return f.name.trim() || providerSlug(f.label);
+}
+
+/** The name a pasted key goes under, from the provider's name. */
+export function formSecretName(f: Pick<ProviderForm, "name" | "label">): string {
+  return suggestedSecretName(formName(f));
+}
+
+/**
+ * What saving the form sends: the provider's body (names only), and with a pasted key, the name and value that
+ * go to PUT /secrets/:name first. The key is never in the body; the body names it by the same name.
+ */
+export function formRequest(f: ProviderForm): {
+  input: ModelProviderInput;
+  paste: { name: string; value: string } | null;
+} {
+  const name = formName(f);
+  const credentialName = f.how === "paste" ? formSecretName(f) : f.how === "none" ? "" : f.picked;
+  const base = { name, label: f.label.trim() };
+  const key = credentialName.trim();
+  const input: ModelProviderInput =
+    f.kind === "anthropic" || f.kind === "openai"
+      ? { kind: f.kind, ...base, credentials: { apiKey: key } }
+      : f.kind === "azure_openai"
+        ? { kind: f.kind, ...base, endpoint: f.endpoint.trim(), credentials: { apiKey: key } }
+        : f.kind === "bedrock"
+          ? { kind: f.kind, ...base, region: f.region.trim(), credentials: { bearerToken: key } }
+          : key
+            ? {
+                kind: f.kind,
+                ...base,
+                endpoint: f.endpoint.trim(),
+                authHeader: f.authHeader,
+                credentials: { apiKey: key },
+              }
+            : { kind: f.kind, ...base, endpoint: f.endpoint.trim(), credentials: {} };
+  return { input, paste: f.how === "paste" ? { name: formSecretName(f), value: f.value } : null };
+}
+
+/**
+ * Why the form cannot be saved as it is, by the board's own rules, so nothing the board would refuse is sent,
+ * and above all no key is set under a name before the provider is: `missing` while something is left to fill
+ * in, a sentence when something given will not do, null when it is ready.
+ */
+export function formProblem(
+  f: ProviderForm,
+  taken: {
+    providers: readonly Pick<ModelProvider, "name" | "credentials">[];
+    secrets: readonly CompanySecret[];
+  },
+): string | "missing" | null {
+  const label = f.label.trim();
+  const name = formName(f);
+  if (label && labelLooksLikeKey(label))
+    return "That label looks like a key. The key goes in its own field below.";
+  if (label.length > MAX_PROVIDER_LABEL) return `A label is ${MAX_PROVIDER_LABEL} characters at most.`;
+  const nameRefusal = name ? providerNameRefusal(name) : null;
+  if (nameRefusal) return `The name: ${nameRefusal}.`;
+  if (name && taken.providers.some((v) => v.name === name))
+    return `This company already has a provider named ${name}, archived ones included. Give this one another name.`;
+  if (f.kind === "azure_openai" && f.endpoint.trim() && !azureEndpoint(f.endpoint))
+    return "The resource's address is https://<resource>.openai.azure.com or https://<resource>.services.ai.azure.com.";
+  if (f.kind === "openai_compatible" && f.endpoint.trim() && !compatibleEndpoint(f.endpoint))
+    return "The base URL is http or https, with no key, password or query in it.";
+  if (f.kind === "bedrock" && f.region.trim() && !BEDROCK_REGION_RE.test(f.region.trim()))
+    return "The region is an AWS region, such as us-east-1.";
+  if (f.how === "paste" && name) {
+    const secret = formSecretName(f);
+    // A pasted key never replaces another: a secret of that name may be another provider's live key.
+    if (
+      taken.secrets.some((s) => s.name === secret) ||
+      taken.providers.some((v) => Object.values(v.credentials).includes(secret))
+    )
+      return `${secret} is already set. Choose "Use a saved secret" to use it, or give this provider another name.`;
   }
+  if (!label || !name) return "missing";
+  if ((f.kind === "azure_openai" || f.kind === "openai_compatible") && !f.endpoint.trim()) return "missing";
+  if (f.kind === "bedrock" && !f.region.trim()) return "missing";
+  if (f.how === "paste" && !f.value.trim()) return "missing";
+  if ((f.how === "saved" || f.how === "shared") && !f.picked) return "missing";
+  return null;
 }
 
 /**
@@ -205,92 +279,78 @@ function AddProviderForm(p: {
   offered: ProviderKind[];
   features: Features;
   secrets: CompanySecret[];
+  providers: ModelProvider[];
   /** True once saved; false leaves the form as it was, with the reason shown above. */
   onSave(input: ModelProviderInput, paste: { name: string; value: string } | null): Promise<boolean>;
 }) {
-  const first = PROVIDER_KINDS.find((k) => p.offered.includes(k)) ?? "anthropic";
-  const [kind, setKind] = useState<ProviderKind>(first);
-  const [label, setLabel] = useState("");
-  const [name, setName] = useState("");
-  const [named, setNamed] = useState(false);
-  const [endpoint, setEndpoint] = useState("");
-  const [region, setRegion] = useState("");
-  const [authHeader, setAuthHeader] = useState<CompatibleAuthHeader>("authorization");
   const canPaste = p.features.oauth;
   const shared = p.features.sharedEnvNames ?? [];
-  const [how, setHow] = useState<CredentialChoice>(canPaste ? "paste" : "saved");
-  const [value, setValue] = useState("");
-  const [picked, setPicked] = useState("");
+  const blank: ProviderForm = {
+    kind: PROVIDER_KINDS.find((k) => p.offered.includes(k)) ?? "anthropic",
+    label: "",
+    name: "",
+    endpoint: "",
+    region: "",
+    authHeader: "authorization",
+    how: canPaste ? "paste" : "saved",
+    value: "",
+    picked: "",
+  };
+  const [f, setForm] = useState<ProviderForm>(blank);
+  const set = (change: Partial<ProviderForm>) => setForm((was) => ({ ...was, ...change }));
   const [busy, setBusy] = useState(false);
-  const slug = named ? name : providerSlug(label);
-  const secretName = suggestedSecretName(slug);
-  const credentialName = how === "paste" ? secretName : how === "none" ? null : picked;
-  const ready =
-    !!label.trim() &&
-    !!slug &&
-    (how !== "paste" || !!value.trim()) &&
-    (how === "paste" || how === "none" || !!picked) &&
-    (kind !== "bedrock" || !!region.trim()) &&
-    ((kind !== "azure_openai" && kind !== "openai_compatible") || !!endpoint.trim());
+  const problem = formProblem(f, { providers: p.providers, secrets: p.secrets });
+  const secretName = formSecretName(f);
+  const turnedOff = PROVIDER_KINDS.filter((k) => !p.offered.includes(k));
   const choices: { value: CredentialChoice; label: string }[] = [
     ...(canPaste ? [{ value: "paste" as const, label: "Paste a key" }] : []),
     { value: "saved", label: "Use a saved secret" },
     ...(shared.length ? [{ value: "shared" as const, label: "Use a name your operator shares" }] : []),
-    ...(kind === "openai_compatible" ? [{ value: "none" as const, label: "No key" }] : []),
+    ...(f.kind === "openai_compatible" ? [{ value: "none" as const, label: "No key" }] : []),
   ];
   const save = async () => {
+    if (problem !== null) return;
     setBusy(true);
-    const saved = await p.onSave(
-      providerInput({ kind, label, name: slug, endpoint, region, authHeader, credentialName }),
-      how === "paste" ? { name: secretName, value } : null,
-    );
+    const { input, paste } = formRequest(f);
+    const saved = await p.onSave(input, paste);
     setBusy(false);
-    if (!saved) return;
-    setLabel("");
-    setName("");
-    setNamed(false);
-    setEndpoint("");
-    setRegion("");
-    setValue("");
-    setPicked("");
+    if (saved) setForm({ ...blank, kind: f.kind });
   };
   return (
     <div className="card flex flex-col gap-3 px-[18px] py-4">
       <span className="font-semibold">Add a provider</span>
       <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Kind">
-        {PROVIDER_KINDS.map((k) =>
-          p.offered.includes(k) ? (
-            <Button
-              key={k}
-              size="sm"
-              role="radio"
-              aria-checked={kind === k}
-              {...(kind === k ? { variant: "primary" as const } : {})}
-              onClick={() => {
-                setKind(k);
-                if (how === "none" && k !== "openai_compatible") setHow(canPaste ? "paste" : "saved");
-              }}
-            >
-              {PROVIDER_KIND_LABELS[k]}
-            </Button>
-          ) : (
-            <Tip key={k} text="Turned off by your operator">
-              <span>
-                <Button size="sm" role="radio" aria-checked={false} disabled>
-                  {PROVIDER_KIND_LABELS[k]}
-                </Button>
-              </span>
-            </Tip>
-          ),
-        )}
+        {PROVIDER_KINDS.filter((k) => p.offered.includes(k)).map((k) => (
+          <Button
+            key={k}
+            size="sm"
+            role="radio"
+            aria-checked={f.kind === k}
+            {...(f.kind === k ? { variant: "primary" as const } : {})}
+            onClick={() =>
+              set({
+                kind: k,
+                picked: "",
+                ...(f.how === "none" && k !== "openai_compatible" ? { how: blank.how } : {}),
+              })
+            }
+          >
+            {PROVIDER_KIND_LABELS[k]}
+          </Button>
+        ))}
       </div>
-      <span className="hint">{KIND_HINTS[kind]}</span>
+      {turnedOff.length ? (
+        <span className="hint">
+          Turned off by your operator: {turnedOff.map((k) => PROVIDER_KIND_LABELS[k]).join(", ")}.
+        </span>
+      ) : null}
+      <span className="hint">{KIND_HINTS[f.kind]}</span>
       <div className="flex flex-wrap gap-3">
         <Field label="Label" hint="What people read, such as Acme Azure (prod)">
           <input
             aria-label="Label"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
+            value={f.label}
+            onChange={(e) => set({ label: e.target.value })}
             style={{ width: 220 }}
           />
         </Field>
@@ -298,46 +358,44 @@ function AddProviderForm(p: {
           <input
             aria-label="Name"
             className="mono"
-            value={slug}
-            onChange={(e) => {
-              setNamed(true);
-              setName(e.target.value);
-            }}
+            value={formName(f)}
+            // Cleared, it follows the label again.
+            onChange={(e) => set({ name: e.target.value.toLowerCase() })}
             style={{ width: 180 }}
           />
         </Field>
-        {kind === "azure_openai" || kind === "openai_compatible" ? (
-          <Field label={kind === "azure_openai" ? "Resource address" : "Base URL"}>
+        {f.kind === "azure_openai" || f.kind === "openai_compatible" ? (
+          <Field label={f.kind === "azure_openai" ? "Resource address" : "Base URL"}>
             <input
-              aria-label={kind === "azure_openai" ? "Resource address" : "Base URL"}
+              aria-label={f.kind === "azure_openai" ? "Resource address" : "Base URL"}
               className="mono"
-              value={endpoint}
-              onChange={(e) => setEndpoint(e.target.value)}
+              value={f.endpoint}
+              onChange={(e) => set({ endpoint: e.target.value })}
               placeholder={
-                kind === "azure_openai" ? "https://acme.openai.azure.com" : "https://llm.example.com/v1"
+                f.kind === "azure_openai" ? "https://acme.openai.azure.com" : "https://llm.example.com/v1"
               }
               style={{ width: 280 }}
             />
           </Field>
         ) : null}
-        {kind === "bedrock" ? (
+        {f.kind === "bedrock" ? (
           <Field label="Region">
             <input
               aria-label="Region"
               className="mono"
-              value={region}
-              onChange={(e) => setRegion(e.target.value)}
+              value={f.region}
+              onChange={(e) => set({ region: e.target.value })}
               placeholder="us-east-1"
               style={{ width: 140 }}
             />
           </Field>
         ) : null}
-        {kind === "openai_compatible" && how !== "none" ? (
+        {f.kind === "openai_compatible" && f.how !== "none" ? (
           <Field label="Key goes in">
             <select
               aria-label="Key goes in"
-              value={authHeader}
-              onChange={(e) => setAuthHeader(e.target.value as CompatibleAuthHeader)}
+              value={f.authHeader}
+              onChange={(e) => set({ authHeader: e.target.value as CompatibleAuthHeader })}
             >
               {COMPATIBLE_AUTH_HEADERS.map((h) => (
                 <option key={h} value={h}>
@@ -349,11 +407,11 @@ function AddProviderForm(p: {
         ) : null}
       </div>
       <div className="flex flex-wrap items-end gap-3">
-        <Field label={kind === "bedrock" ? "Bedrock API key" : "Key"}>
+        <Field label={f.kind === "bedrock" ? "Bedrock API key" : "Key"}>
           <select
             aria-label="How the key is given"
-            value={how}
-            onChange={(e) => setHow(e.target.value as CredentialChoice)}
+            value={f.how}
+            onChange={(e) => set({ how: e.target.value as CredentialChoice, picked: "", value: "" })}
           >
             {choices.map((c) => (
               <option key={c.value} value={c.value}>
@@ -362,7 +420,7 @@ function AddProviderForm(p: {
             ))}
           </select>
         </Field>
-        {how === "paste" ? (
+        {f.how === "paste" ? (
           <Field
             label={`Value for ${secretName}`}
             hint="Goes into this company's secrets under that name and is never shown again"
@@ -372,15 +430,15 @@ function AddProviderForm(p: {
               type="password"
               autoComplete="off"
               className="mono"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
+              value={f.value}
+              onChange={(e) => set({ value: e.target.value })}
               placeholder="paste the key"
               style={{ width: 260 }}
             />
           </Field>
-        ) : how === "saved" ? (
+        ) : f.how === "saved" ? (
           <Field label="Secret" hint="Set under Settings > Connections > Secrets">
-            <select aria-label="Secret" value={picked} onChange={(e) => setPicked(e.target.value)}>
+            <select aria-label="Secret" value={f.picked} onChange={(e) => set({ picked: e.target.value })}>
               <option value="">Pick one</option>
               {p.secrets.map((s) => (
                 <option key={s.name} value={s.name}>
@@ -389,9 +447,13 @@ function AddProviderForm(p: {
               ))}
             </select>
           </Field>
-        ) : how === "shared" ? (
+        ) : f.how === "shared" ? (
           <Field label="Name">
-            <select aria-label="Shared name" value={picked} onChange={(e) => setPicked(e.target.value)}>
+            <select
+              aria-label="Shared name"
+              value={f.picked}
+              onChange={(e) => set({ picked: e.target.value })}
+            >
               <option value="">Pick one</option>
               {shared.map((n) => (
                 <option key={n} value={n}>
@@ -401,10 +463,11 @@ function AddProviderForm(p: {
             </select>
           </Field>
         ) : null}
-        <Button variant="primary" disabled={!ready || busy} onClick={() => void save()}>
+        <Button variant="primary" disabled={problem !== null || busy} onClick={() => void save()}>
           Add provider
         </Button>
       </div>
+      {problem && problem !== "missing" ? <span className="hint">{problem}</span> : null}
     </div>
   );
 }
@@ -531,7 +594,7 @@ function ProviderCard(p: {
                 <td className="hint py-1 pr-3">{familyName(m.family)}</td>
                 <td className="hint py-1 pr-3">{engineLine(v.kind, m.family)}</td>
                 <td className="py-1 text-right">
-                  {p.canEdit ? (
+                  {p.canEdit && !v.archivedAt ? (
                     <Tip text="Take it off the list">
                       <Button
                         size="sm"
@@ -569,11 +632,12 @@ export function ModelsPanel(p: ModelsPanelProps) {
   const [secrets, setSecrets] = useState<CompanySecret[]>(p.initialSecrets ?? []);
   const [error, setError] = useState<string | null>(null);
   const reload = async () => setInfo(await p.load());
+  // Loaded again on every new event: a change someone else made is what the next change builds on.
+  const latestSeq = p.data.events[0]?.seq ?? 0;
   useEffect(() => {
-    if (!p.initial) void reload().catch((err: unknown) => setError((err as Error).message));
-    if (p.canEdit && !p.initialSecrets) void p.loadSecrets().then(setSecrets, () => setSecrets([]));
-    // Loaded once; every change below loads again.
-  }, []);
+    void reload().catch((err: unknown) => setError((err as Error).message));
+    if (p.canEdit) void p.loadSecrets().then(setSecrets, () => setSecrets([]));
+  }, [latestSeq]);
   /** Make a change, then load the providers again; a refusal is shown above, and says false. */
   const change = async (fn: () => Promise<unknown>): Promise<boolean> => {
     let ok = false;
@@ -602,7 +666,7 @@ export function ModelsPanel(p: ModelsPanelProps) {
         <div className="flex flex-wrap items-center gap-2">
           {info.offered.kinds.length ? (
             info.offered.kinds.map((k) => (
-              <Pill key={k} tone="info">
+              <Pill key={k} tone="muted">
                 {PROVIDER_KIND_LABELS[k]}
               </Pill>
             ))
@@ -632,6 +696,7 @@ export function ModelsPanel(p: ModelsPanelProps) {
           offered={info.offered.kinds}
           features={p.features}
           secrets={secrets}
+          providers={info.providers}
           onSave={async (input, paste) => {
             const saved = await change(() => saveProvider(input, paste, p));
             if (paste) setSecrets(await p.loadSecrets().catch(() => secrets));

@@ -17,12 +17,13 @@ model output on their cluster.
   under the connection's name, and the row keeps the name.
 - **A value set from Settings goes to the store, not the database.** Settings > Connections > Secrets takes a
   name and a value from an owner or admin, and so does the key field of Settings > Models, which sets the
-  value under its name before it saves the provider with that name. The value goes write-only into the secret store you turned on
-  (`board.oauth.enabled`; files under compose), under `rosterdock-company-<id>` with one key per name; the
-  row keeps the name, when and by whom; the event carries the name; no route returns a value, and the
-  panel never shows one again. That company's connections and notifications resolve the name there
-  first, then among the names the operator shares, so a value set in Settings wins over a shared one.
-  Without a store the route refuses.
+  value under its name before it saves the provider with that name, and never under a name that is already
+  set. A name that looks like a key (a long unbroken run, such as a 32-character Azure key) is refused. The
+  value goes write-only into the secret store you turned on (`board.oauth.enabled`; files under compose),
+  under `rosterdock-company-<id>` with one key per name; the row keeps the name, when and by whom; the event
+  carries the name; no route returns a value, and the panel never shows one again. That company's connections
+  and notifications resolve the name there first, then among the names the operator shares, so a value set in
+  Settings wins over a shared one. Without a store the route refuses.
 - **A company's model providers carry names too.** A provider (Anthropic, OpenAI, Azure OpenAI, Amazon
   Bedrock, a compatible server) keeps the env var names of its credentials, never a value: one of the
   company's own secrets, or a name the operator shares. A name that is the board's own is refused when a

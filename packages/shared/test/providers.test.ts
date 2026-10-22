@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   assertNoRawSecrets,
   azureEndpoint,
+  labelLooksLikeKey,
   nameLooksLikeKey,
+  providerNameRefusal,
   compatibleEndpoint,
   engineFor,
   ModelProviderSchema,
@@ -176,6 +178,26 @@ describe("a provider's schema", () => {
       UpdateModelProviderSchema.safeParse({ credentials: { "sk-ant-api03-abcdefghijklmnopqrstuvwxyz": "K" } })
         .success,
     ).toBe(false);
+  });
+
+  it("refuses a name or a label that is a key typed in the wrong field", () => {
+    expect(providerNameRefusal("acme-azure")).toBeNull();
+    expect(providerNameRefusal("Acme")).toMatch(/lowercase/);
+    expect(providerNameRefusal("a3f9c2e1b4d5f60718293a4b5c6d7e8f")).toBe(
+      "a short name; this looks like a key",
+    );
+    expect(labelLooksLikeKey("Acme Azure (prod)")).toBe(false);
+    expect(labelLooksLikeKey("Production-Claude-Opus-Deployment-2026")).toBe(false);
+    expect(labelLooksLikeKey("Acme a3f9c2e1b4d5f60718293a4b5c6d7e8f")).toBe(true);
+    expect(labelLooksLikeKey("sk-ant-api03-abcdefghijklmnopqrstuvwxyz")).toBe(true);
+    const r = parse({
+      kind: "openai",
+      name: "o",
+      label: "a3f9c2e1b4d5f60718293a4b5c6d7e8f",
+      credentials: { apiKey: "K" },
+    });
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).not.toContain("a3f9c2e1b4d5f60718293a4b5c6d7e8f");
   });
 
   it("keeps a key out of a server's address, and an account id in it", () => {

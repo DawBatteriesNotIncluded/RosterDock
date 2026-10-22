@@ -280,15 +280,24 @@ describe("model providers", () => {
     });
     expect(refused.status).toBe(400);
     expect(JSON.stringify(refused.body)).not.toContain(value);
-    // Anywhere else in the body, the raw-secret guard refuses it.
+    // In a label, the label's own rule refuses it; anywhere else, the raw-secret guard does.
     const inLabel = await api.post(`${base}/model-providers`, {
       kind: "anthropic",
       name: "raw",
       label: value,
       credentials: { apiKey: "MODELS_RAW_KEY" },
     });
-    expect(inLabel.status).toBe(422);
+    expect(inLabel.status).toBe(400);
     expect(JSON.stringify(inLabel.body)).not.toContain(value);
+    const asModel = await api.post(`${base}/model-providers`, {
+      kind: "anthropic",
+      name: "raw",
+      label: "Raw",
+      credentials: { apiKey: "MODELS_RAW_KEY" },
+      models: [{ id: value, family: "claude" }],
+    });
+    expect(asModel.status).toBe(422);
+    expect(JSON.stringify(asModel.body)).not.toContain(value);
 
     // A key shaped like a name: an Azure key is 32 hex characters, and an AWS key id is all capitals.
     for (const key of ["a3f9c2e1b4d5f60718293a4b5c6d7e8f", "AKIAABCDEFGHIJKLMNOP"]) {

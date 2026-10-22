@@ -13,12 +13,14 @@ import {
   credentialRole,
   engineLine,
   ModelsPanel,
-  providerInput,
+  formProblem,
+  formRequest,
   providerSlug,
   saveProvider,
   suggestedSecretName,
   whereLine,
   type ModelsPanelProps,
+  type ProviderForm,
 } from "../src/views/ModelsPanel.tsx";
 import { fixture } from "./fixtures.ts";
 
@@ -71,7 +73,10 @@ const provider = (over: Partial<ModelProvider>): ModelProvider => ({
   region: null,
   authHeader: null,
   credentials: { apiKey: "MODELS_ACME_KEY" },
-  credentialStates: { apiKey: { state: "set", setAt: "2026-10-19T12:00:00.000Z", setBy: daniel } },
+  // Three days before now, whenever the test runs.
+  credentialStates: {
+    apiKey: { state: "set", setAt: new Date(Date.now() - 3 * 86_400_000).toISOString(), setBy: daniel },
+  },
   models: [{ id: "claude-opus-5-5", family: "claude", label: "Opus", source: "typed" }],
   enabled: true,
   offered: true,
@@ -140,7 +145,7 @@ describe("Settings > Models", () => {
   });
 
   it("says where a key comes from, never what it is", () => {
-    const set = providers.providers[0]!.credentialStates.apiKey;
+    const set = { state: "set" as const, setAt: "2026-10-19T12:00:00.000Z", setBy: daniel };
     expect(credentialLine(set, fixture, NOW)).toBe("set 3 d ago by Daniel");
     expect(credentialLine({ state: "shared" }, fixture, NOW)).toBe("shared by your operator");
     expect(credentialLine({ state: "missing" }, fixture, NOW)).toBe("not set yet");
@@ -154,36 +159,64 @@ describe("Settings > Models", () => {
     expect(whereLine({ kind: "anthropic", endpoint: null, region: null })).toBe("api.anthropic.com");
     expect(whereLine({ kind: "bedrock", endpoint: null, region: "eu-west-1" })).toBe("Bedrock in eu-west-1");
     expect(boardLine(true)).toBe("This board's own models: available");
-    expect(boardLine(false)).toBe("Not lent: every teammate needs one of your providers");
+    expect(boardLine(false)).toBe(
+      "This board's own models: not lent. Once teammates think with your providers, each will need one.",
+    );
     expect(checkLine({ lastCheck: null })).toBe("Not checked yet");
   });
 
-  it("saves names only, each kind with its own fields", () => {
-    const form = {
-      label: "Acme",
-      name: "acme",
-      endpoint: " https://llm.example.com/v1 ",
-      region: " us-east-1 ",
-      authHeader: "api-key" as const,
-      credentialName: "MODELS_ACME_KEY",
-    };
-    expect(providerInput({ ...form, kind: "bedrock" })).toEqual({
-      kind: "bedrock",
-      name: "acme",
-      label: "Acme",
-      region: "us-east-1",
-      credentials: { bearerToken: "MODELS_ACME_KEY" },
+  const form = (over: Partial<ProviderForm> = {}): ProviderForm => ({
+    kind: "anthropic",
+    label: "Acme",
+    name: "",
+    endpoint: "",
+    region: "",
+    authHeader: "authorization",
+    how: "paste",
+    value: "pasted-value",
+    picked: "",
+    ...over,
+  });
+  const nothingTaken = { providers: [], secrets: [] };
+
+  it("saves names only, each kind with its own fields, and a pasted key under the name the body gives", () => {
+    // The pasted key goes under the name the provider's body names, and never into the body.
+    const pasted = formRequest(form({ label: "Acme Azure (prod)" }));
+    expect(pasted.paste).toEqual({ name: "MODELS_ACME_AZURE_PROD_KEY", value: "pasted-value" });
+    expect(pasted.input).toEqual({
+      kind: "anthropic",
+      name: "acme-azure-prod",
+      label: "Acme Azure (prod)",
+      credentials: { apiKey: "MODELS_ACME_AZURE_PROD_KEY" },
     });
-    expect(providerInput({ ...form, kind: "openai_compatible" })).toEqual({
+    expect(JSON.stringify(pasted.input)).not.toContain("pasted-value");
+    // A name typed by hand is the one the key goes under.
+    expect(formRequest(form({ name: "prod" })).paste?.name).toBe("MODELS_PROD_KEY");
+    const others = { endpoint: " https://llm.example.com/v1 ", region: " us-east-1 ", value: "" };
+    expect(formRequest(form({ ...others, kind: "bedrock", how: "saved", picked: "MODELS_B_KEY" }))).toEqual({
+      input: {
+        kind: "bedrock",
+        name: "acme",
+        label: "Acme",
+        region: "us-east-1",
+        credentials: { bearerToken: "MODELS_B_KEY" },
+      },
+      paste: null,
+    });
+    expect(
+      formRequest(
+        form({ ...others, kind: "openai_compatible", how: "shared", picked: "K", authHeader: "api-key" }),
+      ).input,
+    ).toEqual({
       kind: "openai_compatible",
       name: "acme",
       label: "Acme",
       endpoint: "https://llm.example.com/v1",
       authHeader: "api-key",
-      credentials: { apiKey: "MODELS_ACME_KEY" },
+      credentials: { apiKey: "K" },
     });
     // A keyless server names no key and no header.
-    expect(providerInput({ ...form, kind: "openai_compatible", credentialName: null })).toEqual({
+    expect(formRequest(form({ ...others, kind: "openai_compatible", how: "none" })).input).toEqual({
       kind: "openai_compatible",
       name: "acme",
       label: "Acme",
@@ -192,17 +225,66 @@ describe("Settings > Models", () => {
     });
   });
 
+  it("holds the form back, before any key is set, on anything the board would refuse", () => {
+    expect(formProblem(form(), nothingTaken)).toBeNull();
+    expect(formProblem(form({ label: "" }), nothingTaken)).toBe("missing");
+    expect(formProblem(form({ value: "" }), nothingTaken)).toBe("missing");
+    expect(formProblem(form({ how: "saved" }), nothingTaken)).toBe("missing");
+    // A key typed where a label or a name goes: refused before it could become a secret's name.
+    expect(formProblem(form({ label: "a3f9c2e1b4d5f60718293a4b5c6d7e8f" }), nothingTaken)).toMatch(
+      /^That label looks like a key/,
+    );
+    expect(formProblem(form({ name: "a3f9c2e1b4d5f60718293a4b5c6d7e8f" }), nothingTaken)).toMatch(
+      /^The name: a short name; this looks like a key/,
+    );
+    expect(formProblem(form({ name: "acme prod" }), nothingTaken)).toMatch(/^The name: a short name/);
+    expect(formProblem(form({ label: "Acme ".repeat(17) }), nothingTaken)).toBe(
+      "A label is 80 characters at most.",
+    );
+    // Another provider of that name, archived or not, and a key already set under the name: never replaced.
+    const acme = { name: "acme", credentials: { apiKey: "MODELS_ACME_KEY" } };
+    expect(formProblem(form({ kind: "openai" }), { providers: [acme], secrets: [] })).toMatch(
+      /already has a provider named acme/,
+    );
+    expect(
+      formProblem(form({ name: "acme2" }), {
+        providers: [{ name: "other", credentials: { apiKey: "MODELS_ACME2_KEY" } }],
+        secrets: [],
+      }),
+    ).toMatch(/^MODELS_ACME2_KEY is already set/);
+    expect(
+      formProblem(form(), {
+        providers: [],
+        secrets: [{ name: "MODELS_ACME_KEY", updatedAt: "", updatedBy: daniel }],
+      }),
+    ).toMatch(/^MODELS_ACME_KEY is already set/);
+    // Using a saved secret that is already set is the point of it.
+    expect(
+      formProblem(form({ how: "saved", picked: "MODELS_ACME_KEY" }), {
+        providers: [],
+        secrets: [{ name: "MODELS_ACME_KEY", updatedAt: "", updatedBy: daniel }],
+      }),
+    ).toBeNull();
+    // Each kind's own fields, by the board's rules.
+    expect(
+      formProblem(form({ kind: "azure_openai", endpoint: "acme.openai.azure.com" }), nothingTaken),
+    ).toMatch(/resource's address/);
+    expect(
+      formProblem(form({ kind: "azure_openai", endpoint: "https://acme.openai.azure.com" }), nothingTaken),
+    ).toBeNull();
+    expect(
+      formProblem(
+        form({ kind: "openai_compatible", endpoint: "https://llm.example.com/v1?key=1" }),
+        nothingTaken,
+      ),
+    ).toMatch(/base URL/);
+    expect(formProblem(form({ kind: "bedrock", region: "frankfurt" }), nothingTaken)).toMatch(/AWS region/);
+    expect(formProblem(form({ kind: "bedrock" }), nothingTaken)).toBe("missing");
+  });
+
   it("sets a pasted key in the company's secrets before it saves the provider, and saves nothing if it cannot", async () => {
     const calls: string[] = [];
-    const input = providerInput({
-      kind: "anthropic",
-      label: "Acme",
-      name: "acme",
-      endpoint: "",
-      region: "",
-      authHeader: "authorization",
-      credentialName: "MODELS_ACME_KEY",
-    });
+    const { input } = formRequest(form());
     await saveProvider(
       input,
       { name: "MODELS_ACME_KEY", value: "pasted" },
@@ -247,14 +329,15 @@ describe("Settings > Models", () => {
     expect(html).toContain("Runs on Claude Code");
     expect(html).toContain('<span class="mono">http://vllm.ai.svc.cluster.local:8000/v1</span> · no key');
     expect(html).toContain("Runs on Codex");
-    expect(html).toContain("Not lent: every teammate needs one of your providers");
+    expect(html).toContain("This board&#x27;s own models: not lent");
     expect(html).toContain("Teammates do not think with them yet");
     // Archived, of a kind no longer offered, and its key not set.
     expect(html).toContain("Archived");
     expect(html).toContain("Turned off by your operator");
     expect(html).toContain("not set yet");
-    // Bedrock is not offered here: its choice in the form is there, and disabled.
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Amazon Bedrock<\/button>/);
+    // Bedrock is not offered here: the form says so in words, and offers no Bedrock choice.
+    expect(html).toContain("Turned off by your operator: Amazon Bedrock.");
+    expect(html).not.toMatch(/<button[^>]*>Amazon Bedrock<\/button>/);
     // Tokens only, so both themes hold.
     expect(html).not.toMatch(/#[0-9a-f]{6}\b/i);
   });
@@ -263,6 +346,20 @@ describe("Settings > Models", () => {
     const passwords = (html: string) => html.match(/type="password"/g)?.length ?? 0;
     const html = panel();
     expect(passwords(html)).toBe(1);
+    // Every field on the page is one of these; only the pasted key's takes a value.
+    const fields = [...html.matchAll(/<(?:input|select)[^>]*aria-label="([^"]+)"/g)].map((m) => m[1]);
+    expect(fields.length).toBe(html.match(/<(?:input|select)\b/g)?.length);
+    expect(new Set(fields)).toEqual(
+      new Set([
+        "Model id",
+        "Whose model",
+        "Model label",
+        "Label",
+        "Name",
+        "How the key is given",
+        "Value for MODELS_PROVIDER_KEY",
+      ]),
+    );
     // The name a key goes under follows the provider's name as it is typed.
     expect(html).toContain("Value for MODELS_PROVIDER_KEY");
     expect(html).toContain("Paste a key");

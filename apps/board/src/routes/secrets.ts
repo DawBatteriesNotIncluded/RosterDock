@@ -4,7 +4,7 @@
 // goes straight to the secret store. Nothing here ever answers with a value.
 // Managing them is connection.manage: owners and admins.
 
-import { SecretNameSchema, SetSecretSchema } from "@rosterdock/shared";
+import { nameLooksLikeKey, SecretNameSchema, SetSecretSchema } from "@rosterdock/shared";
 import type { FastifyInstance } from "fastify";
 import type { Db } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
@@ -19,6 +19,12 @@ import type { SecretStore } from "../secrets/store.js";
 function nameParam(value: unknown): string {
   const parsed = SecretNameSchema.safeParse(value);
   if (!parsed.success) throw new HttpError(400, "name must be an env var NAME");
+  // A key given as the name would be kept as one, in the row and the event; it is refused, never repeated.
+  if (nameLooksLikeKey(parsed.data))
+    throw new HttpError(
+      400,
+      "name must be an env var NAME, such as MODELS_ACME_KEY; this looks like the key itself",
+    );
   return parsed.data;
 }
 

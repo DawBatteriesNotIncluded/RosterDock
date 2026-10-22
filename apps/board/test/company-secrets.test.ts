@@ -145,6 +145,12 @@ describe("company secrets", () => {
   it("refuses what it must: a bad name, an empty value, an unknown name, and a board without a store", async () => {
     const { api, base } = await seedCompany(board, "cs4@example.com");
     expect((await api.put(`${base}/secrets/not-a-name`, { value: "x-000000" })).status).toBe(400);
+    // A key given as the name (a 32-character Azure key starts with a letter as often as not) is not kept as one.
+    const keyAsName = "a3f9c2e1b4d5f60718293a4b5c6d7e8f";
+    const asName = await api.put(`${base}/secrets/${keyAsName}`, { value: "x-000000" });
+    expect(asName.status).toBe(400);
+    expect(JSON.stringify(asName.body)).not.toContain(keyAsName);
+    expect((await api.get(`${base}/secrets`)).body).toEqual([]);
     expect((await api.put(`${base}/secrets/A_TOKEN`, { value: "" })).status).toBe(400);
     expect((await api.put(`${base}/secrets/A_TOKEN`, {})).status).toBe(400);
     expect((await api.del(`${base}/secrets/A_TOKEN`)).status).toBe(404);

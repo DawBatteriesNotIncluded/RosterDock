@@ -158,6 +158,24 @@ export function nameLooksLikeKey(name: string): boolean {
   );
 }
 
+/** A provider's name: short, lowercase, unique in the company, and never a key typed where the name goes. */
+export const PROVIDER_NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+export function providerNameRefusal(name: string): string | null {
+  if (!PROVIDER_NAME_RE.test(name)) return "a short name: lowercase letters, digits and dashes, 40 at most";
+  if (nameLooksLikeKey(name.replace(/-/g, "_"))) return "a short name; this looks like a key";
+  return null;
+}
+
+/** The most a provider's label holds. */
+export const MAX_PROVIDER_LABEL = 80;
+/** Whether a label people read has a key in it: one of its words looks like one (a 32-character Azure key). */
+export function labelLooksLikeKey(label: string): boolean {
+  return label
+    .split(/\s+/)
+    .filter(Boolean)
+    .some((word) => looksLikeRawSecret(word) || nameLooksLikeKey(word.replace(/-/g, "_")));
+}
+
 /** The headers an OpenAI-compatible server may take its key in. */
 export const COMPATIBLE_AUTH_HEADERS = ["authorization", "api-key", "x-api-key"] as const;
 export type CompatibleAuthHeader = (typeof COMPATIBLE_AUTH_HEADERS)[number];

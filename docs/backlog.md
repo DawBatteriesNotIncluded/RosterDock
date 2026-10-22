@@ -52,7 +52,8 @@ scheduled; delete it when it ships.
     repoint where a key is sent. It belongs with the worker's own database role (the fleet line above).
   - Codex on the worker past 0.144.5 (0.157.1 adds `amazon-bedrock-runtime`), in a pull request that records
     the worker's fixtures again.
-- A connection's credential name, a notification setting's name and a company secret's name take a key shaped
-  like a name: a 32-character Azure key that starts with a letter, an AWS key id, a Stripe key's tail. The
-  raw-secret guard's check on reference fields wants 40 or more characters for a bare run. Model providers
-  refuse these with `nameLooksLikeKey` (`packages/shared/src/providers.ts`); every env var NAME field should.
+- A connection's credential name and a notification setting's name take a key shaped like a name: a
+  32-character Azure key that starts with a letter, an AWS key id, a long token's tail. The raw-secret guard's
+  check on reference fields wants 40 or more characters for a bare run. Model providers and company secrets'
+  names refuse these with `nameLooksLikeKey` (`packages/shared/src/provider-kinds.ts`); every env var NAME field
+  should.

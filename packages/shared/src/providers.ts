@@ -14,7 +14,10 @@ import {
   FAMILY_LABELS,
   MAX_PROVIDER_MODELS,
   MODEL_FAMILIES,
+  labelLooksLikeKey,
+  MAX_PROVIDER_LABEL,
   nameLooksLikeKey,
+  providerNameRefusal,
   PROVIDER_KIND_LABELS,
 } from "./provider-kinds.js";
 import { modelId, SecretNameSchema } from "./schemas.js";
@@ -25,10 +28,16 @@ export * from "./provider-kinds.js";
 const providerName = z
   .string()
   .trim()
+  .superRefine((v, ctx) => {
+    const why = providerNameRefusal(v);
+    if (why) ctx.addIssue({ code: "custom", message: why });
+  });
+const label = z
+  .string()
+  .trim()
   .min(1)
-  .max(40)
-  .regex(/^[a-z0-9][a-z0-9-]*$/, "lowercase letters, digits and dashes");
-const label = z.string().trim().min(1).max(80);
+  .max(MAX_PROVIDER_LABEL)
+  .refine((v) => !labelLooksLikeKey(v), "what people read, such as Acme Azure (prod); this looks like a key");
 
 /** A credential's env var NAME, never the value: a pasted key is refused without being said back. */
 const credentialName = SecretNameSchema.refine(
