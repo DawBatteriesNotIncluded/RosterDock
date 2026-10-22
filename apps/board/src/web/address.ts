@@ -126,11 +126,8 @@ export function refuseAddress(address: string): string | null {
   return V6_GLOBAL_EXCEPTIONS.find((r) => inRange(v6, r))?.[2] ?? null;
 }
 
-/**
- * A name's addresses, once every one of them is public: a name with one address the board must not reach is
- * refused whole, since the connection could use any of them. Throws RefusedAddress with the reason.
- */
-export async function publicAddresses(resolve: Resolve, host: string): Promise<string[]> {
+/** Every address a name resolves to; a name with none, or that fails to resolve, is refused. */
+async function resolved(resolve: Resolve, host: string): Promise<string[]> {
   let addresses: string[];
   try {
     addresses = await resolve(host);
@@ -139,10 +136,136 @@ export async function publicAddresses(resolve: Resolve, host: string): Promise<s
     throw new RefusedAddress(`${host} does not resolve${code ? ` (${code})` : ""}`);
   }
   if (!addresses.length) throw new RefusedAddress(`${host} does not resolve`);
+  return addresses;
+}
+
+/**
+ * A name's addresses, once every one of them is public: a name with one address the board must not reach is
+ * refused whole, since the connection could use any of them. Throws RefusedAddress with the reason.
+ */
+export async function publicAddresses(resolve: Resolve, host: string): Promise<string[]> {
+  const addresses = await resolved(resolve, host);
   for (const a of addresses) {
     const why = refuseAddress(a);
     if (why)
       throw new RefusedAddress(`${host} resolves to ${a}, ${why}; the board reads only public addresses`);
+  }
+  return addresses;
+}
+
+// What a company chooses the board should reach (a connection's server, its OAuth endpoints, a webhook, an
+// SMTP server) is held to the same rule, less what the operator lists in ROSTERDOCK_PRIVATE_DESTINATIONS: an
+// MCP server inside the cluster, a model on the host. A listed name is trusted with whatever it resolves to;
+// a listed address or range is reached whatever name led to it.
+
+/** What the operator lets a company's connections reach though it is not public (ROSTERDOCK_PRIVATE_DESTINATIONS). */
+export interface PrivateDestinations {
+  /** Lower case. `*.example.internal` stands for every name under example.internal, not for the name itself. */
+  names: string[];
+  ranges: Range[];
+  /** As the operator wrote them, for a person to read. */
+  entries: string[];
+}
+
+export const NO_PRIVATE_DESTINATIONS: PrivateDestinations = { names: [], ranges: [], entries: [] };
+
+// A URL reads a name whose last label is a number (decimal, or 0x hex) as an IPv4 address, so no URL's host
+// is ever such a name.
+const NUMERIC_TAIL = /(^|\.)(0x[\da-f]*|\d+)$/;
+
+const NAME_RE =
+  /^(?:\*\.)?(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)*[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/;
+
+/**
+ * An address on its own as its bytes, an IPv4 written as IPv6 (mapped, or NAT64's well-known prefix) by its
+ * IPv4, as refuseAddress reads them, so a range matches either way.
+ */
+function addressBytes(address: string): number[] | null {
+  const v4 = v4Bytes(address);
+  if (v4) return v4;
+  const v6 = v6Bytes(address);
+  if (!v6) return null;
+  const mapped = v6.slice(0, 10).every((b) => b === 0) && v6[10] === 0xff && v6[11] === 0xff;
+  const nat64 = inRange(v6, [[0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0], 96, ""]);
+  return mapped || nat64 ? v6.slice(12) : v6;
+}
+
+/**
+ * The operator's list, from a comma-separated setting: host names (`ollama.internal`, `*.svc.cluster.local`),
+ * addresses (`127.0.0.1`, `::1`) and ranges (`10.0.0.0/8`, `fd00::/8`). Anything else stops the board from
+ * starting, so a typo never quietly allows nothing or everything.
+ */
+export function parsePrivateDestinations(raw: string | undefined): PrivateDestinations {
+  const out: PrivateDestinations = { names: [], ranges: [], entries: [] };
+  for (const item of (raw ?? "").split(",")) {
+    const entry = item.trim().toLowerCase();
+    if (!entry) continue;
+    const [addr, bitsText, extra] = entry.replace(/^\[|\](?=\/|$)/g, "").split("/");
+    const bytes = entry.includes("%") ? null : addressBytes(addr!);
+    const name = addr!.replace(/\.$/, "");
+    if (bytes && extra === undefined) {
+      const max = bytes.length * 8;
+      const bits = bitsText === undefined ? max : /^\d{1,3}$/.test(bitsText) ? Number(bitsText) : NaN;
+      if (!(bits >= 0 && bits <= max))
+        throw new Error(`ROSTERDOCK_PRIVATE_DESTINATIONS: ${entry} has a prefix length past /${max}`);
+      // The range's own address with its host bits cleared: 10.1.2.3/8 is 10.0.0.0/8.
+      const prefix = bytes.map((b, i) => b & (0xff << (8 - Math.max(0, Math.min(8, bits - i * 8)))) & 0xff);
+      out.ranges.push([prefix, bits, entry]);
+    } else if (bitsText === undefined && NAME_RE.test(name) && !NUMERIC_TAIL.test(name)) {
+      out.names.push(name);
+    } else {
+      // A zone (%eth0) names an interface, not a destination.
+      throw new Error(
+        `ROSTERDOCK_PRIVATE_DESTINATIONS: "${entry}" is not a host name, an address or an address range (10.0.0.0/8)`,
+      );
+    }
+    out.entries.push(entry);
+  }
+  return out;
+}
+
+/** Whether the operator lists this name, itself or under a `*.` entry. */
+function nameListed(host: string, allow: PrivateDestinations): boolean {
+  const name = host.toLowerCase().replace(/\.$/, "");
+  return allow.names.some((n) =>
+    n.startsWith("*.") ? name.endsWith(n.slice(1)) && name.length > n.length - 1 : name === n,
+  );
+}
+
+/** Whether this address is in a range the operator lists. */
+function addressListed(address: string, allow: PrivateDestinations): boolean {
+  const bytes = addressBytes(address);
+  return !!bytes && allow.ranges.some((r) => r[0].length === bytes.length && inRange(bytes, r));
+}
+
+/** Why the board does not connect to this address for a company, or null: it is public, or the operator lists it. */
+export function refuseDestination(address: string, allow: PrivateDestinations): string | null {
+  const why = refuseAddress(address);
+  return why && !addressListed(address, allow) ? why : null;
+}
+
+const NOT_ALLOWED = "which this board's operator has not allowed";
+
+/** The refusal of an address written in a URL, for a person to read. */
+export function refusedLiteral(address: string, why: string): string {
+  return `refused: ${address} is ${why}, ${NOT_ALLOWED}`;
+}
+
+/**
+ * A name's addresses, once the board may connect to every one of them for a company: each is public or in a
+ * range the operator lists, or the operator lists the name. Throws RefusedAddress with the reason.
+ */
+export async function reachableAddresses(
+  resolve: Resolve,
+  host: string,
+  allow: PrivateDestinations,
+): Promise<string[]> {
+  const addresses = await resolved(resolve, host);
+  if (nameListed(host, allow)) return addresses;
+  // The kind of address, not the address: a company learns nothing of the network behind the board.
+  for (const a of addresses) {
+    const why = refuseDestination(a, allow);
+    if (why) throw new RefusedAddress(`refused: ${host} resolves to ${why}, ${NOT_ALLOWED}`);
   }
   return addresses;
 }

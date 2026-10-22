@@ -3,8 +3,11 @@
 // (address.ts) and hands the socket only those. What was checked is what the
 // socket connects to, so a name that answers with a public address for the check
 // and a private one for the connection (DNS rebinding) gets no second answer. No
-// redirect is followed here: the caller checks every hop itself (reviews/sources.ts).
-// Tests inject a fetch and a resolver instead and never reach the network.
+// redirect is followed here: the caller checks every hop itself (reviews/sources.ts,
+// egress.ts). The same transport carries what a company's connections, OAuth and
+// webhooks send (egress.ts): a body, an answer that streams, the private addresses
+// the operator lists. Tests inject a fetch and a resolver instead and never reach
+// the network.
 
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
 import http from "node:http";
@@ -12,7 +15,7 @@ import https from "node:https";
 import { isIP, type LookupFunction } from "node:net";
 import { pipeline, Readable } from "node:stream";
 import zlib from "node:zlib";
-import { publicAddresses, type Resolve } from "./address.js";
+import { publicAddresses, reachableAddresses, type PrivateDestinations, type Resolve } from "./address.js";
 
 export type { Resolve } from "./address.js";
 
@@ -30,10 +33,13 @@ export const systemResolve: Resolve = (host) =>
     ),
   );
 
-/** A lookup for a socket: the name's addresses, only once each one is public. */
-export function guardedLookup(resolve: Resolve): LookupFunction {
+/**
+ * A lookup for a socket: the name's addresses, only once each one is public. With the operator's list, a
+ * company's destination: public, or private where the list allows it (address.ts reachableAddresses).
+ */
+export function guardedLookup(resolve: Resolve, allow?: PrivateDestinations): LookupFunction {
   return (hostname, options, callback) => {
-    publicAddresses(resolve, hostname).then(
+    (allow ? reachableAddresses(resolve, hostname, allow) : publicAddresses(resolve, hostname)).then(
       (found) => {
         const family = options.family === "IPv4" ? 4 : options.family === "IPv6" ? 6 : options.family;
         const addresses = found
@@ -67,28 +73,81 @@ function decoded(res: http.IncomingMessage): Readable {
   return decoder ? pipeline(res, decoder, () => {}) : res;
 }
 
+/** What the web reader never needs and a company's destinations may: an address in the URL, kept connections. */
+export interface PinnedOptions {
+  /** Why an address written in the URL is not connected to, or null to connect. Default: every one is refused. */
+  literal?: (address: string) => string | null;
+  /** Connections kept between requests, per protocol; each socket was opened through the lookup. Default: none. */
+  agents?: { http: http.Agent; https: https.Agent };
+}
+
+// Headers the transport sets itself, never a caller: Host above all, or a company could name a server
+// (a credential header called Host, say) other than the one its URL reached, behind a shared ingress.
+const OWN_HEADERS = [
+  "host",
+  "connection",
+  "content-length",
+  "expect",
+  "keep-alive",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+];
+
+/** A request body as the bytes to send: a string, URL-encoded form or bytes, as the board's callers send. */
+function bodyBytes(body: RequestInit["body"], headers: Record<string, string>): Buffer | null {
+  if (body === undefined || body === null) return null;
+  if (typeof body === "string") {
+    headers["content-type"] ??= "text/plain;charset=UTF-8";
+    return Buffer.from(body, "utf8");
+  }
+  if (body instanceof URLSearchParams) {
+    headers["content-type"] ??= "application/x-www-form-urlencoded;charset=UTF-8";
+    return Buffer.from(body.toString(), "utf8");
+  }
+  if (body instanceof ArrayBuffer) return Buffer.from(body);
+  if (ArrayBuffer.isView(body)) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  throw new TypeError("only a string, a form or bytes is sent as a body");
+}
+
 /**
- * A fetch that connects through `lookup` and nothing else: one GET (or HEAD), no redirect followed, no
- * connection kept, no proxy. A literal address in the URL is refused, since no lookup would see it.
+ * A fetch that connects through `lookup` and nothing else: one request, its body sent whole, its answer
+ * streamed as it arrives (decoded when compressed), no redirect followed, no proxy. A literal address in the
+ * URL is refused unless `literal` admits it, since no lookup would see it.
  */
-export function pinnedFetch(lookup: LookupFunction): typeof fetch {
+export function pinnedFetch(lookup: LookupFunction, opts: PinnedOptions = {}): typeof fetch {
+  const literal = opts.literal ?? (() => "a literal address is not fetched");
   return (input, init) =>
     new Promise<Response>((resolve, reject) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.protocol !== "http:" && url.protocol !== "https:")
         return reject(new TypeError(`${url.protocol} is not fetched`));
-      if (isIP(url.hostname.replace(/^\[|\]$/g, "")))
-        return reject(new TypeError("a literal address is not fetched"));
+      const host = url.hostname.replace(/^\[|\]$/g, "");
+      const refused = isIP(host) ? literal(host) : null;
+      if (refused) return reject(new TypeError(refused));
+      const method = (init?.method ?? "GET").toUpperCase();
       const headers: Record<string, string> = {};
-      new Headers(init?.headers).forEach((value, name) => (headers[name] = value));
+      new Headers(init?.headers).forEach((value, name) => {
+        if (!OWN_HEADERS.includes(name)) headers[name] = value;
+      });
       headers["accept-encoding"] = "gzip, deflate, br";
-      const req = (url.protocol === "https:" ? https : http).request(
+      let body: Buffer | null;
+      try {
+        body = bodyBytes(init?.body, headers);
+      } catch (err) {
+        return reject(err as Error);
+      }
+      if (body) headers["content-length"] = String(body.length);
+      const secure = url.protocol === "https:";
+      const req = (secure ? https : http).request(
         url,
         {
-          method: init?.method ?? "GET",
+          method,
           headers,
           lookup,
-          agent: false,
+          agent: opts.agents ? (secure ? opts.agents.https : opts.agents.http) : false,
           ...(init?.signal ? { signal: init.signal } : {}),
         },
         (res) => {
@@ -97,10 +156,10 @@ export function pinnedFetch(lookup: LookupFunction): typeof fetch {
             const out = new Headers();
             for (const [name, value] of Object.entries(res.headers))
               for (const v of [value ?? []].flat()) out.append(name, v);
-            const empty = status === 204 || status === 205 || status === 304 || init?.method === "HEAD";
-            if (empty) res.resume();
-            const body = empty ? null : (Readable.toWeb(decoded(res)) as ReadableStream<Uint8Array>);
-            resolve(new Response(body, { status, statusText: res.statusMessage ?? "", headers: out }));
+            const empty = status === 204 || status === 205 || status === 304 || method === "HEAD";
+            if (empty) res.on("error", () => {}).resume();
+            const stream = empty ? null : (Readable.toWeb(decoded(res)) as ReadableStream<Uint8Array>);
+            resolve(new Response(stream, { status, statusText: res.statusMessage ?? "", headers: out }));
           } catch (err) {
             res.destroy();
             reject(err as Error);
@@ -108,7 +167,7 @@ export function pinnedFetch(lookup: LookupFunction): typeof fetch {
         },
       );
       req.on("error", reject);
-      req.end();
+      req.end(body ?? undefined);
     });
 }
 

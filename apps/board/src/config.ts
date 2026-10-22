@@ -15,6 +15,7 @@ import {
 } from "@rosterdock/shared";
 import type { OidcConfig } from "./auth/oidc.js";
 import type { S3Config } from "./storage/s3.js";
+import { parsePrivateDestinations, type PrivateDestinations } from "./web/address.js";
 
 export interface BoardConfig {
   databaseUrl: string;
@@ -68,6 +69,11 @@ export interface BoardConfig {
   metricsToken: string | null;
   /** Fetch the sources a research document cites when its review opens (public http(s) only). */
   fetchSources: boolean;
+  /**
+   * The private destinations a company's connections, their OAuth, its webhook and its SMTP server may reach
+   * (ROSTERDOCK_PRIVATE_DESTINATIONS: names, addresses and ranges). Empty: public addresses only.
+   */
+  privateDestinations: PrivateDestinations;
   /** Object storage for artifacts over the inline limit (S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY by name). Null: larger artifacts are refused. */
   storage: S3Config | null;
   /** A secret store the board may write to (ROSTERDOCK_SECRET_STORE: `kubernetes`, the pod's namespace; `file:<dir>` for dev). Null: none, so no OAuth on connections. */
@@ -207,6 +213,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BoardConfig {
     storage: storageFrom(env),
     metricsToken: env.ROSTERDOCK_METRICS_TOKEN?.trim() || null,
     fetchSources: env.ROSTERDOCK_FETCH_SOURCES !== "0" && env.ROSTERDOCK_FETCH_SOURCES !== "false",
+    privateDestinations: parsePrivateDestinations(env.ROSTERDOCK_PRIVATE_DESTINATIONS),
     secretStore: secretStoreFrom(env),
     sharedEnvNames: parseSharedEnvNames(env.ROSTERDOCK_SHARED_ENV_NAMES),
     stdioCommands: parseStdioCommands(env.ROSTERDOCK_STDIO_COMMANDS),
