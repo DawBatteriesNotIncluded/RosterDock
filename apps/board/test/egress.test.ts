@@ -299,6 +299,8 @@ describe("a company's destination through the egress", () => {
       "http://plain.example.com/mcp": moved(301, "https://plain.example.com/mcp"),
       "https://away.example.com/mcp": moved(307, "https://elsewhere.example.com/mcp"),
       "https://away.example.com/port": moved(307, "https://away.example.com:8443/mcp"),
+      "http://ported.example.com:8080/mcp": moved(308, "https://ported.example.com:8443/mcp"),
+      "https://nginx.example.com/mcp": moved(301, "https://nginx.example.com/mcp/?v=2"),
     });
     const same = egressFetch(testEgress(t.fetch, { resolve }), {
       redirect: "same-origin",
@@ -321,7 +323,20 @@ describe("a company's destination through the egress", () => {
     await expect(same("https://away.example.com/port", { headers: bearer })).rejects.toThrow(
       "a redirect to https://away.example.com:8443,",
     );
-    expect(t.calls).toHaveLength(6);
+    // http to https counts as the same server on the default ports only.
+    await expect(same("http://ported.example.com:8080/mcp", { headers: bearer })).rejects.toThrow(
+      "a redirect to https://ported.example.com:8443,",
+    );
+    // A 301 or 302 would turn the call's POST into a GET without its body: refused, with the address to use.
+    await expect(
+      same("https://nginx.example.com/mcp", { method: "POST", headers: bearer, body: "{}" }),
+    ).rejects.toThrow(
+      "nginx.example.com answered 301 to a POST, which would arrive at https://nginx.example.com/mcp/ as a GET without its body: use that address",
+    );
+    // A read moved the same way is followed.
+    expect((await same("https://nginx.example.com/mcp", { headers: bearer })).status).toBe(200);
+    expect(t.calls.at(-1)).toMatchObject({ url: "https://nginx.example.com/mcp/?v=2", method: "GET" });
+    expect(t.calls).toHaveLength(10);
     // Where a call site follows any redirect, a hop to another origin keeps no header that could be a credential.
     const follow = egressFetch(testEgress(t.fetch, { resolve }), {
       redirect: "follow",
@@ -448,6 +463,7 @@ describe("the pinned transport for a company's destinations", () => {
           res.write("event: message\ndata: one\n\n");
           release = () => res.end("event: message\ndata: two\n\n");
         } else if (req.url === "/mcp") mcpServer(req.method!, body, res);
+        else if (req.url === "/mcp-huge") mcpServer(req.method!, body, res, true);
         else {
           res.writeHead(404);
           res.end();
@@ -568,6 +584,17 @@ describe("the pinned transport for a company's destinations", () => {
     expect(rest).toBe("event: message\ndata: two\n\n");
   });
 
+  it("ends an MCP call whose event stream passes the cap with the cut, not its timeout", async () => {
+    const started = Date.now();
+    await expect(
+      discoverTools(
+        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-huge` },
+        { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
+      ),
+    ).rejects.toThrow(`mcp.cluster.test:${port} answered more than 8 MB; the board read no further`);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
   it("carries MCP's streamable HTTP, its answers as event streams, to a listed name and to no other", async () => {
     const target = { transport: "http" as const, url: `http://mcp.cluster.test:${port}/mcp` };
     const tools = await discoverTools(target, {
@@ -601,7 +628,7 @@ const fixture = (name: string) =>
  * The MCP fixtures (fixtures/mcp, written from the spec) over streamable HTTP, each as an event stream; the answer to
  * tools/list is never ended, so a client gets it only if the transport hands the stream on as it arrives.
  */
-function mcpServer(method: string, raw: string, res: http.ServerResponse): void {
+function mcpServer(method: string, raw: string, res: http.ServerResponse, huge = false): void {
   if (method !== "POST") {
     res.writeHead(method === "DELETE" ? 200 : 405);
     res.end();
@@ -620,6 +647,13 @@ function mcpServer(method: string, raw: string, res: http.ServerResponse): void 
         ? fixture("tools-list.json").result
         : {};
   res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
-  res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result })}\n\n`);
+  // An answer past the board's 8 MB cap: a tool whose description is 9 MB.
+  const sent =
+    huge && msg.method === "tools/list"
+      ? {
+          tools: [{ name: "big", description: "x".repeat(9 * 1024 * 1024), inputSchema: { type: "object" } }],
+        }
+      : result;
+  res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: sent })}\n\n`);
   if (msg.method !== "tools/list") res.end();
 }

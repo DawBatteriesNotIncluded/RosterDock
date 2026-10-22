@@ -252,6 +252,48 @@ describe("needs-you notifications", () => {
 });
 
 describe("needs-you by email", () => {
+  it("reads no more of a server's reply than SMTP allows", async () => {
+    const message = { from: "board@example.test", to: ["ops@example.test"], subject: "s", text: "t" };
+    const flood = (answer: (s: Socket) => void) => {
+      const open: Socket[] = [];
+      const server = createServer((s) => {
+        open.push(s);
+        s.on("error", () => {});
+        answer(s);
+      });
+      return new Promise<{ port: number; close: () => Promise<unknown> }>((r) =>
+        server.listen(0, "127.0.0.1", () =>
+          r({
+            port: (server.address() as AddressInfo).port,
+            close: () => {
+              for (const s of open) s.destroy();
+              return new Promise((done) => server.close(done));
+            },
+          }),
+        ),
+      );
+    };
+    // A greeting that never ends its line, and one that never ends its reply.
+    const endless = await flood((s) => s.write("220 " + "x".repeat(64 * 1024)));
+    const longReply = await flood((s) =>
+      s.write(Array.from({ length: 200 }, () => "220-hello\r\n").join("")),
+    );
+    try {
+      const started = Date.now();
+      const sent = await Promise.allSettled([
+        sendMail(`smtp://127.0.0.1:${endless.port}/`, message, { timeoutMs: 10_000 }),
+        sendMail(`smtp://127.0.0.1:${longReply.port}/`, message, { timeoutMs: 10_000 }),
+      ]);
+      expect(sent.map((o) => (o.status === "rejected" ? (o.reason as Error).message : "sent"))).toEqual([
+        "the server sent a line longer than an SMTP reply's; the board read no further",
+        "the server sent a reply of more than 100 lines",
+      ]);
+      expect(Date.now() - started).toBeLessThan(5000);
+    } finally {
+      await Promise.all([endless.close(), longReply.close()]);
+    }
+  });
+
   it("does not repeat what another service says when an SMTP URL points at it", async () => {
     const ssh = createServer((s) => {
       s.on("error", () => {});

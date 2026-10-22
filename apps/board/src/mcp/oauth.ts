@@ -12,7 +12,7 @@
 // token requests, which carry a secret or a code, follow none. Nothing here
 // stores anything: the caller keeps the tokens in the secret store, and every
 // error text is free of them.
-import { hostListed, trimTrailingSlashes, type PrivateDestinations } from "@rosterdock/shared";
+import { addressListed, hostListed, isAddress, trimTrailingSlashes } from "@rosterdock/shared";
 import { codeChallenge } from "../auth/oidc.js";
 import { egressFetch, readCapped, type Egress } from "../web/egress.js";
 
@@ -26,7 +26,10 @@ export const OAUTH_MAX_BYTES = 256 * 1024;
  * plain http to a destination the operator lists (a server on this machine in development). Anything else,
  * a script URL above all, would run in the board's page when a person presses Authorise.
  */
-export function endpointRefusal(raw: unknown, allow: PrivateDestinations): string | null {
+export async function endpointRefusal(
+  raw: unknown,
+  egress: Pick<Egress, "resolve" | "allow">,
+): Promise<string | null> {
   let url: URL;
   try {
     url = new URL(String(raw));
@@ -34,11 +37,20 @@ export function endpointRefusal(raw: unknown, allow: PrivateDestinations): strin
     return "is not a URL";
   }
   if (url.protocol === "https:") return null;
-  if (url.protocol === "http:")
-    return hostListed(url.hostname.replace(/\.$/, ""), allow)
-      ? null
-      : "is plain http to a server this board's operator does not list";
-  return `is a ${url.protocol.replace(":", "")} URL, not https`;
+  if (url.protocol !== "http:") return `is a ${url.protocol.replace(":", "")} URL, not https`;
+  // Listed by name, written as a listed address, or a name every address of which is in a listed range.
+  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (hostListed(host, egress.allow)) return null;
+  if (!isAddress(host)) {
+    const addresses = await egress.resolve(host).catch(() => [] as string[]);
+    if (addresses.length && addresses.every((a) => addressListed(a, egress.allow))) return null;
+  }
+  return "is plain http to a server this board's operator does not list";
+}
+
+/** Whether a resource an MCP server declares is on its own origin (RFC 9728), as the board takes one. */
+export function resourceOnOrigin(resource: string, mcpUrl: string): boolean {
+  return sameOrigin(resource, mcpUrl);
 }
 
 export interface OAuthDeps {
@@ -155,7 +167,7 @@ export async function discoverResource(
       const first = Array.isArray(list) && typeof list[0] === "string" ? trimTrailingSlashes(list[0]) : null;
       if (first) {
         const host = new URL(mcpUrl).host;
-        const why = endpointRefusal(first, deps.egress.allow);
+        const why = await endpointRefusal(first, deps.egress);
         if (why) throw new OAuthError("server", `${host} names an authorization server that ${why}`);
         const scopes = Array.isArray(json.scopes_supported)
           ? json.scopes_supported.filter((s): s is string => typeof s === "string")
@@ -187,6 +199,9 @@ export async function discoverAuthorizationServer(
   deps: OAuthDeps,
 ): Promise<AuthorizationServer> {
   const key = trimTrailingSlashes(issuer);
+  // An issuer kept from before these checks is held to them too.
+  const issuerRefused = await endpointRefusal(key, deps.egress);
+  if (issuerRefused) throw new OAuthError("server", `the authorization server's address ${issuerRefused}`);
   const now = deps.now?.() ?? Date.now();
   const cached = servers.get(key);
   if (cached && now - cached.at < DISCOVERY_TTL_MS) return cached.doc;
@@ -228,7 +243,7 @@ export async function discoverAuthorizationServer(
       ["token_endpoint", "a token endpoint"],
       ["registration_endpoint", "a registration endpoint"],
     ] as const) {
-      const why = doc[field] === undefined ? null : endpointRefusal(doc[field], deps.egress.allow);
+      const why = doc[field] === undefined ? null : await endpointRefusal(doc[field], deps.egress);
       if (why) throw new OAuthError("server", `${new URL(key).host} names ${label} that ${why}`);
     }
     servers.set(key, { at: now, doc });
@@ -324,6 +339,9 @@ async function tokenRequest(
   client: { clientId: string; clientSecret: string | null; tokenAuth?: TokenAuth | null },
   deps: OAuthDeps,
 ): Promise<TokenSet> {
+  // A token endpoint a row kept from before these checks is held to them before a secret goes there.
+  const refused = await endpointRefusal(tokenEndpoint, deps.egress);
+  if (refused) throw new OAuthError("token", `the token endpoint ${refused}`);
   const headers: Record<string, string> = {
     "content-type": "application/x-www-form-urlencoded",
     accept: "application/json",

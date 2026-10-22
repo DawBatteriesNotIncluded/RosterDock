@@ -76,8 +76,9 @@ Against the images built from the pre-release tree (then called Pharo, not publi
   board's operator has not allowed" until it is listed. The check goes by address range: cluster addresses
   outside the private ranges, and public addresses that lead inside, pass it, so the network policy still
   matters (`docs/security.md`). An MCP server that redirects to another server, and an OpenAPI operation or a
-  webhook that answers with any redirect, fails and names the server it pointed to; an MCP server's
-  redirect within its own server is followed as before. An answer is read only up to its call site's cap,
+  webhook that answers with any redirect, fails and names the server it pointed to. An MCP server's
+  redirect within its own server is followed when the call arrives as sent (307, 308); a 301 or 302, as an
+  http-to-https rule sends, would turn the call into a GET, so it fails and names the address to use. An answer is read only up to its call site's cap,
   decoded. OAuth endpoints must be https (http only to a listed destination), and the resource an MCP server
   declares must be on its own origin. The board's own destinations (git hosts, OIDC, OTLP, the bucket, the
   API server, the model API, its webhook and SMTP server) are not checked. Settings shows owners and admins

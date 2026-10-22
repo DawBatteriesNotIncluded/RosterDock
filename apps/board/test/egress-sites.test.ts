@@ -58,6 +58,12 @@ const oauth = createOAuthFake({
   inner: mcp.fetch,
   issuer: "https://auth.intranet.test",
 });
+// One whose authorization server is public, for a row that kept a resource from before the origin check.
+const reauth = createOAuthFake({
+  mcpUrl: "https://mcp.reauth.test/mcp",
+  inner: mcp.fetch,
+  issuer: "https://auth.reauth.test",
+});
 const style = STYLE_PACKS.find((p) => p.id === "caveman")!;
 /** Answered with a redirect, by URL. */
 const redirects: Record<string, [number, string]> = {
@@ -95,6 +101,7 @@ const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (host.startsWith("hooks.")) return new Response("ok", { status: 200 });
   if (host === "raw.githubusercontent.com") return new Response("not the pinned file", { status: 200 });
   if (host === "mcp.oauth.test" || host === "auth.intranet.test") return oauth.fetch(input, init);
+  if (host === "mcp.reauth.test" || host === "auth.reauth.test") return reauth.fetch(input, init);
   return mcp.fetch(input, init);
 }) as typeof fetch;
 
@@ -340,7 +347,7 @@ describe("OAuth for a company's connection", () => {
       "register.example.test names a registration endpoint that is a ftp URL, not https",
     );
     await expect(discoverAuthorizationServer("http://dev.example.test", deps())).rejects.toThrow(
-      "names an authorization endpoint that is plain http",
+      "the authorization server's address is plain http to a server this board's operator does not list",
     );
     // Plain http to a server the operator lists, such as one on this machine in development, is taken.
     expect(
@@ -370,6 +377,30 @@ describe("OAuth for a company's connection", () => {
       authorizationServer: "https://auth.example.test",
       resource: "https://three.example.test",
     });
+    // Plain http to a name whose every address is in a listed range is taken, as for a connection.
+    names["keycloak.ranged.test"] = ["10.40.0.5"];
+    server("http://keycloak.ranged.test", {});
+    expect(
+      (await discoverAuthorizationServer("http://keycloak.ranged.test", deps("10.40.0.0/16"))).token_endpoint,
+    ).toBe("http://keycloak.ranged.test/token");
+    resetOAuthCaches();
+    await expect(
+      discoverAuthorizationServer("http://keycloak.ranged.test", deps("10.41.0.0/16")),
+    ).rejects.toThrow(
+      "the authorization server's address is plain http to a server this board's operator does not list",
+    );
+    delete names["keycloak.ranged.test"];
+    // An issuer or a token endpoint a row kept from before these checks is held to them before anything goes there.
+    await expect(discoverAuthorizationServer("javascript:alert(1)", deps())).rejects.toThrow(
+      "the authorization server's address is a javascript URL, not https",
+    );
+    await expect(
+      refreshTokens(
+        "http://plain.example.test/token",
+        { clientId: "c", clientSecret: "s", refreshToken: "r", resource: "https://mcp.example.test/mcp" },
+        deps(),
+      ),
+    ).rejects.toThrow("the token endpoint is plain http to a server this board's operator does not list");
     // And where the consent URL is built, whatever reached it.
     expect(() =>
       authorizationUrl(
@@ -388,6 +419,30 @@ describe("OAuth for a company's connection", () => {
         },
       ),
     ).toThrow("x.test names an authorization endpoint that is not a web page");
+  });
+
+  it("discovers again a resource a connection kept on another server's origin from before the check", async () => {
+    resetOAuthCaches();
+    const { api, base, companyId } = await seedCompany(board, "egress-oauth-kept@example.com");
+    const created = await api.post(`${base}/connections`, {
+      name: "kept",
+      url: "https://mcp.reauth.test/mcp",
+      oauth: {},
+    });
+    expect((await api.post(`${base}/connections/${created.body.id}/oauth/start`, {})).status).toBe(200);
+    // What a row kept before: another service's resource.
+    await board.db.query(
+      `UPDATE connections SET oauth = jsonb_set(oauth, '{resource}', '"https://api.other.test/mcp"') WHERE id = $1 AND company_id = $2`,
+      [created.body.id, companyId],
+    );
+    const again = await api.post(`${base}/connections/${created.body.id}/oauth/start`, {});
+    expect(again.status).toBe(200);
+    expect(new URL(again.body.url).searchParams.get("resource")).toBe("https://mcp.reauth.test/mcp");
+    const kept = await board.db.query<{ resource: string | null }>(
+      "SELECT oauth->>'resource' AS resource FROM connections WHERE id = $1",
+      [created.body.id],
+    );
+    expect(kept.rows[0]!.resource).toBe("https://mcp.reauth.test/mcp");
   });
 
   it("follows discovery's redirects with every hop checked, follows none for registration or a token, and reaches a listed server", async () => {
