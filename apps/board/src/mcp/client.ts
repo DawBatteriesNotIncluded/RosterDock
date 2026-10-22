@@ -27,6 +27,7 @@ import { notSetForCompany } from "../secrets/company.js";
 import { entryFor, type SecretStore } from "../secrets/store.js";
 import { isExpiring, refreshTokens, resourceAllowed, type TokenAuth } from "./oauth.js";
 import { defaultEgress, egressFetch, READ_NO_FURTHER, readBudget, type Egress } from "../web/egress.js";
+import { scrubText, scrubValue } from "./scrub.js";
 import type { WebReader } from "../web/transport.js";
 
 export const MCP_CALL_TIMEOUT_MS = 30_000;
@@ -184,13 +185,6 @@ export interface DiscoveredTool {
 
 export type McpCallOutcome = { ok: true; result: unknown } | { ok: false; error: string };
 
-/** Values that must never appear in text that leaves this module. */
-function scrub(text: string, secrets: string[]): string {
-  let out = text;
-  for (const s of secrets) if (s && s.length >= 6) out = out.split(s).join("[redacted]");
-  return out;
-}
-
 /** The connection cannot be called as it stands (a missing credential, no URL); a 409 at the API. */
 export class McpTargetError extends Error {
   readonly statusCode = 409;
@@ -316,7 +310,7 @@ function buildTransport(target: McpTarget, deps: McpClientDeps, secret: string |
 export async function withMcpClient<T>(
   target: McpTarget,
   deps: McpClientDeps,
-  fn: (client: Client) => Promise<T>,
+  fn: (client: Client, secrets: readonly string[]) => Promise<T>,
 ): Promise<T> {
   const env = deps.env ?? {};
   const secret = await resolveCredential(target, deps);
@@ -332,7 +326,7 @@ export async function withMcpClient<T>(
       transport = buildTransport(target, deps, secret);
     } catch (err) {
       if (err instanceof McpTargetError) throw err;
-      throw new Error(scrub((err as Error).message, secrets));
+      throw new Error(scrubText((err as Error).message, secrets));
     }
     await client.connect(transport, { timeout });
     return client;
@@ -345,13 +339,13 @@ export async function withMcpClient<T>(
       client = await pool.acquire(key, connect);
     } catch (err) {
       if (err instanceof McpTargetError) throw err;
-      throw new Error(scrub((err as Error).message ?? String(err), secrets));
+      throw new Error(scrubText((err as Error).message ?? String(err), secrets));
     }
     try {
-      return await fn(client);
+      return await fn(client, secrets);
     } catch (err) {
       await pool.evict(key, client);
-      throw new Error(scrub((err as Error).message ?? String(err), secrets));
+      throw new Error(scrubText((err as Error).message ?? String(err), secrets));
     }
   }
   // An answer cut at its cap inside an event stream reaches the SDK's onerror, not the call waiting on it,
@@ -371,21 +365,21 @@ export async function withMcpClient<T>(
   let client: Client | null = null;
   try {
     client = await Promise.race([connect(watch), tooBig]);
-    return await Promise.race([fn(client), tooBig]);
+    return await Promise.race([fn(client, secrets), tooBig]);
   } catch (err) {
     if (err instanceof McpTargetError) throw err;
-    throw new Error(scrub((err as Error).message ?? String(err), secrets));
+    throw new Error(scrubText((err as Error).message ?? String(err), secrets));
   } finally {
     await client?.close().catch(() => {});
   }
 }
 
-/** tools/list, with the annotations a server sends. */
 function durationPhrase(ms: number): string {
   const [n, unit] = ms >= 60_000 && ms % 60_000 === 0 ? [ms / 60_000, "minute"] : [ms / 1000, "second"];
   return `${n} ${unit}${n === 1 ? "" : "s"}`;
 }
 
+/** tools/list, with the annotations a server sends. */
 export async function discoverTools(target: McpTarget, deps: McpClientDeps = {}): Promise<DiscoveredTool[]> {
   const most = deps.discoverMaxMs ?? MCP_DISCOVER_MAX_MS;
   const until = Date.now() + most;
@@ -433,7 +427,7 @@ export async function callMcpTool(
   args: Record<string, unknown>,
 ): Promise<McpCallOutcome> {
   try {
-    return await withMcpClient(target, deps, async (client) => {
+    return await withMcpClient(target, deps, async (client, secrets) => {
       const res = (await client.callTool({ name, arguments: args }, undefined, {
         timeout: deps.timeoutMs ?? MCP_CALL_TIMEOUT_MS,
       })) as {
@@ -441,13 +435,20 @@ export async function callMcpTool(
         structuredContent?: unknown;
         isError?: boolean;
       };
-      const text = (res.content ?? [])
-        .filter((c) => c.type === "text" && typeof c.text === "string")
-        .map((c) => c.text as string)
-        .join("\n")
-        .slice(0, MCP_RESULT_MAX_CHARS);
+      // What the server says, an error included, never repeats the credential: scrubbed whole, then cut.
+      const text = scrubText(
+        (res.content ?? [])
+          .filter((c) => c.type === "text" && typeof c.text === "string")
+          .map((c) => c.text as string)
+          .join("\n"),
+        secrets,
+      ).slice(0, MCP_RESULT_MAX_CHARS);
       if (res.isError) return { ok: false, error: text || `${name} returned an error` };
-      return { ok: true, result: res.structuredContent ?? parseMaybeJson(text) };
+      return {
+        ok: true,
+        result:
+          res.structuredContent != null ? scrubValue(res.structuredContent, secrets) : parseMaybeJson(text),
+      };
     });
   } catch (err) {
     return { ok: false, error: (err as Error).message.slice(0, 2000) };

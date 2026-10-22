@@ -18,6 +18,7 @@ import {
   discoverAuthorizationServer,
   resourceAllowed,
   discoverResource,
+  IssuerUnusable,
   OAuthError,
   refreshTokens,
   registerClient,
@@ -294,6 +295,48 @@ describe("a company's MCP server over HTTP", () => {
     expect(await store.get(secretName)).toEqual({ issuer: "https://auth.new.test" });
   });
 
+  it("takes the credential out of what an MCP server says back, its errors included, however JSON escapes it", async () => {
+    // The recorded error answer, its words replaced by an echo of the bearer as a proxied API's log writes it:
+    // JSON in a string, PHP's \/ and .NET's +.
+    const recorded = JSON.parse(
+      readFileSync(
+        path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "mcp", "tools-call-error.json"),
+        "utf8",
+      ),
+    ) as { result: Record<string, unknown> };
+    const echoed = 'upstream refused {"authorization":"Bearer AbC\\u002BdEf\\u002BGhI\\/jKl="}';
+    const clean = 'upstream refused {"authorization":"Bearer [redacted]"}';
+    const echoing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as { id?: number; method?: string; params?: { name?: string } })
+        : null;
+      if (body?.method !== "tools/call") return transport(input, init);
+      const json = (status: number, payload: unknown) =>
+        new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
+      // A server error whose body the SDK repeats in its own words.
+      if (body.params?.name === "broken") return json(500, { error: echoed });
+      const result = {
+        ...recorded.result,
+        content: [{ type: "text", text: echoed }],
+        isError: body.params?.name === "failing",
+      };
+      return json(200, { ...recorded, id: body.id, result });
+    }) as typeof fetch;
+    const call = (tool: string) =>
+      callMcpTool(
+        { transport: "http", url: "https://mcp.echo.test/mcp", authEnvName: "ECHO_TOKEN" },
+        { egress: testEgress(echoing, { resolve }), env: { ECHO_TOKEN: "AbC+dEf+GhI/jKl=" } },
+        tool,
+        {},
+      );
+    expect(await call("failing")).toEqual({ ok: false, error: clean });
+    expect(await call("answering")).toEqual({ ok: true, result: clean });
+    const broken = await call("broken");
+    expect(broken.ok).toBe(false);
+    expect(JSON.stringify(broken)).toContain("[redacted]");
+    expect(JSON.stringify(broken)).not.toMatch(/AbC|dEf|GhI/);
+  });
+
   it("reaches what the operator lists, a name or a range, and nothing beside it; a tool call is held to the same", async () => {
     const { api, base, companyId } = await seedCompany(board, "egress-allow@example.com");
     const add = async (name: string, url: string) =>
@@ -534,6 +577,17 @@ describe("OAuth for a company's connection", () => {
     ).rejects.toThrow(
       "the authorization server's address is plain http to a server this board's operator does not list",
     );
+    // Refused, but not unusable: a name that does not resolve now may later, so Authorise moves nothing.
+    names["keycloak.ranged.test"] = [];
+    const unresolved = await discoverAuthorizationServer(
+      "http://keycloak.ranged.test",
+      deps("10.40.0.0/16"),
+    ).catch((err: unknown) => err);
+    expect(unresolved).toBeInstanceOf(OAuthError);
+    expect(unresolved).not.toBeInstanceOf(IssuerUnusable);
+    expect((unresolved as Error).message).toBe(
+      "the authorization server's address is plain http to a name that does not resolve",
+    );
     delete names["keycloak.ranged.test"];
     // An issuer or a token endpoint a row kept from before these checks is held to them before anything goes there.
     await expect(discoverAuthorizationServer("javascript:alert(1)", deps())).rejects.toThrow(
@@ -623,7 +677,7 @@ describe("OAuth for a company's connection", () => {
 
   it("moves a connection to another issuer only when its own is refused or publishes nothing, the row first, never a person's client", async () => {
     resetOAuthCaches();
-    const { api, base, companyId } = await seedCompany(board, "egress-oauth-moved@example.com");
+    const { owner, api, base, companyId } = await seedCompany(board, "egress-oauth-moved@example.com");
     const created = await api.post(`${base}/connections`, {
       name: "moved",
       url: "https://mcp.reauth.test/mcp",
@@ -694,16 +748,30 @@ describe("OAuth for a company's connection", () => {
       ),
     ).toBe(true);
     // The next Authorise registers there and goes on.
-    expect((await start()).status).toBe(200);
+    const begun = await start();
+    expect(begun.status).toBe(200);
     expect(await row()).toMatchObject({ authorizationServer: "https://auth.reauth.test", registered: true });
     expect((await row()).clientId).not.toBeNull();
     expect((await store.get(name))?.issuer).toBe("https://auth.reauth.test");
+    // Begun there and finished after the connection moved on: the code and its verifier stay where they began.
+    await board.db.query(
+      "UPDATE connections SET oauth = oauth || $3::jsonb WHERE id = $1 AND company_id = $2",
+      [created.body.id, companyId, JSON.stringify({ authorizationServer: "https://auth.elsewhere.test" })],
+    );
+    sent.length = 0;
+    const late = await board.app.inject({
+      method: "GET",
+      url: `/api/oauth/callback?code=c-1&state=${new URL(begun.body.url).searchParams.get("state")}`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(late.headers.location).toBe("http://rosterdock.test/?oauth_error=state");
+    expect(sent).toEqual([]);
     // A client a person gave was registered at the issuer it was given for: neither it nor its secret moves.
     await kept({ authorizationServer: refused, registered: false });
     const given = await start();
     expect(given.status).toBe(409);
     expect(given.body.error).toBe(
-      "moved's server now names auth.reauth.test as its authorization server; give the connection a client id registered there",
+      "moved's server now names auth.reauth.test as its authorization server, and the client id it was given is for another; remove the connection and add it again with a client id registered at auth.reauth.test",
     );
     expect(await row()).toMatchObject({ authorizationServer: refused, clientId: "old-client" });
     expect(await store.get(name)).toEqual(old);

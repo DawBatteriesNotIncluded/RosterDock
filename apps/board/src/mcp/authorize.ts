@@ -155,7 +155,7 @@ export async function startAuthorization(
     if (issuerChanged && meta.clientId && !meta.registered)
       throw new HttpError(
         409,
-        `${row.name}'s server now names ${new URL(as.issuer).host} as its authorization server; give the connection a client id registered there`,
+        `${row.name}'s server now names ${new URL(as.issuer).host} as its authorization server, and the client id it was given is for another; remove the connection and add it again with a client id registered at ${new URL(as.issuer).host}`,
       );
     const name = connectionSecretName(row.id);
     let clientId = meta.clientId;
@@ -213,8 +213,8 @@ export async function startAuthorization(
     const verifier = randomToken(48);
     await db.query("DELETE FROM oauth_starts WHERE expires_at < now()");
     await db.query(
-      `INSERT INTO oauth_starts (state, company_id, connection_id, user_id, code_verifier, redirect_uri, return_to, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now() + ($8 || ' seconds')::interval)`,
+      `INSERT INTO oauth_starts (state, company_id, connection_id, user_id, code_verifier, redirect_uri, return_to, expires_at, issuer)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now() + ($8 || ' seconds')::interval, $9)`,
       [
         state,
         row.company_id,
@@ -224,6 +224,7 @@ export async function startAuthorization(
         input.redirectUri,
         input.returnTo,
         String(START_TTL_SECONDS),
+        as.issuer,
       ],
     );
     return {
@@ -249,6 +250,8 @@ interface StartRow {
   code_verifier: string;
   redirect_uri: string;
   return_to: string;
+  /** The authorization server it was started at; null for an attempt from before the column. */
+  issuer: string | null;
 }
 
 /** The callback: the code becomes tokens in the store, and the row says when it was authorised. */
@@ -280,6 +283,15 @@ export async function finishAuthorization(
   const row = await loadConnection(db, pending.company_id, pending.connection_id).catch(() => null);
   if (!row?.oauth?.tokenEndpoint || !row.oauth.clientId || !row.url)
     throw new OAuthError("state", "the connection changed while it was being authorised");
+  // Started at one authorization server and the connection moved to another since: the code is the first's.
+  if (
+    pending.issuer !== null &&
+    trimTrailingSlashes(pending.issuer) !== trimTrailingSlashes(row.oauth.authorizationServer ?? "")
+  )
+    throw new OAuthError(
+      "state",
+      "the connection moved to another authorization server while it was being authorised",
+    );
   const name = connectionSecretName(row.id);
   // Only the row's issuer's client secret goes to the row's token endpoint.
   const existing = entryFor(await deps.store.get(name), row.oauth.authorizationServer);

@@ -157,7 +157,7 @@ describe("the OpenAPI runtime", () => {
     const cut = await call(`${head}${secret}","more":"${"x".repeat(200)}"}`, head.length + 9);
     expect(cut).toMatchObject({ ok: true, result: { truncated: true } });
     const text = (cut as { result: { text: string } }).result.text;
-    expect(text.length).toBe(head.length + 9 - 256);
+    expect(text.length).toBe(head.length + 9 - 16 * secret.length);
     expect(text).not.toContain(secret.slice(0, 4));
     // A teammate that pads its guess at the credential to the cut learns nothing: right or wrong, the same text.
     const guess = (g: string) =>
@@ -177,27 +177,61 @@ describe("the OpenAPI runtime", () => {
     expect(keyed).toEqual({ ok: true, result: { "[redacted]": 2 } });
   });
 
-  it("scrubs the credential from JSON an answer carries as a string, and never repeats a reason phrase", async () => {
+  it("scrubs the credential however deep JSON in an answer escapes it, cut, line by line or after a BOM", async () => {
     const manifest = buildOpenApiManifest(spec, { allow: ["listContacts"] }).manifest!;
     const secret = "AbC+dEf+GhI/jKl=";
-    // A request log whose headers are JSON written by PHP (\/) and .NET (\u002B), kept as a string: in the
-    // answer the credential is escaped twice.
-    const headers = `{"authorization":"Bearer ${secret.replace(/\+/g, "\\u002B").replace(/\//g, "\\/")}"}`;
+    const call = (body: string, maxResponseBytes = 4096) => {
+      const answering = (async () =>
+        new Response(body, { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+      return callOpenApiOperation(
+        { url: "https://crm.example.test/v1", authEnvName: "CRM_API_TOKEN" },
+        { ...manifest, maxResponseBytes },
+        { egress: testEgress(answering), env: { CRM_API_TOKEN: secret } },
+        "list_contacts",
+        {},
+      );
+    };
+    // A request log whose headers are JSON written by PHP (\/) and .NET (+), kept as a string: in the
+    // answer the credential is escaped twice. Written out as the service sends it.
+    const headers = '{"authorization":"Bearer AbC\\u002BdEf\\u002BGhI\\/jKl="}';
+    const clean = '{"authorization":"Bearer [redacted]"}';
     const body = JSON.stringify({ log: [{ path: "/v1/contacts", headers }] });
     expect(body).not.toContain(secret);
-    const answering = (async () =>
-      new Response(body, { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
-    const logged = await callOpenApiOperation(
-      { url: "https://crm.example.test/v1", authEnvName: "CRM_API_TOKEN" },
-      manifest,
-      { egress: testEgress(answering), env: { CRM_API_TOKEN: secret } },
-      "list_contacts",
-      {},
-    );
-    expect(logged).toEqual({
+    expect(await call(body)).toEqual({
       ok: true,
-      result: { log: [{ path: "/v1/contacts", headers: '{"authorization":"Bearer [redacted]"}' }] },
+      result: { log: [{ path: "/v1/contacts", headers: clean }] },
     });
+    // After a byte order mark, still JSON.
+    expect(await call(`﻿${body}`)).toEqual({
+      ok: true,
+      result: { log: [{ path: "/v1/contacts", headers: clean }] },
+    });
+    // Escaped three times: a log entry whose body carries the headers string.
+    const thrice = JSON.stringify({ log: [{ body: JSON.stringify({ headers }) }] });
+    expect(await call(thrice)).toEqual({
+      ok: true,
+      result: { log: [{ body: JSON.stringify({ headers: clean }) }] },
+    });
+    // A long log cut at its cap: never parsed, and still nothing of the credential.
+    const long = JSON.stringify({
+      log: Array.from({ length: 40 }, (_, i) => ({ path: `/v1/contacts/${i}`, headers })),
+    });
+    const cut = await call(long, 2000);
+    expect(cut).toMatchObject({ ok: true, result: { truncated: true } });
+    const cutText = (cut as { result: { text: string } }).result.text;
+    expect(cutText).toContain("[redacted]");
+    expect(cutText).not.toMatch(/AbC|dEf|GhI|jKl/);
+    // Newline-delimited JSON: each line cleaned, a secret-looking key too, and written back as lines.
+    const ndjson = `${JSON.stringify({ path: "/a", headers })}\n${JSON.stringify({ path: "/b", token: "t-1" })}\n`;
+    expect(await call(ndjson)).toEqual({
+      ok: true,
+      result: `${JSON.stringify({ path: "/a", headers: clean })}\n${JSON.stringify({ path: "/b", token: "[redacted]" })}\n`,
+    });
+  });
+
+  it("never repeats a reason phrase", async () => {
+    const manifest = buildOpenApiManifest(spec, { allow: ["listContacts"] }).manifest!;
+    const secret = "AbC+dEf+GhI/jKl=";
     // A refusal whose reason phrase echoes the credential, from a real server: the status alone comes back.
     const server = http.createServer((_req, res) => {
       res.writeHead(401, `Invalid token ${secret}`);
@@ -253,6 +287,11 @@ describe("the OpenAPI runtime", () => {
     const backslashes = await call(`{"v":"${"\\\\".repeat(120_000)}"}`, `${"\\".repeat(24)}tail00`);
     expect(backslashes.outcome.ok).toBe(true);
     expect(backslashes.ms).toBeLessThan(250);
+    // A long credential of one character over and over but one, in a megabyte of that character: indexOf
+    // took 730 ms for it, comparing the credential afresh at every place; this search is one pass.
+    const nearly = await call(`{"v":"${"a".repeat(1_000_000)}"}`, `${"a".repeat(2048)}b${"a".repeat(2047)}`);
+    expect(nearly.outcome.ok).toBe(true);
+    expect(nearly.ms).toBeLessThan(250);
     // And the scan finds what the pattern found: escaped or not, wherever it starts.
     const mixed = await call(
       `{"a":"x${"\\u0041bC+dEf+GhI\\/jKl="}y","b":"AbC\\u002bdEf+GhI/jKl="}`,

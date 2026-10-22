@@ -21,6 +21,9 @@ export const OAUTH_TIMEOUT_MS = 15_000;
 /** The most of a metadata document or a token answer the board reads, decoded. */
 export const OAUTH_MAX_BYTES = 256 * 1024;
 
+/** Plain http to a name that did not resolve: refused for now, but perhaps only for now (a lookup that failed). */
+export const UNRESOLVED = "is plain http to a name that does not resolve";
+
 /**
  * Why a URL the metadata names is not one the board calls or sends a person's browser to, or null: https, or
  * plain http to a destination the operator lists (a server on this machine in development). Anything else,
@@ -43,7 +46,8 @@ export async function endpointRefusal(
   if (hostListed(host, egress.allow)) return null;
   if (!isAddress(host)) {
     const addresses = await egress.resolve(host).catch(() => [] as string[]);
-    if (addresses.length && addresses.every((a) => addressListed(a, egress.allow))) return null;
+    if (!addresses.length) return UNRESOLVED;
+    if (addresses.every((a) => addressListed(a, egress.allow))) return null;
   }
   return "is plain http to a server this board's operator does not list";
 }
@@ -230,7 +234,10 @@ export async function discoverAuthorizationServer(
   const key = trimTrailingSlashes(issuer);
   // An issuer kept from before these checks is held to them too.
   const issuerRefused = await endpointRefusal(key, deps.egress);
-  if (issuerRefused) throw new IssuerUnusable(`the authorization server's address ${issuerRefused}`);
+  // A name that did not resolve may resolve later: not a reason to move the connection on.
+  const refusal = (why: string, message: string) =>
+    why === UNRESOLVED ? new OAuthError("server", message) : new IssuerUnusable(message);
+  if (issuerRefused) throw refusal(issuerRefused, `the authorization server's address ${issuerRefused}`);
   const now = deps.now?.() ?? Date.now();
   // Kept per list of private destinations, as well as per issuer: a document read for one company, through
   // what the operator gave it alone, is never handed to a company that may not reach that server.
@@ -281,7 +288,7 @@ export async function discoverAuthorizationServer(
       ["registration_endpoint", "a registration endpoint"],
     ] as const) {
       const why = doc[field] === undefined ? null : await endpointRefusal(doc[field], deps.egress);
-      if (why) throw new IssuerUnusable(`${new URL(key).host} names ${label} that ${why}`);
+      if (why) throw refusal(why, `${new URL(key).host} names ${label} that ${why}`);
     }
     servers.set(slot, { at: now, doc });
     return doc;

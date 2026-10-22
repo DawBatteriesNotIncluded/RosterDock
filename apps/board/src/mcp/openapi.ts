@@ -20,6 +20,7 @@ import YAML from "yaml";
 import { notSetForCompany } from "../secrets/company.js";
 import { defaultEgress, egressFetch, readCapped, type Egress } from "../web/egress.js";
 import type { McpCallOutcome } from "./client.js";
+import { scrubCut, scrubText, scrubValue } from "./scrub.js";
 
 export type OpenApiManifest = OpenApiManifestInput;
 export type OpenApiOperation = OpenApiOperationInput;
@@ -240,110 +241,6 @@ function deepRedact(value: unknown, depth = 0): unknown {
   return value;
 }
 
-// What a JSON escape of one character reads as: the short escapes, a slash escaped as PHP writes it.
-const SHORT_ESCAPES: Record<string, string> = {
-  '"': '"',
-  "\\": "\\",
-  "/": "/",
-  b: "\b",
-  f: "\f",
-  n: "\n",
-  r: "\r",
-  t: "\t",
-};
-
-/** Where `needle` occurs in `hay`, as [start, end) pairs. */
-function occurrences(hay: string, needle: string): [number, number][] {
-  const out: [number, number][] = [];
-  for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + needle.length))
-    out.push([i, i + needle.length]);
-  return out;
-}
-
-/**
- * Where the credential is in a text, as [start, end) in the text: as it is, and as JSON may escape any of its
- * characters (\uXXXX in either case, a short escape), so an encoder that escapes `+` or `/` hides nothing.
- * One pass reads the escapes and keeps where each read character began and ended; then a plain search. Linear
- * in the text, whatever the credential holds: no pattern that can backtrack.
- */
-function secretSpans(text: string, secret: string): [number, number][] {
-  const spans = occurrences(text, secret);
-  if (!text.includes("\\")) return spans;
-  let read = "";
-  const starts: number[] = [];
-  const ends: number[] = [];
-  for (let i = 0; i < text.length;) {
-    let c = text[i]!;
-    let width = 1;
-    if (c === "\\" && i + 1 < text.length) {
-      const next = text[i + 1]!;
-      if (next === "u" && /^[\da-fA-F]{4}$/.test(text.slice(i + 2, i + 6))) {
-        c = String.fromCharCode(parseInt(text.slice(i + 2, i + 6), 16));
-        width = 6;
-      } else if (next in SHORT_ESCAPES) {
-        c = SHORT_ESCAPES[next]!;
-        width = 2;
-      }
-    }
-    read += c;
-    starts.push(i);
-    ends.push(i + width);
-    i += width;
-  }
-  for (const [s, e] of occurrences(read, secret)) spans.push([starts[s]!, ends[e - 1]!]);
-  return spans;
-}
-
-/** The credential out of a text, as it is or JSON-escaped; nothing for a credential shorter than 6. */
-function scrub(text: string, secret: string | null): string {
-  if (!secret || secret.length < 6) return text;
-  const spans = secretSpans(text, secret).sort((a, b) => a[0] - b[0]);
-  if (!spans.length) return text;
-  let out = "";
-  let at = 0;
-  for (const [s, e] of spans) {
-    if (e <= at) continue;
-    out += `${text.slice(at, Math.max(at, s))}[redacted]`;
-    at = Math.max(at, e);
-  }
-  return out + text.slice(at);
-}
-
-/** How much of a cut answer's end is dropped: room for the whole credential at its longest escaped, 256 at least. */
-function cutTail(secret: string | null): number {
-  return Math.max(256, secret ? secret.length * 6 : 0);
-}
-
-/**
- * Text cut at a cap: the credential scrubbed, and a fixed length of the end dropped whatever it holds, so a
- * credential the cut fell inside leaves nothing, and what a teammate reads never depends on how much of the
- * credential a guess of its matched.
- */
-function scrubCut(text: string, secret: string | null): string {
-  const whole = scrub(text, secret);
-  return whole.slice(0, Math.max(0, whole.length - cutTail(secret)));
-}
-
-/**
- * The credential out of every string in a parsed answer, keys and values. Parsing has read one level of
- * escapes; a string may carry JSON of its own (a request log, echoed headers), where the credential is escaped
- * still, so each string is scrubbed as text is, escapes read: linear in the string, as scrub is.
- */
-function deepScrub(value: unknown, secret: string | null, depth = 0): unknown {
-  if (!secret || secret.length < 6 || depth > 12) return value;
-  const plain = (s: string) => scrub(s, secret);
-  if (typeof value === "string") return plain(value);
-  if (Array.isArray(value)) return value.map((v) => deepScrub(v, secret, depth + 1));
-  if (value && typeof value === "object")
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
-        plain(k),
-        deepScrub(v, secret, depth + 1),
-      ]),
-    );
-  return value;
-}
-
 function buildUrl(
   base: string,
   op: OpenApiOperation,
@@ -412,7 +309,7 @@ export async function probeOpenApi(
     return {
       ok: false,
       status: null,
-      error: `could not reach the service: ${scrub((err as Error).message, secret).slice(0, 200)}`,
+      error: `could not reach the service: ${scrubText((err as Error).message, [secret]).slice(0, 200)}`,
     };
   }
 }
@@ -473,7 +370,7 @@ export async function callOpenApiOperation(
   } catch (err) {
     return {
       ok: false,
-      error: `${name} could not reach the service: ${scrub((err as Error).message, secret).slice(0, 200)}`,
+      error: `${name} could not reach the service: ${scrubText((err as Error).message, [secret]).slice(0, 200)}`,
     };
   }
   if (!response.ok) {
@@ -488,19 +385,39 @@ export async function callOpenApiOperation(
   } catch (err) {
     return {
       ok: false,
-      error: `${name} could not be read: ${scrub((err as Error).message, secret).slice(0, 200)}`,
+      error: `${name} could not be read: ${scrubText((err as Error).message, [secret]).slice(0, 200)}`,
     };
   }
   const truncated = read.cut;
-  const raw = Buffer.from(read.bytes).toString("utf8");
-  const text = truncated ? scrubCut(raw, secret) : scrub(raw, secret);
-  let result: unknown = text;
-  if (!truncated) {
-    try {
-      result = deepScrub(deepRedact(JSON.parse(text)), secret);
-    } catch {
-      // A non-JSON answer stays as capped, scrubbed text.
-    }
-  }
+  // A byte order mark is no part of the answer, and JSON.parse refuses one.
+  const raw = Buffer.from(read.bytes)
+    .toString("utf8")
+    .replace(/^\uFEFF/, "");
+  const text = truncated ? scrubCut(raw, [secret]) : scrubText(raw, [secret]);
+  const result = truncated ? null : readAnswer(text, secret);
   return { ok: true, result: truncated ? { truncated: true, text } : result };
+}
+
+/** A parsed value with secret-looking keys redacted and the credential out of every string. */
+function cleaned(value: unknown, secret: string | null): unknown {
+  return scrubValue(deepRedact(value), [secret]);
+}
+
+/**
+ * A whole answer as the teammate reads it: JSON parsed and cleaned; newline-delimited JSON (a log, an export)
+ * cleaned line by line and written back as lines; anything else the scrubbed text.
+ */
+function readAnswer(text: string, secret: string | null): unknown {
+  try {
+    return cleaned(JSON.parse(text), secret);
+  } catch {
+    // not one JSON value
+  }
+  const lines = text.split("\n");
+  if (lines.filter((l) => l.trim()).length < 2) return text;
+  try {
+    return lines.map((l) => (l.trim() ? JSON.stringify(cleaned(JSON.parse(l), secret)) : l)).join("\n");
+  } catch {
+    return text;
+  }
 }

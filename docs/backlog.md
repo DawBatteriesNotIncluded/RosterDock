@@ -39,3 +39,7 @@ scheduled; delete it when it ships.
   the issuer the board asked (`discoverAuthorizationServer` in `apps/board/src/mcp/oauth.ts` keeps the one
   asked); RFC 8414 §3.3 says not to use it. Refuse a mismatch, once it is known which servers in use publish
   one (an OpenID document read for an issuer with a path is the usual case).
+- A connection's OAuth client id, and its secret's name, change only through the API (`PATCH
+/api/companies/:companyId/connections/:connectionId` with `oauth`): the card has no field for them. When an
+  MCP server moves to another authorization server, a connection with a client id a person gave is removed
+  and added again, losing the tool classifications and switches a person set. Add the fields to the card.
