@@ -170,9 +170,31 @@ describe("runRepoTests", () => {
       env: { PATH: process.env.PATH ?? "" },
       timeoutMs: 10_000,
     });
-    expect(res.code).toBe(0);
+    expect(res.code, res.output.slice(-2000)).toBe(0);
     expect(res.output.includes("\ufffd")).toBe(false);
     expect(res.output.endsWith("— ✅ 😀 ")).toBe(true);
+  });
+
+  it("gives a command the environment it was given, and nothing the job's PowerShell adds on Windows", async () => {
+    await writeFile(
+      path.join(root, "env.js"),
+      [
+        "const { PATHEXT, PSModulePath, GIVEN } = process.env;",
+        "process.stdout.write(JSON.stringify({ PATHEXT: PATHEXT ?? null, PSModulePath: PSModulePath ?? null, GIVEN }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const res = await execCommand("node", ["env.js"], {
+      cwd: root,
+      env: { PATH: process.env.PATH ?? "", GIVEN: "yes" },
+      timeoutMs: 10_000,
+    });
+    expect(res.code, res.output).toBe(0);
+    const seen = JSON.parse(res.output) as Record<string, string | null>;
+    expect(seen).toMatchObject({ PSModulePath: null, GIVEN: "yes" });
+    // cmd.exe sets its own PATHEXT where it is given none; PowerShell's .CPL is not in it.
+    expect(seen.PATHEXT ?? "").not.toMatch(/\.CPL/i);
   });
 
   it("ends a command past its time limit, with what a Windows shim started under it", async () => {

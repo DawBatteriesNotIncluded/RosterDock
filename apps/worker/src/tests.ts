@@ -76,7 +76,7 @@ export const execCommand: Exec = (command, args, opts) =>
     const env = { ...opts.env, CI: "1" };
     const job = win ? inJob(command, args, env) : null;
     const child = job
-      ? spawn(job.file, job.args, { cwd: opts.cwd, env: job.env, windowsHide: true })
+      ? spawn(job.file, job.args, { cwd: opts.cwd, env, windowsHide: true })
       : spawn(command, args, {
           cwd: opts.cwd,
           env,
