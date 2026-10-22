@@ -182,7 +182,7 @@ export async function prepareWorkspace(
   signal?: AbortSignal,
 ): Promise<Workspace> {
   const dir = path.join(workRoot, runId);
-  // A git just stopped in it holds the directory a moment on Windows (EBUSY).
+  // A git just stopped in it holds its files a moment on Windows (EBUSY).
   await removeTree(dir);
   await mkdir(dir, { recursive: true });
   if (!project.repoUrl) return { dir, repo: false };
@@ -260,9 +260,9 @@ const BUSY = new Set(["EBUSY", "EPERM", "ENOTEMPTY", "EMFILE", "ENFILE"]);
 
 /**
  * Remove a directory and everything in it, trying again while something in it is busy, for `withinMs` at
- * most in all; then throw what the last try threw. Windows removes no file or directory a process still
- * holds. Node's own maxRetries retries at every level of the tree, so one file that stays locked held a
- * removal for minutes. `remove` is for the worker's own tests.
+ * most in all; then throw what the last try threw. Windows removes no file a process still holds, such as a
+ * program running from it. Node's own maxRetries retries at every level of the tree, so one file that stays
+ * held kept a removal going for minutes. `remove` is for the worker's own tests.
  */
 export async function removeTree(dir: string, withinMs = 2000, remove: typeof rm = rm): Promise<void> {
   const until = Date.now() + withinMs;
@@ -332,8 +332,8 @@ export function sameFile(
 
 /**
  * A directory's device, by a handle on it. On Windows the harvest compares devices this way: with libuv 1.49
- * and 1.50 (Node 22.12 to 22.16) on Windows 11 24H2 and later, a stat by path reads the device from the
- * wrong field (0 on NTFS), and a stat by handle is right on every version.
+ * and 1.50 (Node 22.12 to 22.16), where Windows has GetFileInformationByName (11 24H2, Server 2025), a stat
+ * by path reads the device from the wrong field (0 on NTFS), and a stat by handle is right on every version.
  */
 async function deviceOf(dir: string): Promise<bigint> {
   const handle = await open(dir, constants.O_RDONLY);

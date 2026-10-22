@@ -56,14 +56,14 @@ jobs:
   windows:
     # The worker on native Windows, where git, links and file identity differ from the Linux image: the
     # worker's and the shared package's tests, and how the board starts Peter's CLIs. The rest of the board
-    # needs Postgres and is tested in the job above. On the oldest Node the engines field takes and the newest 22.
+    # needs Postgres and is tested in the job above. On Node 22.16, the last with libuv 1.49, and the newest 22.
     name: worker tests on Windows (node ${{ matrix.node }})
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        node: ["22.12", "22"]
+        node: ["22.16", "22"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
