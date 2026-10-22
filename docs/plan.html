@@ -45,7 +45,7 @@
   <h1>RosterDock</h1>
   <p class="lede">RosterDock is an AI company platform. This is what we are building, why the current repo is not the base, how the new system is shaped, and the milestones that take it from an empty repository to a Helm chart a customer can install.</p>
   <div class="toc">
-    <a href="#what">What we are building</a><a href="#story">A day in the product</a><a href="#nouns">Core concepts</a><a href="#peter">Peter</a><a href="#borrowed">Borrowed ideas</a><a href="#rules">Rules that never soften</a><a href="#arch">Architecture</a><a href="#data">Data model</a><a href="#salvage">Salvage and drop</a><a href="#milestones">Milestones</a><a href="#decisions">Decisions needed</a><a href="#risks">Risks</a><a href="#start">First week</a>
+    <a href="#what">What we are building</a><a href="#story">A day in the product</a><a href="#nouns">Core concepts</a><a href="#peter">Peter</a><a href="#borrowed">Borrowed ideas</a><a href="#rules">Rules that never soften</a><a href="#arch">Architecture</a><a href="#data">Data model</a><a href="#salvage">Salvage and drop</a><a href="#milestones">Milestones</a><a href="#providers">Model providers</a><a href="#decisions">Decisions needed</a><a href="#risks">Risks</a><a href="#start">First week</a>
   </div>
 </header>
 
@@ -83,6 +83,7 @@
   <tr><td>Message</td><td>A conversation entry on a task. Mentions route to the named teammate's next turn.</td><td>Task</td></tr>
   <tr><td>Review</td><td>A diff plus hunk-anchored comment threads, reviewer decisions, checks. Approval marks the task done and opens a PR.</td><td>Task</td></tr>
   <tr><td>Approval</td><td>A proposed external write bound to a sha256 of the exact payload. Approved bytes are executed bytes. Queues are per company: a person with roles in several companies sees each company's queue, notifications and Needs-you count separately.</td><td>Task</td></tr>
+  <tr><td>Model provider</td><td>A company's own model account: a kind (Anthropic, OpenAI, Azure OpenAI, Amazon Bedrock or an OpenAI-compatible server), an endpoint or region, credentials by name, and the models it serves with their prices. A teammate's brain is a provider and one of its models, or the board's own models.</td><td>Company</td></tr>
   <tr><td>Cost</td><td>Every run records tokens by model. A per-company price table turns tokens into money for API-billed models; seat-billed engines (a Claude Code or Codex subscription) are counted as seats. Rolled up by company, department, project, teammate and model against budgets.</td><td>Company</td></tr>
   <tr><td>Event</td><td>Everything above emits events. Activity, the office and the map are projections of the event stream.</td><td>Company</td></tr>
 </table></div>
@@ -160,6 +161,7 @@
   <tr><td><code>events</code></td><td>company_id, seq, type, actor, subject, payload; the canonical stream</td></tr>
   <tr><td><code>budgets</code></td><td>scope (company, department, project, teammate), tokens_limit, money_limit, used, window</td></tr>
   <tr><td><code>model_prices</code>, <code>run_usage</code></td><td>company_id, model, input_price, output_price, cache_price, or seat_price_month; run_id, model, input_tokens, output_tokens, cached_tokens, cost_minor_units</td></tr>
+  <tr><td><code>model_providers</code></td><td>company_id, name, kind, endpoint or region, credentials jsonb (a role to an env var name, never a value), models jsonb, enabled, last_check; <code>provider_id</code> on teammates, runs, run_usage, planning_usage and model_prices, NULL meaning the board's own models</td></tr>
 </table></div>
 
 <h2 id="salvage">Salvage and drop</h2>
@@ -268,6 +270,89 @@
     <li>Install guide, operator guide, security notes. A fresh cluster install in an afternoon.</li>
   </ul>
   <p class="small"><strong>Demo:</strong> install into a clean cluster from the chart and run the M4 demo there. <strong>Done when:</strong> someone who is not you does it from the docs.</p></div>
+
+<h2 id="providers">Company model providers</h2>
+<p class="muted small">After M6 · decided 2026-10-22</p>
+<p>Until now every teammate thinks with the operator's own model keys. A company can bring its own model account instead, and choose for each teammate which account it thinks with. The board's own models stay the default: nothing about an existing teammate changes until someone picks a provider for it, and nothing is migrated.</p>
+
+<h3>What a company gets</h3>
+<ul>
+  <li><strong>Providers.</strong> Settings, Models holds the company's named providers, of five kinds: Anthropic, OpenAI, Azure OpenAI, Amazon Bedrock, and an OpenAI-compatible server (vLLM, Ollama, LiteLLM and the like). Each has its endpoint or region, its credentials by secret name, and the models it serves with their prices. Check lists the models the key reaches, and costs nothing. Owners and admins manage providers. Everyone in the company sees them by name and setting, and no one ever sees a value.</li>
+  <li><strong>A key enters once.</strong> A person pastes it through the existing write-only door (<code>PUT /secrets/:name</code>), picks a secret the company already set, or uses a name the operator shares. The provider keeps the name only, and the page says when the value was set and by whom, never what it is.</li>
+  <li><strong>A brain per teammate.</strong> Every teammate, Peter and the department leads included, picks a provider, then one of its models. The engine follows from the model: Claude models run on Claude Code, OpenAI models on Codex, so a teammate cannot be given a pair that does not run. "This board's own models" keeps today's engine and model choices exactly, and Peter's settings keep today's choices under it.</li>
+  <li><strong>Costs by provider.</strong> A price belongs to a provider and a model. Without one the board uses the company's price for that model on the board's own models, then the Anthropic list price, and otherwise says "No price yet", never US$0.00. Costs gains a By provider table, both CSV exports gain a provider column, and the run panel names the provider. A company keeps one currency.</li>
+</ul>
+
+<h3>What the operator controls</h3>
+<ul>
+  <li><strong><code>ROSTERDOCK_MODEL_PROVIDERS</code></strong> (chart <code>board.modelProviders</code>) lists the kinds a company may add, and <code>board</code> in the same list lends the board's own models. Unset means all five kinds and <code>board</code>, so an upgraded board behaves as before and companies can bring keys at once. Without <code>board</code>, every teammate needs a provider, and Peter without one plans by role and says why. A board with an unknown entry does not start. Narrowing the list later deletes nothing; a provider of a kind no longer listed is refused, in manager words, when a teammate is saved, at dispatch, when Peter plans and at the gateway.</li>
+  <li><strong>Private endpoints</strong> (an Azure private endpoint, a vLLM or Ollama in the cluster) need an entry in <code>ROSTERDOCK_PRIVATE_DESTINATIONS</code>, for every company or for one, and board egress to their port. There is no second list.</li>
+  <li><strong>Workers</strong> need nothing new: a provider run talks only to the board. Upgrade the board first, then the workers, then give teammates a provider.</li>
+</ul>
+
+<h3>How a key stays on the board</h3>
+<ul>
+  <li>No company key reaches a worker pod, a claim, a run spec, a pack, an engine's environment, a workspace, Postgres, an event or a log. Only the board reads a value, when it makes the call, and keeps it in memory for at most a minute.</li>
+  <li>An engine reaches its company's provider through a <strong>model gateway</strong> on the board, scoped to its run: <code>/api/worker/runs/:runId/model/{anthropic|bedrock|openai}/…</code>. It signs in with the run token it already holds. On every request the board checks the token, that the run is still running, the path and the model, then puts the company's credential in place of the token and streams the provider's answer back through the address guard.</li>
+  <li>The gateway is pinned to the run's provider and model. It allows only the paths the recorded engines send, refuses a request that came through the public ingress (nginx adds <code>X-Forwarded-For</code>, and also answers 404 on these paths), and replaces the provider's 401 and 403 bodies with its own words.</li>
+  <li>The engine's environment loses every model and cloud credential name (<code>ANTHROPIC_*</code>, <code>OPENAI_*</code>, <code>CODEX_API_KEY</code>, <code>AWS_*</code>, <code>AZURE_*</code> and the like) and gets a fresh config directory for the run. The run token is kept from the run's own commands: Codex excludes <code>ROSTERDOCK_RUN_TOKEN</code> from its shell, and Claude Code runs with <code>CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1</code>.</li>
+  <li>A worker older than the board cannot run a provider run. The claim carries <code>features: ["model-gateway"]</code>; a claim without it fails the run with "This board's workers are older than the board", so a company's model id never runs on the fleet's keys.</li>
+  <li>Peter plans from the board through small HTTP adapters: the Anthropic SDK, the Responses API, Bedrock InvokeModel, and Chat Completions for a compatible server without Responses. No CLI ever runs on the board for a company provider.</li>
+</ul>
+
+<h3>Which engine runs which kind</h3>
+<div class="tablewrap"><table>
+  <tr><th>Kind</th><th>Claude Code (2.1.285)</th><th>Codex (0.144.5)</th><th>Peter plans with</th></tr>
+  <tr><td>Anthropic</td><td>yes</td><td>no</td><td>the Anthropic SDK</td></tr>
+  <tr><td>Amazon Bedrock, Claude models</td><td>yes</td><td>no</td><td>InvokeModel</td></tr>
+  <tr><td>Amazon Bedrock, OpenAI models (cross-Region ids such as <code>global.openai.*</code>)</td><td>no</td><td>yes</td><td>the Responses API</td></tr>
+  <tr><td>OpenAI</td><td>no</td><td>yes</td><td>the Responses API</td></tr>
+  <tr><td>Azure OpenAI (the model is the deployment name)</td><td>no</td><td>yes</td><td>the Responses API</td></tr>
+  <tr><td>OpenAI-compatible</td><td>no</td><td>only if it serves the Responses API</td><td>the Responses API, or Chat Completions</td></tr>
+  <tr><td>Amazon Bedrock, other models (Llama, Mistral)</td><td>no</td><td>no</td><td>not offered</td></tr>
+</table></div>
+
+<h3>What remains, and why we accept it</h3>
+<ul>
+  <li><strong>A stolen run token</strong> spends that company's quota on the run's provider and pinned model, on the allowed paths only, until the run ends. It never reveals the key. Code in a worker pod can read a live run's token; binding a token to the pod that claimed its run is in the backlog.</li>
+  <li><strong>Every worker pod holds the worker token and <code>DATABASE_URL</code>.</strong> With them, code could claim another company's queued run, or repoint a compatible provider's endpoint so the gateway sends the key to its own host. The other kinds' hosts are fixed or derived from the region, and checked again on every request. The endpoint seal and a worker database role limited to the queue close it, both in the backlog; until then, companies that must not reach each other use separate boards, as <code>docs/security.md</code> already says.</li>
+  <li><strong>The board holds every company's keys</strong>, as it holds connection secrets today, and prompts and answers pass through its memory. Neither is stored or logged.</li>
+</ul>
+
+<h3>Slices</h3>
+<p>Each slice is green on typecheck, lint, format and the offline tests (and helm lint when the chart changes), carries its doc lines, and is committed before the next starts. Every adapter replays answers recorded from the real service, never hand-written ones. The owner records them with their own accounts (Anthropic, OpenAI, Azure with one deployment, Bedrock in one region with Claude and OpenAI access, and a local Ollama), with recorder scripts that read the key from the recorder's own shell and scrub what they write. A slice whose recording is not made yet waits.</p>
+<div class="tablewrap"><table>
+  <tr><th>#</th><th>Slice</th><th>Done when</th></tr>
+  <tr><td>0</td><td>This section and the backlog lines.</td><td>The owner approves the section.</td></tr>
+  <tr><td>1</td><td>Provider rows: the table, the shared schemas, <code>model.manage</code> for owners and admins, <code>ROSTERDOCK_MODEL_PROVIDERS</code>, and the routes to list, add, change and remove a provider, each through the guard and with an event, the endpoint checked by the address guard.</td><td>The route, role, event and refusal tests pass, and nothing reads a provider at run time yet.</td></tr>
+  <tr><td>2</td><td>Settings, Models: the tab, a form per kind, pasting a key, the model list, archive and remove.</td><td>Pasting sets the secret before the provider is saved, and no other field takes a value.</td></tr>
+  <tr><td>3</td><td>Prices and usage by provider, Costs by provider, and the CSV columns.</td><td>The price, budget and cost tests, old and new, pass.</td></tr>
+  <tr><td>4</td><td>Check, for every kind.</td><td>Each kind's recorded success and refused key replay, and a private address is refused.</td></tr>
+  <tr><td>5</td><td>Peter on a company Anthropic key, with the hand-written <code>fixtures/anthropic</code> recorded again.</td><td>Peter plans with a key from the company's secret store, and the board's own key is proven absent.</td></tr>
+  <tr><td>6</td><td>The gateway and the Anthropic protocol, the claim's features check, the nginx 404, and the security guide's "Company model keys".</td><td>The gateway and canary tests pass on a recorded Anthropic stream, and an old worker's claim fails closed.</td></tr>
+  <tr><td>7</td><td>Claude Code through the gateway, and the provider pickers for every teammate.</td><td>The worker's environment and argument tests pass, the recorded stream parses, and one local end-to-end run is noted.</td></tr>
+  <tr><td>8</td><td>Bedrock, Claude models, with a Bedrock API key.</td><td>The recorded event stream replays byte for byte, and every recorded request is on the allowed paths.</td></tr>
+  <tr><td>9</td><td>The Responses protocol and Codex: OpenAI, Azure OpenAI, compatible servers, and Bedrock's OpenAI models.</td><td>The recorded OpenAI and Azure streams replay byte for byte, tests pin Codex's settings, and a compatible server without the Responses API is refused for Codex.</td></tr>
+  <tr><td>10</td><td>Peter on every kind.</td><td>Each adapter replays its recorded plan, refusal and error, and the Chat Completions fallback is recorded on Ollama.</td></tr>
+  <tr><td>11</td><td>Bedrock with AWS access keys (Signature Version 4).</td><td>The signer matches AWS's published examples, and a recorded signed call replays.</td></tr>
+</table></div>
+
+<h3>Decided</h3>
+<div class="tablewrap"><table>
+  <tr><th>Question</th><th>Decision</th></tr>
+  <tr><td>The kinds when <code>ROSTERDOCK_MODEL_PROVIDERS</code> is unset</td><td>All five, and <code>board</code>.</td></tr>
+  <tr><td>Bedrock credentials</td><td>A Bedrock API key first, AWS access keys in slice 11, AssumeRole later. AWS calls long-term API keys exploration-only, so production companies need slice 11.</td></tr>
+  <tr><td>Recordings</td><td>The owner records them with their own accounts; a slice without its recording waits. <code>fixtures/anthropic</code> is recorded again in slice 5.</td></tr>
+  <tr><td>The run token in the run's own shell</td><td>Codex excludes only <code>ROSTERDOCK_RUN_TOKEN</code>. Claude Code runs with the subprocess scrub, which also hides credential-shaped department env names from Bash; the operator guide says so.</td></tr>
+  <tr><td>A seal on a provider's endpoint</td><td>A later slice, covering providers and connections together.</td></tr>
+  <tr><td>Private destinations for one company</td><td>Built with the address guard (<code>&lt;company id&gt;=&lt;entry&gt;</code>), not here.</td></tr>
+  <tr><td>What the gateway allows</td><td>The run's own model, not the provider's whole list.</td></tr>
+  <tr><td>Binding a run token to its pod</td><td>Later.</td></tr>
+  <tr><td>Codex on the worker</td><td>Stays 0.144.5. A bump records the worker's fixtures again in the same pull request.</td></tr>
+  <tr><td>The next kinds</td><td>Later, in this order: Claude on Microsoft Foundry, Vertex, Bedrock's Mantle endpoint.</td></tr>
+  <tr><td>Currencies</td><td>One per company; a second is refused.</td></tr>
+  <tr><td>Compatible servers without the Responses API</td><td>They serve Peter only, not Codex teammates, and the form says so.</td></tr>
+</table></div>
 
 <h2 id="decisions">Decisions needed before M0</h2>
 <div class="tablewrap"><table>
