@@ -6,7 +6,8 @@ import { PgBoss } from "pg-boss";
 import { RUN_QUEUE_SETTINGS } from "@rosterdock/shared";
 import { createBoardClient } from "./board-client.js";
 import { loadConfig } from "./config.js";
-import { createLog, logFormatFrom } from "./log.js";
+import { jobsWork, onJobAnswer } from "./kill.js";
+import { createLog, dropLinesWhenGone, logFormatFrom } from "./log.js";
 import { createClaudeCodeEngine } from "./engines/claude-code.js";
 import { createCodexEngine } from "./engines/codex.js";
 import { stubEngine } from "./engines/stub.js";
@@ -17,10 +18,23 @@ import { createResourceSampler } from "./resources.js";
 import { engineEnvironment, executeRun, RunInterrupted } from "./run.js";
 
 const config = loadConfig();
+for (const stream of [process.stdout, process.stderr]) dropLinesWhenGone(stream);
 const log = createLog(logFormatFrom(process.env, process.stdout.isTTY === true), {
   service: "rosterdock-worker",
   worker: config.workerId,
 });
+
+// Windows: whether the repository's tests run in a job object, asked now so no run's tests wait for it, and said.
+if (process.platform === "win32" && config.runRepoTests) {
+  onJobAnswer((answer) =>
+    answer.works
+      ? log.info("the repository's tests run in a job object: what they start ends with them")
+      : log.warn(
+          `the repository's tests run without a job object, under cmd.exe: ${answer.why}. What they leave running when they end by themselves carries on`,
+        ),
+  );
+  void jobsWork();
+}
 
 const engines: Record<string, EngineAdapter> = {
   stub: stubEngine,

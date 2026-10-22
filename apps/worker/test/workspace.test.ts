@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
+  chmod,
   copyFile,
   lstat,
   mkdir,
@@ -364,6 +365,93 @@ describe("workspace", () => {
     const h = await harvestWorkspace(ws, []);
     expect(h.artifacts.find((a) => a.kind === "diff")?.content).toContain("+changed");
     expect(existsSync(marker)).toBe(false);
+    await cleanupWorkspace(ws);
+  });
+
+  it("says git could not read the changes back, and sends no part of them, when it cannot stage them", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-index-lock",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    // What a git ended part-way leaves behind.
+    await writeFile(path.join(ws.dir, ".git", "index.lock"), "", "utf8");
+    const h = await harvestWorkspace(ws, []);
+    // git's own reason, its first error line, not its advice; and none of the worker's folders in it.
+    expect(h.unreadable).toMatch(
+      /^the run's changes could not be read back for review \(git: (?:error|fatal): .+\)$/,
+    );
+    expect(h.unreadable).toContain("./.git/index.lock");
+    for (const at of [ws.dir, await realpath(ws.dir), root]) {
+      expect(h.unreadable).not.toContain(at);
+      expect(h.unreadable).not.toContain(at.replace(/\\/g, "/"));
+    }
+    expect(h.artifacts.find((a) => a.kind === "diff")).toBeUndefined();
+    await cleanupWorkspace(ws);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "says git could not read the changes back where it could not open a folder the run made",
+    async () => {
+      const ws = await prepareWorkspace(
+        path.join(root, "work"),
+        "run-closed-folder",
+        { repoUrl: bare, defaultBranch: "main" },
+        null,
+      );
+      await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+      await mkdir(path.join(ws.dir, "closed"));
+      await writeFile(path.join(ws.dir, "closed", "part.md"), "part of the change\n", "utf8");
+      await chmod(path.join(ws.dir, "closed"), 0o000);
+      try {
+        const h = await harvestWorkspace(ws, []);
+        // git passes over it with a warning and adds the rest: no review of the rest alone.
+        expect(h.unreadable).toMatch(/\(git: warning: could not open directory 'closed\/'/);
+        expect(h.artifacts.find((a) => a.kind === "diff")).toBeUndefined();
+      } finally {
+        await chmod(path.join(ws.dir, "closed"), 0o755);
+      }
+      await cleanupWorkspace(ws);
+    },
+  );
+
+  it("names each file in the review's diff as it is: past ASCII, with a quote or a tab, a trailing space", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-quoted-names",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    // Windows allows neither a quote, a tab nor a trailing space in a name.
+    const names = [
+      "résumé.md",
+      "はじめに.md",
+      ...(process.platform === "win32" ? [] : ['say "hi"\tnow.md', "README.md "]),
+    ];
+    for (const name of names) await writeFile(path.join(ws.dir, name), `${name}\n`, "utf8");
+    const h = await harvestWorkspace(ws, []);
+    const diff = h.artifacts.find((a) => a.kind === "diff")?.content ?? "";
+    const files = parseUnifiedDiff(diff);
+    expect(files.map((f) => f.path).sort()).toEqual([...names].sort());
+    // README.md beside "README.md " is left as it was: the review adds one file, it changes none.
+    expect(files.every((f) => f.status === "added")).toBe(true);
+    await cleanupWorkspace(ws);
+  });
+
+  it("delivers, with no outputs declared, a changed file by its name as it is and a moved one by its new name", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-names",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "my notes.md"), "notes\n", "utf8");
+    await writeFile(path.join(ws.dir, "naïve.md"), "café\n", "utf8");
+    await git(["mv", "README.md", "READ-ME.md"], ws.dir, { GIT_AUTHOR_NAME: "t" });
+    const h = await harvestWorkspace(ws, []);
+    expect([...h.filesWritten].sort()).toEqual(["READ-ME.md", "my notes.md", "naïve.md"]);
     await cleanupWorkspace(ws);
   });
 

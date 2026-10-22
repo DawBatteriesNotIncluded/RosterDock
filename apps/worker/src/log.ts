@@ -44,3 +44,14 @@ export function createLog(
     warn: (msg, fields) => out.stderr(formatLine(format, "warn", base, msg, fields, new Date())),
   };
 }
+
+/**
+ * A line the terminal is gone for is dropped: EIO once it hung up (a closed terminal tab), EPIPE once its reader
+ * closed. Unheard, the stream's error would end the worker in the middle of the stop that hangup started,
+ * before the SIGKILLs it still owes the repository's tests. Any other error is thrown, as it would be anyway.
+ */
+export function dropLinesWhenGone(stream: NodeJS.EventEmitter): void {
+  stream.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code !== "EIO" && err.code !== "EPIPE") throw err;
+  });
+}

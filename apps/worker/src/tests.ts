@@ -61,22 +61,60 @@ export function testEnvironment(env: Record<string, string | undefined>): Record
   return { ...out, CI: "1" };
 }
 
+/** The SIGKILLs still due to groups in their grace; the worker sends them at once when it exits before them. */
+const due = new Set<() => void>();
+let killDueOnExit = false;
+
+/** Send every SIGKILL still due to a test group now: the worker is going, and its timers with it. */
+export function killDue(): void {
+  for (const kill of due) kill();
+  due.clear();
+}
+
+/** What a wait for `ready` came to within the step: its value, or the step's time limit or Stop first. */
+async function withinStep<T>(
+  ready: Promise<T>,
+  ms: number,
+  signal: AbortSignal | undefined,
+): Promise<{ value: T } | "late" | "stopped"> {
+  let timer: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      ready.then((value) => ({ value })),
+      new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), ms))),
+      new Promise<"stopped">((resolve) => {
+        onAbort = () => resolve("stopped");
+        signal?.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+  }
+}
+
 /**
  * Run a package-manager command, capturing interleaved stdout and stderr. Everything the command starts ends
  * with the step: past the time limit, when the run stops, and when the command ends by itself and leaves a
  * process running (a server, a watcher), which would hold its output open and outlive the run. Elsewhere the
  * command leads a process group of its own and the group is ended; on Windows it runs in a job (inJob), and
  * taskkill ends the tree on top, where no job could be made. The group gets SIGTERM, and STOP_GRACE_MS later
- * SIGKILL, whether or not the output is still held: past that the step reads no more of it.
+ * SIGKILL, whether or not the output is still held: past that the step reads no more of it. On Windows the
+ * wait for jobsWork's answer counts against the time limit and ends on Stop.
  */
 export const execCommand: Exec = async (command, args, opts) => {
   const stopped = { code: null, output: "", timedOut: false };
   if (opts.signal?.aborted) return stopped;
   const win = process.platform === "win32";
   const env = { ...opts.env, CI: "1" };
+  const started = Date.now();
   // Where Windows PowerShell cannot run the job, under cmd.exe as before.
-  const job = win && (await jobsWork()) ? inJob(command, args, env) : null;
-  if (opts.signal?.aborted) return stopped;
+  const ready = win ? await withinStep(jobsWork(), opts.timeoutMs, opts.signal) : { value: false };
+  if (ready === "stopped" || opts.signal?.aborted) return stopped;
+  if (ready === "late") return { code: null, output: "", timedOut: true };
+  const job = ready.value ? inJob(command, args, env) : null;
+  const timeoutMs = Math.max(0, opts.timeoutMs - (Date.now() - started));
   return new Promise((resolve) => {
     const child = job
       ? spawn(job.file, job.args, { cwd: opts.cwd, env, windowsHide: true })
@@ -125,15 +163,22 @@ export const execCommand: Exec = async (command, args, opts) => {
     const end = () => {
       if (grace) return;
       signalAll("SIGTERM");
+      const kill = () => signalAll("SIGKILL");
+      due.add(kill);
+      if (!killDueOnExit) {
+        killDueOnExit = true;
+        process.once("exit", killDue);
+      }
       grace = setTimeout(() => {
-        signalAll("SIGKILL");
+        due.delete(kill);
+        kill();
         settle(child.exitCode);
       }, STOP_GRACE_MS);
     };
     const timer = setTimeout(() => {
       timedOut = true;
       end();
-    }, opts.timeoutMs);
+    }, timeoutMs);
     opts.signal?.addEventListener("abort", end, { once: true });
     child.on("exit", end);
     child.on("error", (err) => settle(null, `\n${err.message}`));

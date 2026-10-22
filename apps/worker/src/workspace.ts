@@ -291,6 +291,11 @@ export interface Harvest {
   baseSha: string | null;
   /** Files whose changes did not fit in the diff the board takes, so the review does not show them. */
   diffOmitted: string[];
+  /**
+   * Why git could not read the changes back (a lock a git ended part-way left behind), so there is no diff: a
+   * run that would complete fails with it rather than send part of its change for review. Null when it could.
+   */
+  unreadable: string | null;
 }
 
 /**
@@ -468,7 +473,9 @@ async function unstageLinksMadeFiles(ws: Workspace): Promise<void> {
   if (!files.length) return;
   const literal = ["--literal-pathspecs"];
   const out = await git(
-    [...literal, "rm", "--cached", "--quiet", "--ignore-unmatch", "--", ...files],
+    // --force: an entry the run staged and then changed again ("staged content different from both the file and
+    // the HEAD") is taken out too, not the whole list refused; --cached never touches the file itself.
+    [...literal, "rm", "--cached", "--force", "--quiet", "--ignore-unmatch", "--", ...files],
     ws.dir,
   );
   if (out.code !== 0) return;
@@ -492,6 +499,7 @@ export async function harvestWorkspace(
     filesWritten: [],
     baseSha: null,
     diffOmitted: [],
+    unreadable: null,
   };
   if (ws.repo) await restoreGitDir(ws);
   const refused = out.refusedOutputs;
@@ -502,11 +510,21 @@ export async function harvestWorkspace(
   if (declaredOutputs.length) {
     candidates = declaredOutputs;
   } else if (ws.repo) {
-    const status = await git(["status", "--porcelain", "--untracked-files=all"], ws.dir);
+    // -z: every name as it is (a space, a quote, a character git would escape); --no-renames: a moved file by its
+    // new name, as the diff has it.
+    const status = await git(
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"],
+      ws.dir,
+    );
+    // A path git calls deleted is not a file the run wrote, whatever is on disk there: a file the run took out of
+    // the index and kept, ignored (a local .env), is listed only so. One it kept and git does not ignore is
+    // listed again as untracked. A merge conflict's side (UD, DU) is a file the run may have resolved.
+    const deleted = (xy: string) => xy.includes("D") && !xy.includes("U");
     candidates = status.stdout
-      .split("\n")
-      .map((l) => l.slice(3).trim())
-      .filter((p) => p && p !== HANDOVER_FILE && p !== BLOCKED_FILE)
+      .split("\0")
+      .filter((entry) => entry.length > 3 && !deleted(entry.slice(0, 2)))
+      .map((entry) => entry.slice(3))
+      .filter((p) => p !== HANDOVER_FILE && p !== BLOCKED_FILE)
       .slice(0, MAX_UNDECLARED_FILES);
   } else {
     const entries = await readdir(ws.dir, { withFileTypes: true });
@@ -540,12 +558,41 @@ export async function harvestWorkspace(
     const head = await git(["rev-parse", "HEAD"], ws.dir);
     if (head.code === 0) out.baseSha = head.stdout.trim() || null;
     await unstageLinksMadeFiles(ws);
-    await git(["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`], ws.dir);
-    const diff = await git(
-      ["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv"],
+    const add = await git(
+      ["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`],
       ws.dir,
     );
+    // A folder git cannot open it passes over with a warning, and adds the rest: that is part of the change.
+    const skipped = /^warning: could not open directory .*$/m.exec(add.stderr)?.[0];
+    const diff =
+      add.code === 0 && !skipped
+        ? await git(
+            // core.quotePath false: a name past ASCII as it is; one with a quote or a control character is
+            // still quoted, and parseUnifiedDiff reads it back.
+            [
+              "-c",
+              "core.quotePath=false",
+              "diff",
+              "--cached",
+              "--no-color",
+              "--no-renames",
+              "--no-ext-diff",
+              "--no-textconv",
+            ],
+            ws.dir,
+          )
+        : { ...add, code: add.code || 1, stderr: skipped ?? add.stderr };
+    // A part of the change the review would not show (an index.lock a git ended part-way left behind): no diff,
+    // and the run that would complete fails with this rather than send half of it for review.
     if (diff.code === 0) diffText = diff.stdout;
+    else {
+      const lines = redactGit(diff.stderr).trim().split("\n");
+      let why = lines.find((l) => /^(?:error|fatal|warning):/.test(l)) ?? lines.at(-1) ?? "";
+      // The worker's own folders are none of the run's business: the clone's path as git writes it, `.`.
+      for (const at of await Promise.all([ws.dir, realpath(ws.dir).catch(() => ws.dir)]))
+        for (const form of new Set([at, at.replace(/\\/g, "/")])) why = why.split(form).join(".");
+      out.unreadable = `the run's changes could not be read back for review (git: ${why || "no message"})`;
+    }
   } else {
     diffText = out.artifacts
       .filter((a) => a.kind !== "handover" && a.kind !== "diff")

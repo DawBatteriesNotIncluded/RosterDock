@@ -11,6 +11,7 @@ import {
   diffStats,
   parseUnifiedDiff,
   PatchError,
+  renderBinaryFileDiff,
   renderNewFileDiff,
 } from "../src/index.js";
 
@@ -111,6 +112,30 @@ describe("renderNewFileDiff", () => {
       }
       expect(file).toMatchObject({ path: "notes/plan.md", status: "added" });
       expect(applyFilePatch(null, file!)).toBe(content);
+    }
+  });
+});
+
+describe("names git quotes", () => {
+  // One change recorded twice from git (fixtures/quoted-names): with core.quotePath, git's default, which escapes
+  // every byte past ASCII, and without it, as the harvest diffs. A name with a quote and a tab is quoted either
+  // way; one with a trailing space, beside the README.md it is not, is quoted neither way.
+  it("reads every name back as it is, however git printed it", () => {
+    for (const recorded of ["quote-path.diff", "no-quote-path.diff"]) {
+      const files = parseUnifiedDiff(read(`quoted-names/${recorded}`));
+      expect(files.map((f) => [f.path, f.status])).toEqual([
+        ["README.md ", "added"],
+        ["café.md", "modified"],
+        ["résumé.md", "added"],
+        ['say "hi"\tnow.md', "added"],
+      ]);
+    }
+  });
+
+  it("renders a name git would quote as git does, and reads it back", () => {
+    for (const name of ['say "hi"\tnow.md', "back\\slash.md", "new\nline.md", "café.md", "README.md "]) {
+      expect(parseUnifiedDiff(renderNewFileDiff(name, "x\n"))[0]?.path).toBe(name);
+      expect(parseUnifiedDiff(renderBinaryFileDiff(name))[0]?.path).toBe(name);
     }
   });
 });
