@@ -476,8 +476,11 @@ export const RunHeartbeatSchema = z.object({
 });
 
 export const RunCheckpointSchema = z.object({ checkpoint: z.record(z.string(), z.unknown()) });
-/** The commit a run's clone is at, reported right after the clone. */
-export const RunClonedSchema = z.object({ sha: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/) });
+/** The commit a run's clone is at, reported right after the clone with the key its claim gave the worker. */
+export const RunClonedSchema = z.object({
+  sha: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+  key: z.string().min(1).max(200),
+});
 
 /** The largest artifact a run may report when the board has an object store; an inline row stops at 512 KB. */
 export const ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;

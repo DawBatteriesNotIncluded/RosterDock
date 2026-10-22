@@ -1060,6 +1060,8 @@ export async function approveReview(
           title: task.title,
           round: review.round,
           files: forPerson,
+          // Why: binary files into a pull request, or files the secrets check did not read.
+          reason: binaries.length ? "pull_request" : "unscanned",
           teammateName: who?.name ?? null,
         },
       );

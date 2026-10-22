@@ -68,6 +68,7 @@ function fakeBoard(
     },
     token: "run-token",
     tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    cloneKey: "the-workers-clone-key",
     pack,
     spec: {
       runId: opts.runId ?? "run-1",
@@ -110,7 +111,8 @@ function fakeBoard(
     async checkpoint(_t, _r, cp) {
       board.checkpoints.push(cp);
     },
-    async cloned(_t, _r, sha) {
+    async cloned(_t, _r, sha, key) {
+      if (key !== "the-workers-clone-key") throw new BoardError(403, "only the worker that claimed the run");
       board.clonedShas.push(sha);
     },
     async artifact(_t, _r, a) {
@@ -679,6 +681,9 @@ describe("repository tests", () => {
       id: "stub",
       async run(ctx) {
         heardBefore = [...board.clonedShas];
+        // The key that report carried is the worker's: nothing the engine is given holds it.
+        const given = JSON.stringify({ ...ctx, signal: undefined });
+        expect(given).not.toContain("the-workers-clone-key");
         return stubEngine.run(ctx);
       },
     };

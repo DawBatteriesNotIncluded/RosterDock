@@ -55,29 +55,36 @@ export interface ScannedBinary {
   sha256: string | null;
   lines: number[];
   chars: number;
-  /** False where its bytes were not read for secrets: past what the board scans in one run. */
+  /** False where its bytes were not read for secrets: none from the run, or past what the board scans in one run. */
   scanned: boolean;
 }
 
 /**
  * Scan the bytes a pull request would write for a file the diff calls binary, as text: a file git calls binary
- * (an attribute, a NUL byte) may be text all the same. As UTF-8, and where a NUL byte says it may be UTF-16, as
- * UTF-16 in both byte orders and without its NUL bytes too. Each pattern runs over each reading once (secretLines). `scan` false: only
+ * (an attribute, a NUL byte) may be text all the same. As UTF-8, and where a NUL byte says it may be wider: as
+ * UTF-16 in both byte orders from either of its first two bytes, as UTF-32 in both orders where most bytes are
+ * NUL, and without its NUL bytes. Anything else (compressed, encoded) it does not read. Each pattern runs over each reading once (secretLines). `scan` false: only
  * the sha256, where the run's binary files are past what the board scans.
  */
 export function scanBinary(path: string, bytes: Buffer | null, scan = true): ScannedBinary {
-  if (!bytes) return { path, sha256: null, lines: [], chars: 0, scanned: true };
+  // No bytes to read: not scanned, so a person approves it.
+  if (!bytes) return { path, sha256: null, lines: [], chars: 0, scanned: false };
   const sha256 = sha256Hex(bytes);
   if (!scan) return { path, sha256, lines: [], chars: 0, scanned: false };
   const readings = [bytes.toString("utf8")];
   if (bytes.includes(0)) {
-    const even = bytes.subarray(0, bytes.length - (bytes.length % 2));
-    readings.push(
-      even.toString("utf16le"),
-      Buffer.from(even).swap16().toString("utf16le"),
-      // And without its NUL bytes, for UTF-32 or a NUL inside a key: each reading can only add lines.
-      Buffer.from(bytes.toString("latin1").replace(/\0/g, ""), "latin1").toString("utf8"),
-    );
+    // UTF-16 in both byte orders, from the first byte and from the second (a string inside a container).
+    for (const from of [0, 1]) {
+      const at = bytes.subarray(from);
+      const even = at.subarray(0, at.length - (at.length % 2));
+      readings.push(even.toString("utf16le"), Buffer.from(even).swap16().toString("utf16le"));
+    }
+    // UTF-32 in both byte orders where most bytes are NUL, as its text is (three in four).
+    let nuls = 0;
+    for (const b of bytes) if (b === 0) nuls++;
+    if (nuls * 2 >= bytes.length) readings.push(utf32(bytes, true), utf32(bytes, false));
+    // And without its NUL bytes, for a NUL inside a key: each reading can only add lines.
+    readings.push(Buffer.from(bytes.toString("latin1").replace(/\0/g, ""), "latin1").toString("utf8"));
   }
   const lines = new Set<number>();
   let chars = 0;
@@ -86,6 +93,22 @@ export function scanBinary(path: string, bytes: Buffer | null, scan = true): Sca
     for (const line of secretLines(text, [ASSIGNED_SECRET_RE])) lines.add(line);
   }
   return { path, sha256, lines: [...lines].sort((a, b) => a - b), chars, scanned: true };
+}
+
+/** Bytes read as UTF-32 from their start, a code point that is none read as U+FFFD. */
+function utf32(bytes: Buffer, littleEndian: boolean): string {
+  const parts: string[] = [];
+  let points: number[] = [];
+  for (let i = 0; i + 4 <= bytes.length; i += 4) {
+    const cp = littleEndian ? bytes.readUInt32LE(i) : bytes.readUInt32BE(i);
+    points.push(cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff) ? cp : 0xfffd);
+    if (points.length === 8192) {
+      parts.push(String.fromCodePoint(...points));
+      points = [];
+    }
+  }
+  parts.push(String.fromCodePoint(...points));
+  return parts.join("");
 }
 
 /**
@@ -140,7 +163,7 @@ export function secretsCheck(
     return {
       kind: "secrets",
       ok: false,
-      title: `${n} binary ${n === 1 ? "file was" : "files were"} not scanned, past the ${BINARY_SCAN_BYTES / 1024 / 1024} MB the board scans in a run: a person approves ${n === 1 ? "it" : "them"}: ${listed(unscanned)}`,
+      title: `${n} binary ${n === 1 ? "file was" : "files were"} not scanned (the run sent no bytes, or past the ${BINARY_SCAN_BYTES / 1024 / 1024} MB the board scans in a run): a person approves ${n === 1 ? "it" : "them"}: ${listed(unscanned)}`,
       detail: { ...detail, unscanned },
     };
   }
@@ -174,7 +197,9 @@ export function outputsCheck(declared: string[], artifactPaths: string[], files:
     present.add(f.path);
     present.add(f.path.split("/").pop() ?? f.path);
   }
-  const missing = declared.filter((d) => !present.has(d));
+  // A worker on a file system that ignores case sends a declared Report.md under git's report.md.
+  const folded = new Set([...present].map((p) => p.toLowerCase()));
+  const missing = declared.filter((d) => !present.has(d) && !folded.has(d.toLowerCase()));
   if (missing.length) {
     return {
       kind: "outputs",

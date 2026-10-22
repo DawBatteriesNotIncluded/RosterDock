@@ -581,6 +581,28 @@ async function readArtifact(
 }
 
 /**
+ * Entries the run flagged skip-worktree or assume-unchanged in the index stay as staged, whatever the file on
+ * disk holds: the review would show the index while the run delivered the file. The flags go before the add.
+ * False where git would not clear them.
+ */
+async function clearIndexFlags(ws: Workspace): Promise<boolean> {
+  const listed = decodeNames((await gitBytes(["ls-files", "-v", "-z"], ws.dir)).stdout).names;
+  // `S` (or `s`) skip-worktree; a lower-case tag, assume-unchanged. One flag a call: git applies the last.
+  const tagged = (test: (tag: string) => boolean) =>
+    listed.filter((e) => e.length > 2 && test(e[0]!)).map((e) => e.slice(2));
+  for (const [flag, paths] of [
+    ["--no-skip-worktree", tagged((t) => t === "S" || t === "s")],
+    ["--no-assume-unchanged", tagged((t) => t >= "a" && t <= "z")],
+  ] as const) {
+    for (let i = 0; i < paths.length; i += 200) {
+      const cleared = await git(["update-index", flag, "--", ...paths.slice(i, i + 200)], ws.dir);
+      if (cleared.code !== 0) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Where git checks a link out as a plain file holding its target (core.symlinks false, as Git for Windows has
  * it), git add keeps the link's type for that file, whatever the run wrote in it (or staged itself), and the
  * diff would show the link pointing at the file's new contents. The run wrote a file there: each committed
@@ -711,6 +733,9 @@ export async function harvestWorkspace(
     // committed, would bring into its pull request commits no review showed.
     if (ws.clonedSha && out.baseSha !== ws.clonedSha)
       out.unreadable ??= `the run's changes could not be read back for review (the clone is no longer at ${ws.clonedSha.slice(0, 12)}, the commit it was cloned at: a checkout or a commit moved it)`;
+    if (!(await clearIndexFlags(ws)))
+      out.unreadable ??=
+        "the run's changes could not be read back for review (git could not clear the flags the run set on its index)";
     await unstageLinksMadeFiles(ws);
     const add = await git(
       ["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`],
@@ -804,6 +829,15 @@ export async function harvestWorkspace(
       outside.length ? decodeNames((await gitBytes(["ls-files", "-z"], ws.dir)).stdout).names.map(fold) : [],
     );
     const unseen = outside.filter((f) => !tracked.has(named(f)));
+    // A declared output the fold matched travels under git's spelling, the one the review and its scan name.
+    const spelled = new Map(diffNames.map((n) => [fold(n), n]));
+    for (const a of out.artifacts) {
+      const git = a.kind === "handover" ? undefined : spelled.get(named(a.path));
+      if (git !== undefined && git !== path.posix.normalize(a.path)) {
+        out.filesWritten = out.filesWritten.map((f) => (f === a.path ? git : f));
+        a.path = git;
+      }
+    }
     if (unseen.length) {
       out.artifacts = out.artifacts.filter((a) => a.kind === "handover" || !unseen.includes(a.path));
       out.filesWritten = out.filesWritten.filter((f) => !unseen.includes(f));

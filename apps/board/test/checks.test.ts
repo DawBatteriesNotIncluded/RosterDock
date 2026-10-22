@@ -285,6 +285,24 @@ describe("secretsCheck", () => {
       expect(scanBinary("key.txt", le).lines, `LE ${before}`).toEqual([1]);
       expect(scanBinary("key.txt", Buffer.from(le).swap16()).lines, `BE ${before}`).toEqual([1]);
     }
+    // UTF-32 with a CJK character against the key, and UTF-16 from an odd byte (inside a container).
+    const cjk = "deploy key:\u4e00ghp_0123456789abcdefghijklmnopqrstuvwxyz\n";
+    const u32 = (t: string, le: boolean) =>
+      Buffer.concat(
+        [...t].map((c) => {
+          const b = Buffer.alloc(4);
+          if (le) b.writeUInt32LE(c.codePointAt(0)!);
+          else b.writeUInt32BE(c.codePointAt(0)!);
+          return b;
+        }),
+      );
+    expect(scanBinary("notes32.txt", u32(cjk, true)).lines).toEqual([1]);
+    expect(scanBinary("notes32.txt", u32(cjk, false)).lines).toEqual([1]);
+    const odd = Buffer.concat([
+      Buffer.from([7]),
+      Buffer.from("deploy key:\u3000ghp_0123456789abcdefghijklmnopqrstuvwxyz\n", "utf16le"),
+    ]);
+    expect(scanBinary("notes16.dat", odd).lines).toEqual([1]);
     // UTF-32 in either byte order, and a NUL byte inside the key itself.
     const key = "token: ghp_0123456789abcdefghijklmnopqrstuvwxyz\n";
     const utf32le = Buffer.concat([...key].map((c) => Buffer.from([c.charCodeAt(0), 0, 0, 0])));
@@ -298,21 +316,28 @@ describe("secretsCheck", () => {
     expect(secretsCheck(binary("big.bin"), undefined, [scanBinary("big.bin", text, false)])).toMatchObject({
       ok: false,
       title:
-        "1 binary file was not scanned, past the 64 MB the board scans in a run: a person approves it: big.bin",
+        "1 binary file was not scanned (the run sent no bytes, or past the 64 MB the board scans in a run): a person approves it: big.bin",
       detail: { binaries: [{ path: "big.bin", sha256: sha(text) }], unscanned: ["big.bin"] },
     });
-    // Clean bytes pass, named as files the review cannot show; one the run sent no bytes for is named too.
+    // Clean bytes pass, named as files the review cannot show.
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]);
+    expect(secretsCheck(binary("logo.png"), undefined, [scanBinary("logo.png", png)])).toMatchObject({
+      ok: true,
+      title:
+        "No credential values in the diff's text; the review cannot show 1 binary file, read only as text, which a pull request takes only with a person's approval: logo.png",
+      detail: { binaries: [{ path: "logo.png", sha256: sha(png) }], unshown: ["logo.png"] },
+    });
+    // One the run sent no bytes for was never read: the check fails, for a person.
     expect(
       secretsCheck(binary("logo.png", "gone.bin"), undefined, [
         scanBinary("logo.png", png),
         scanBinary("gone.bin", null),
       ]),
     ).toMatchObject({
-      ok: true,
+      ok: false,
       title:
-        "No credential values in the diff's text; the review cannot show 2 binary files, read only as text, which a pull request takes only with a person's approval: logo.png, gone.bin",
-      detail: { binaries: [{ path: "logo.png", sha256: sha(png) }], unshown: ["logo.png", "gone.bin"] },
+        "1 binary file was not scanned (the run sent no bytes, or past the 64 MB the board scans in a run): a person approves it: gone.bin",
+      detail: { unscanned: ["gone.bin"], unshown: ["logo.png", "gone.bin"] },
     });
   });
 });
@@ -355,6 +380,8 @@ describe("outputsCheck", () => {
     const missing = outputsCheck(["credentials.md", "diagram.svg"], [], clean);
     expect(missing.ok).toBe(false);
     expect(missing.title).toBe("Missing declared output: diagram.svg");
+    // Sent under git's spelling by a worker whose file system ignores case.
+    expect(outputsCheck(["Report.md"], ["report.md"], []).ok).toBe(true);
   });
 });
 

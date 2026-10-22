@@ -276,8 +276,8 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
       ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitCredential, abort.signal);
       // The commit the clone is at, to the board before the engine (which holds the same token) runs: a pull
       // request is built on it and on no other.
-      if (ws.clonedSha)
-        await deps.board.cloned(token, runId, ws.clonedSha).catch((err: unknown) => {
+      if (ws.clonedSha && claimed.cloneKey)
+        await deps.board.cloned(token, runId, ws.clonedSha, claimed.cloneKey).catch((err: unknown) => {
           // A board from before the route (an upgrade, the worker first) builds no pull request on it either.
           if (!(err instanceof BoardError && err.status === 404)) throw err;
           deps.log.warn(`run ${runId}: the board does not record the commit a clone is at; carrying on`);

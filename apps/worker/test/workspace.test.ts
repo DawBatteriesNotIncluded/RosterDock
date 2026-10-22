@@ -495,6 +495,34 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
+  it("reads back a file the run hid behind a flag in the index, as it is on disk", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-index-flags",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    const id = {
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.com",
+    };
+    // A tracked file flagged skip-worktree, then changed; a new one staged clean, flagged, then changed.
+    await writeFile(path.join(ws.dir, "README.md"), '# demo\napi_key = "not-a-real-value-123"\n', "utf8");
+    expect((await git(["update-index", "--skip-worktree", "README.md"], ws.dir, id)).code).toBe(0);
+    await writeFile(path.join(ws.dir, "report.md"), "# Report\nAll clean.\n", "utf8");
+    expect((await git(["add", "report.md"], ws.dir, id)).code).toBe(0);
+    expect((await git(["update-index", "--assume-unchanged", "report.md"], ws.dir, id)).code).toBe(0);
+    await writeFile(path.join(ws.dir, "report.md"), '# Report\npassword = "not-a-real-value-123"\n', "utf8");
+    const h = await harvestWorkspace(ws, ["README.md", "report.md"]);
+    expect(h.unreadable).toBeNull();
+    const diff = h.artifacts.find((a) => a.kind === "diff")!.content;
+    expect(diff).toContain('+api_key = "not-a-real-value-123"');
+    expect(diff).toContain('+password = "not-a-real-value-123"');
+    await cleanupWorkspace(ws);
+  });
+
   it("reads a run's changes back only against the commit its clone was at", async () => {
     const ws = await prepareWorkspace(
       path.join(root, "work"),
@@ -550,6 +578,24 @@ describe("workspace", () => {
     ).toBeNull();
     await cleanupWorkspace(ws);
   });
+
+  it.runIf(process.platform === "darwin" || process.platform === "win32")(
+    "sends a declared output spelled in another case under git's name, the one the review scans",
+    async () => {
+      const ws = await prepareWorkspace(
+        path.join(root, "work"),
+        "run-folded-output",
+        { repoUrl: bare, defaultBranch: "main" },
+        null,
+      );
+      await writeFile(path.join(ws.dir, "secret.bin"), Buffer.from([0, 1, 2, 3]));
+      const h = await harvestWorkspace(ws, ["Secret.bin"]);
+      expect(h.unreadable).toBeNull();
+      expect(h.filesWritten).toEqual(["secret.bin"]);
+      expect(h.artifacts.map((a) => a.path)).toEqual(["secret.bin", "changes.diff"]);
+      await cleanupWorkspace(ws);
+    },
+  );
 
   it("says a run's changes cannot be read back where a file git reads as text holds a NUL byte", async () => {
     const ws = await prepareWorkspace(

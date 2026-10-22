@@ -74,6 +74,7 @@ export function registerWorkerRoutes(
       run: runToJson(claimed.run),
       token: claimed.token,
       tokenExpiresAt: claimed.tokenExpiresAt,
+      cloneKey: claimed.cloneKey,
       pack: claimed.pack,
       spec: claimed.spec,
     };
@@ -109,7 +110,7 @@ export function registerWorkerRoutes(
   app.post("/api/worker/runs/:runId/cloned", { config: {} }, async (req) => {
     const runId = requireRunToken(req);
     const body = parseBody(RunClonedSchema, req.body);
-    await saveClonedSha(db, runId, body.sha);
+    await saveClonedSha(db, runId, body.sha, body.key);
     return { ok: true };
   });
 

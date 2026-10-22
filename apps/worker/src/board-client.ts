@@ -23,6 +23,8 @@ export interface ClaimedRun {
   };
   token: string;
   tokenExpiresAt: string;
+  /** For the report of the clone's commit alone; never the engine's. Older boards send none. */
+  cloneKey?: string;
   pack: string;
   spec: {
     runId: string;
@@ -57,8 +59,8 @@ export interface BoardClient {
   heartbeat(token: string, runId: string, input: RunHeartbeatInput): Promise<{ stopRequested: boolean }>;
   events(token: string, runId: string, events: RunEventInput[]): Promise<void>;
   checkpoint(token: string, runId: string, checkpoint: Record<string, unknown>): Promise<void>;
-  /** The commit the run's clone is at, right after cloning, before the engine runs. */
-  cloned(token: string, runId: string, sha: string): Promise<void>;
+  /** The commit the run's clone is at, right after cloning, with the key the claim gave the worker alone. */
+  cloned(token: string, runId: string, sha: string, key: string): Promise<void>;
   artifact(token: string, runId: string, input: RunArtifactInput): Promise<void>;
   complete(token: string, runId: string, input: RunCompleteInput): Promise<void>;
 }
@@ -125,8 +127,8 @@ export function createBoardClient(
     events: async (token, runId, events) => {
       await call("POST", `/api/worker/runs/${runId}/events`, { events }, bearer(token), 2);
     },
-    cloned: async (token, runId, sha) => {
-      await call("POST", `/api/worker/runs/${runId}/cloned`, { sha }, bearer(token), 2);
+    cloned: async (token, runId, sha, key) => {
+      await call("POST", `/api/worker/runs/${runId}/cloned`, { sha, key }, bearer(token), 2);
     },
     checkpoint: async (token, runId, checkpoint) => {
       await call("POST", `/api/worker/runs/${runId}/checkpoint`, { checkpoint }, bearer(token), 2);

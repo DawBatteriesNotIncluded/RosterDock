@@ -124,7 +124,10 @@ export function needsYouText(ev: EventRecord, companyName: string): string | nul
       return driftSentence(p);
     case "review.needs_person": {
       const files = (p.files as string[] | undefined) ?? [];
-      return `${n} ${p.title ?? ""} carries binary files a review cannot show (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}): its pull request needs a person's approval in Reviews.`;
+      const named = `${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}`;
+      return p.reason === "unscanned"
+        ? `${n} ${p.title ?? ""} has binary files the secrets check did not read (${named}): it needs a person's approval in Reviews.`
+        : `${n} ${p.title ?? ""} carries binary files a review cannot show (${named}): its pull request needs a person's approval in Reviews.`;
     }
     case "review.reassigned": {
       const r = p.reviewer as { kind: string; name: string | null } | null;

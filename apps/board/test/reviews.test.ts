@@ -13,9 +13,18 @@ import type { GitHosts } from "../src/git/hosts.js";
 import { needsYouText } from "../src/notify/notify.js";
 import { executePullRequest } from "../src/reviews/outcomes.js";
 import { approveReview, vetoReview } from "../src/reviews/service.js";
+import { oneScanAtATime } from "../src/runs/service.js";
 import { fakeGitHub } from "./github-fake.js";
 import { fakeGitLab } from "./gitlab-fake.js";
-import { addProject, addTeammate, seedCompany, startTestBoard, type Api, type TestBoard } from "./helpers.js";
+import {
+  addProject,
+  addTeammate,
+  cloneKeys,
+  seedCompany,
+  startTestBoard,
+  type Api,
+  type TestBoard,
+} from "./helpers.js";
 
 let board: TestBoard;
 let baseUrl: string;
@@ -74,12 +83,15 @@ async function claim(runId: string) {
     payload: { runId, jobId: job, workerId: "w" },
   });
   expect(res.statusCode).toBe(201);
-  return JSON.parse(res.body) as {
+  const body = JSON.parse(res.body) as {
     token: string;
+    cloneKey: string;
     pack: string;
     run: { kind: string };
     spec: { rework?: unknown };
   };
+  cloneKeys.set(runId, body.cloneKey);
+  return body;
 }
 
 async function connect(token: string) {
@@ -123,7 +135,8 @@ async function completeTaskRun(
     content: diff,
   });
   // As the worker does right after cloning: the commit the run's changes stand on.
-  if (opts.baseSha) await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: opts.baseSha });
+  if (opts.baseSha)
+    await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: opts.baseSha, key: cloneKeys.get(run.id) });
   const done = await asRun.post(`/api/worker/runs/${run.id}/complete`, {
     status: "completed",
     summary: "Mapped the workflow.",
@@ -867,11 +880,24 @@ describe("reviews", () => {
       ).body;
       const run = (await api.post(`${base}/tasks/${task.id}/runs`, {})).body;
       const asRun = board.api((await claim(run.id)).token);
+      // The engine holds the run's token but not the key its worker's claim was given: it reports nothing.
+      expect(
+        (await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: OTHER, key: "a guess" })).status,
+      ).toBe(403);
       if (cloned) {
-        expect((await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: cloned })).status).toBe(200);
+        expect(
+          (await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: cloned, key: cloneKeys.get(run.id) }))
+            .status,
+        ).toBe(200);
         // The same again is no change; another is refused: the engine holds this token too.
-        expect((await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: cloned })).status).toBe(200);
-        expect((await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: OTHER })).status).toBe(409);
+        expect(
+          (await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: cloned, key: cloneKeys.get(run.id) }))
+            .status,
+        ).toBe(200);
+        expect(
+          (await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: OTHER, key: cloneKeys.get(run.id) }))
+            .status,
+        ).toBe(409);
       }
       await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
         path: "changes.diff",
@@ -912,10 +938,13 @@ describe("reviews", () => {
     ).body;
     const run = (await api.post(`${base}/tasks/${task.id}/runs`, {})).body;
     const first = board.api((await claim(run.id)).token);
-    await first.post(`/api/worker/runs/${run.id}/cloned`, { sha: OTHER });
+    await first.post(`/api/worker/runs/${run.id}/cloned`, { sha: OTHER, key: cloneKeys.get(run.id) });
     await board.db.query("UPDATE runs SET status = 'interrupted' WHERE id = $1", [run.id]);
     const second = board.api((await claim(run.id)).token);
-    expect((await second.post(`/api/worker/runs/${run.id}/cloned`, { sha: BASE_SHA })).status).toBe(200);
+    expect(
+      (await second.post(`/api/worker/runs/${run.id}/cloned`, { sha: BASE_SHA, key: cloneKeys.get(run.id) }))
+        .status,
+    ).toBe(200);
   });
 
   it("sends the author back on a repository with the round's diff to start from, and says on the task when it did not carry over", async () => {
@@ -1177,7 +1206,7 @@ describe("reviews", () => {
         kind: "diff",
         content: [...files.map((f) => f.path), ...without].map(stanza).join(""),
       });
-      await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: BASE_SHA });
+      await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: BASE_SHA, key: cloneKeys.get(run.id) });
       await asRun.post(`/api/worker/runs/${run.id}/complete`, {
         status: "completed",
         summary: "Done.",
@@ -1274,6 +1303,7 @@ describe("reviews", () => {
     expect(asked.payload).toMatchObject({
       number: logo.task.number,
       files: ["logo.png"],
+      reason: "pull_request",
       teammateName: "Verifier",
     });
     expect(needsYouText(asked, "GTM Studio")).toBe(
@@ -1300,12 +1330,15 @@ describe("reviews", () => {
       error: "logo.png is binary, which the review cannot show: only a person approves it",
     });
 
-    // A binary file the run sent no bytes for stops no teammate's approval: the pull request refuses it.
+    // A binary file the run sent no bytes for was never read: it is a person's too.
     const noBytes = await open("No bytes", [], ["blob.bin"]);
+    expect(noBytes.secrets).toMatchObject({ ok: false, detail: { unscanned: ["blob.bin"] } });
     const asVerifier3 = board.api(await reviewerToken(noBytes.task.id));
-    const noBytesApproved = await asVerifier3.post(`${base}/reviews/${noBytes.review.id}/approve`, {});
-    expect(noBytesApproved.status).toBe(200);
-    expect(noBytesApproved.body.pullRequests[0]).toMatchObject({ status: "failed" });
+    const noBytesRefused = await asVerifier3.post(`${base}/reviews/${noBytes.review.id}/approve`, {});
+    expect(noBytesRefused.status).toBe(409);
+    expect(noBytesRefused.body.error).toBe(
+      `#${noBytes.task.number} has binary files the secrets check did not read (blob.bin): a person decides it now, and has been asked`,
+    );
     // A person who vetoes before the pull request is opened stops it: it opens only for an approved review.
     const vetoed = await open("Vetoed", [{ path: "yarn.lock", bytes: lock }]);
     const hosts: GitHosts = {
@@ -1395,12 +1428,86 @@ describe("reviews", () => {
       `#${unread.chartTask.number} has binary files the secrets check did not read (chart.png): a person decides it now, and has been asked`,
     );
     expect((await api.get(`${base}/reviews/${unread.chartReview.id}`)).body.reviewer).toBeNull();
+    const unreadAsked = (await api.get(`${base}/events?limit=300`)).body.find(
+      (e: any) => e.type === "review.needs_person" && e.subject.id === unread.chartReview.id,
+    );
+    expect(needsYouText(unreadAsked, "GTM Studio")).toBe(
+      `#${unread.chartTask.number} Charts past the scan has binary files the secrets check did not read (chart.png): it needs a person's approval in Reviews.`,
+    );
 
     const { chartTask, chartReview } = await openChart("Chart");
     const asVerifier4 = board.api(await reviewerToken(chartTask.id));
     const chartApproved = await asVerifier4.post(`${base}/reviews/${chartReview.id}/approve`, {});
     expect(chartApproved.status).toBe(200);
     expect(chartApproved.body).toMatchObject({ status: "approved", taskStatus: "done", pullRequests: [] });
+  });
+
+  it("records a run's completion once: the others are refused before its binary files are scanned again", async () => {
+    const { api, base } = await seedCompany(board, "rv-completes@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const project = await addProject(api, base, "Charts");
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Charts",
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    const run = (await api.post(`${base}/tasks/${task.id}/runs`, {})).body;
+    const asRun = board.api((await claim(run.id)).token);
+    const bytes = Buffer.concat([Buffer.from([0]), Buffer.alloc(380_000, "a\n")]);
+    const paths = Array.from({ length: 6 }, (_, i) => `chart-${i}.bin`);
+    for (const p of paths)
+      await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
+        path: p,
+        kind: "file",
+        content: bytes.toString("base64"),
+        encoding: "base64",
+      });
+    await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
+      path: "changes.diff",
+      kind: "diff",
+      content: paths.map((p) => renderBinaryFileDiff(p)).join(""),
+    });
+    // The same token, ten times at once: one completion is recorded; the rest are answered without a scan.
+    const answered: { status: number; at: number }[] = [];
+    await Promise.all(
+      Array.from({ length: 10 }, async () => {
+        const res = await asRun.post(`/api/worker/runs/${run.id}/complete`, {
+          status: "completed",
+          summary: "Done.",
+        });
+        answered.push({ status: res.status, at: Date.now() });
+      }),
+    );
+    expect(answered.filter((a) => a.status === 200)).toHaveLength(1);
+    const recorded = answered.find((a) => a.status === 200)!;
+    expect(
+      answered.filter((a) => a.status !== 200).every((a) => a.status === 503 && a.at <= recorded.at),
+    ).toBe(true);
+    expect((await api.get(`${base}/tasks/${task.id}/review`)).body.round).toBe(1);
+    // Done: a completion that comes back is refused (its token went with it).
+    expect((await asRun.post(`/api/worker/runs/${run.id}/complete`, { status: "completed" })).status).toBe(
+      401,
+    );
+  });
+
+  it("scans one run's binary files at a time on the board, whichever run asks", async () => {
+    let running = 0;
+    let most = 0;
+    const scan = async () => {
+      running++;
+      most = Math.max(most, running);
+      await new Promise((r) => setTimeout(r, 20));
+      running--;
+    };
+    await Promise.all([
+      oneScanAtATime(scan),
+      oneScanAtATime(scan),
+      oneScanAtATime(() => Promise.reject(new Error("x"))).catch(() => {}),
+      oneScanAtATime(scan),
+    ]);
+    expect(most).toBe(1);
   });
 
   it("a diff with a binary file opens a pull request when the run reported the bytes, and says which file when not", async () => {
@@ -1451,7 +1558,10 @@ describe("reviews", () => {
       kind: "diff",
       content: DIFF,
     });
-    await withBytes.asRun.post(`/api/worker/runs/${withBytes.run.id}/cloned`, { sha: BASE_SHA });
+    await withBytes.asRun.post(`/api/worker/runs/${withBytes.run.id}/cloned`, {
+      sha: BASE_SHA,
+      key: cloneKeys.get(withBytes.run.id),
+    });
     await withBytes.asRun.post(`/api/worker/runs/${withBytes.run.id}/complete`, {
       status: "completed",
       summary: "Done.",
@@ -1473,7 +1583,10 @@ describe("reviews", () => {
       kind: "diff",
       content: DIFF,
     });
-    await without.asRun.post(`/api/worker/runs/${without.run.id}/cloned`, { sha: BASE_SHA });
+    await without.asRun.post(`/api/worker/runs/${without.run.id}/cloned`, {
+      sha: BASE_SHA,
+      key: cloneKeys.get(without.run.id),
+    });
     await without.asRun.post(`/api/worker/runs/${without.run.id}/complete`, {
       status: "completed",
       summary: "Done.",

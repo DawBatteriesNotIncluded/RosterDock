@@ -259,7 +259,7 @@ describe("artifacts over the inline limit", () => {
   });
 
   it("a store that fails while a pull request is opened fails the pull request and says why, not the approval", async () => {
-    const { api, base, task, run, asRun } = await setup(
+    const { api, base, task, run, asRun, claim } = await setup(
       withStore,
       "s4@example.com",
       "https://github.com/acme/accounts.git",
@@ -269,7 +269,7 @@ describe("artifacts over the inline limit", () => {
       kind: "diff",
       content: bigDiff(24_000),
     });
-    await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: "a".repeat(40) });
+    await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: "a".repeat(40), key: claim.cloneKey });
     await asRun.post(`/api/worker/runs/${run.id}/complete`, {
       status: "completed",
       summary: "Exported the accounts.",
