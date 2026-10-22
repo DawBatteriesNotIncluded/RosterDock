@@ -3,8 +3,11 @@
 // carrying a body and an event stream (MCP's included, through the SDK's client) to a server on 127.0.0.1
 // that the list allows. The resolvers are fakes, and so is the fetch above the transport's own tests. No
 // network.
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { discoverTools } from "../src/mcp/client.js";
@@ -415,7 +418,13 @@ describe("the pinned transport for a company's destinations", () => {
       egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer),
       timeoutMs: 5000,
     });
-    expect(tools.map((t) => t.name)).toEqual(["whoami"]);
+    expect(tools.map((t) => t.name)).toEqual([
+      "search_crm_objects",
+      "get_properties",
+      "manage_crm_objects",
+      "run_report",
+      "whoami",
+    ]);
     expect(seen.filter((s) => s.startsWith("POST")).length).toBeGreaterThanOrEqual(3);
     seen.length = 0;
     await expect(
@@ -428,8 +437,12 @@ describe("the pinned transport for a company's destinations", () => {
   });
 });
 
+const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "mcp");
+const recorded = (name: string) =>
+  JSON.parse(readFileSync(path.join(fixtures, name), "utf8")) as { result: Record<string, unknown> };
+
 /**
- * Just enough of an MCP server over streamable HTTP: every answer is an event stream, and the answer to
+ * The recorded MCP answers (fixtures/mcp) over streamable HTTP, each as an event stream; the answer to
  * tools/list is never ended, so a client gets it only if the transport hands the stream on as it arrives.
  */
 function mcpServer(method: string, raw: string, res: http.ServerResponse): void {
@@ -438,7 +451,7 @@ function mcpServer(method: string, raw: string, res: http.ServerResponse): void 
     res.end();
     return;
   }
-  const msg = JSON.parse(raw) as { id?: number; method: string; params?: { protocolVersion?: string } };
+  const msg = JSON.parse(raw) as { id?: number; method: string };
   if (msg.id === undefined) {
     res.writeHead(202);
     res.end();
@@ -446,13 +459,9 @@ function mcpServer(method: string, raw: string, res: http.ServerResponse): void 
   }
   const result =
     msg.method === "initialize"
-      ? {
-          protocolVersion: msg.params?.protocolVersion,
-          capabilities: { tools: {} },
-          serverInfo: { name: "egress-test", version: "1.0.0" },
-        }
+      ? recorded("initialize.json").result
       : msg.method === "tools/list"
-        ? { tools: [{ name: "whoami", description: "Who the token is", inputSchema: { type: "object" } }] }
+        ? recorded("tools-list.json").result
         : {};
   res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
   res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result })}\n\n`);
