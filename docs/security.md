@@ -332,13 +332,19 @@ their own, each with its own database and workers.
   operator lists (by name, or an address or a name whose every address is in a listed range: a server on
   this machine in development); a script or data URL never reaches a person's browser, and the web checks
   the consent page's scheme again before it goes there. An issuer and a token endpoint a connection kept
-  from before these checks are held to them too. The resource an MCP server declares must be on its own
-  origin, so the board never asks for a token named for another service; which authorization server it
-  names stays the server's choice, and a person consents on that server's page before any token is issued.
+  from before these checks are held to them too, and the issuer a connection keeps is the one the board
+  asked for and checked, never the document's own word. The resource an MCP server declares must be on its
+  own origin and at or above its MCP URL's path (the MCP SDK's rule: Notion's origin-only identifier passes,
+  a sibling's on a shared gateway does not), so the board never asks for a token named for another server; a
+  token a connection kept for a resource that fails this, from before the board checked it, is neither sent
+  nor refreshed until a person authorises the connection again. Which authorization server it names stays
+  the server's choice, and a person consents on that server's page before any token is issued.
 - **Redirects.** An MCP server is followed within its own server (`/mcp` to `/mcp/`, or http to https on
   the same host and the default ports), its credential kept and every hop checked again, when the call
   arrives as it was sent: a 307 or 308. A 301, 302 or 303 would turn its POST into a GET without its body,
-  so it is refused, and the refusal names the address to use (the same server's, without its query). A
+  so it is refused, and the refusal says what to change (the address over https, or with or without its
+  trailing slash) without naming a path. A cut answer ends the call at once, initialize included, and the
+  stream is not resumed. A
   redirect to another server is refused. An OpenAPI operation, a webhook, OAuth registration and the token requests follow none: the
   credential and the call go to the URL the company gave, or nowhere. A refusal names the server it pointed
   to (scheme, host and port), or the kind of URL, never a path, which may carry a token. An OpenAPI
@@ -365,7 +371,11 @@ their own, each with its own database and workers.
   every company `169-254-169-254.default.pod.cluster.local`, the cloud's metadata; and an ExternalName
   service is a CNAME to anywhere. List each service, or a namespace only you create services in. Every
   company on the board may use what is listed, except an entry given to one company (`<company id>=<entry>`):
-  only that company reaches it, through a lookup and kept connections of its own, so another company's
+  only that company reaches it, unless an entry for every company covers it too (a range inside a listed
+  range or a name under a listed `*.` name, which the board warns about at start and Settings does not show
+  as the company's own; or a name whose address falls in a range listed for every company, which nothing
+  can see before the name resolves, so keep a company's own services out of the ranges you list for every
+  company). It goes through a lookup and kept connections of the company's own, so another company's
   request never rides a connection opened for it or a name that answers differently between the check and
   the socket; and only that company's owners and admins see it in Settings. A stdio server is not held to
   any of this (What is not checked, below): one the operator lists with free arguments that fetches or

@@ -236,9 +236,14 @@ networkPolicy:
   `<company id>=<entry>` (in the chart, `{ company: "<id>", destination: "<entry>" }`), and only that company
   reaches it, on connections of its own (its own lookup and kept connections, so no other company gets there
   through a reused connection or a name that changes its answer). Its owners and admins find the id under
-  Settings > Connections, where they see your entries for every company and their own, marked; no other
-  company sees them. The board warns at start about an id that names no company, whose entries allow
-  nothing. A stdio command you list with free arguments (a final `*`) runs inside the board pod, where no
+  Settings > Connections, where they see your entries for every company and their own, marked "given to
+  this company"; no other company sees them. An entry for every company that covers one you give a company
+  makes it every company's: a range inside a listed range, a name under a listed `*.` name (the board warns
+  at start about both, and Settings does not mark them), or a name whose address is in a range listed for
+  every company, which nothing can see before the name resolves. Keep a company's own services out of the
+  ranges you list for every company. The board warns at start about an id that names no company, whose
+  entries allow nothing. In the chart, a plain string that holds a company's entry and a comma is refused:
+  one entry per item. A stdio command you list with free arguments (a final `*`) runs inside the board pod, where no
   list applies: one that fetches or proxies lets any company's admins point it at that destination too.
 
   ```yaml

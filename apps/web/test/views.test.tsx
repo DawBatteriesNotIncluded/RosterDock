@@ -792,7 +792,7 @@ describe("views render with sample data", () => {
       <ConnectionsPanel {...props} features={own} companyId="4f1aee73-e65e-4c8d-83f7-aa1169379d7f" canEdit />,
     );
     expect(intro).toContain(
-      "of private ones only those this board&#x27;s operator lists: 10.20.0.0/16 · ollama.internal (this company only).",
+      "of private ones only those this board&#x27;s operator lists: 10.20.0.0/16 · ollama.internal (given to this company).",
     );
     expect(intro).toContain("for this company alone by its id, 4f1aee73-e65e-4c8d-83f7-aa1169379d7f.");
     const allowed = { ...none, privateDestinations: ["playwright-mcp"] };

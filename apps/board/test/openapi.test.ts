@@ -133,6 +133,30 @@ describe("the OpenAPI runtime", () => {
     expect(created.body.tools.map((t: { name: string }) => t.name)).toEqual(["list_contacts"]);
   });
 
+  it("scrubs the credential from an answer cut at its cap, the part of it before the cut included", async () => {
+    const secret = env.CRM_API_TOKEN!;
+    // An answer that echoes the request's header, cut 9 characters into the credential.
+    const head = '{"echo":"Authorization: Bearer ';
+    const echo = (async () =>
+      new Response(`${head}${secret}","more":"${"x".repeat(200)}"}`, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    const manifest = {
+      ...buildOpenApiManifest(spec, { allow: ["listContacts"] }).manifest!,
+      maxResponseBytes: head.length + 9,
+    };
+    const cut = await callOpenApiOperation(
+      { url: "https://crm.example.test/v1", authEnvName: "CRM_API_TOKEN" },
+      manifest,
+      { egress: testEgress(echo), env },
+      "list_contacts",
+      {},
+    );
+    expect(cut).toEqual({ ok: true, result: { truncated: true, text: `${head}[redacted]` } });
+    expect(JSON.stringify(cut)).not.toContain(secret.slice(0, 4));
+  });
+
   it("calls an operation with path and query parameters, the credential by name, and redacts the answer", async () => {
     const manifest = buildOpenApiManifest(spec, {
       allow: ["listContacts", "getContact", "createContact"],

@@ -48,9 +48,25 @@ export async function endpointRefusal(
   return "is plain http to a server this board's operator does not list";
 }
 
-/** Whether a resource an MCP server declares is on its own origin (RFC 9728), as the board takes one. */
-export function resourceOnOrigin(resource: string, mcpUrl: string): boolean {
-  return sameOrigin(resource, mcpUrl);
+/**
+ * Whether a resource an MCP server declares is one it may speak for: on its own origin, and a path its MCP
+ * URL is at or under, the rule the MCP SDK keeps (checkResourceAllowed). RFC 9728 asks for the very URL the
+ * metadata was read for; this takes Notion's origin-only identifier (`https://mcp.notion.com` for
+ * `https://mcp.notion.com/mcp`) and refuses a sibling on the same origin (`/servers/b` for `/servers/a/mcp`),
+ * whose token would otherwise be sent here.
+ */
+export function resourceAllowed(resource: string, mcpUrl: string): boolean {
+  let declared: URL;
+  let at: URL;
+  try {
+    declared = new URL(resource);
+    at = new URL(mcpUrl);
+  } catch {
+    return false;
+  }
+  if (declared.origin !== at.origin) return false;
+  const slash = (p: string) => (p.endsWith("/") ? p : `${p}/`);
+  return slash(at.pathname).startsWith(slash(declared.pathname));
 }
 
 export interface OAuthDeps {
@@ -129,7 +145,12 @@ async function getJson(
       return { status: res.status, json: null };
     }
     const read = await readCapped(res, OAUTH_MAX_BYTES);
-    if (read.cut) throw new Error(`the document is larger than ${OAUTH_MAX_BYTES / 1024} KB`);
+    // The server answered: too much is not "could not reach".
+    if (read.cut)
+      throw new OAuthError(
+        "server",
+        `${new URL(url).host} answered with a document larger than ${OAUTH_MAX_BYTES / 1024} KB`,
+      );
     let json: Record<string, unknown> | null = null;
     try {
       json = JSON.parse(Buffer.from(read.bytes).toString("utf8")) as Record<string, unknown>;
@@ -138,6 +159,7 @@ async function getJson(
     }
     return { status: res.status, json };
   } catch (err) {
+    if (err instanceof OAuthError) throw err;
     throw new OAuthError("server", `could not reach ${new URL(url).host}: ${(err as Error).message}`);
   }
 }
@@ -173,24 +195,15 @@ export async function discoverResource(
           ? json.scopes_supported.filter((s): s is string => typeof s === "string")
           : null;
         const resource = typeof json.resource === "string" && json.resource ? json.resource : null;
-        // RFC 9728: the server speaks for itself only. Its own origin is enough (Notion's identifier is its
-        // origin while its MCP URL has a path); another origin would have the board ask for another
-        // service's token and send it here.
-        if (resource !== null && !sameOrigin(resource, mcpUrl))
-          throw new OAuthError("server", `${host} declares itself a resource on another server`);
+        // RFC 9728: the server speaks for itself only (resourceAllowed); another server's resource would have
+        // the board ask for that server's token and send it here.
+        if (resource !== null && !resourceAllowed(resource, mcpUrl))
+          throw new OAuthError("server", `${host} declares itself a resource that is not this server`);
         return { authorizationServer: first, scopes, resource };
       }
     }
   }
   return { authorizationServer: new URL(mcpUrl).origin, scopes: null, resource: null };
-}
-
-function sameOrigin(a: string, b: string): boolean {
-  try {
-    return new URL(a).origin === new URL(b).origin;
-  } catch {
-    return false;
-  }
 }
 
 /** The authorization server's endpoints, cached ten minutes. */
@@ -218,7 +231,9 @@ export async function discoverAuthorizationServer(
     if (status !== 200 || !json) continue;
     if (typeof json.authorization_endpoint !== "string" || typeof json.token_endpoint !== "string") continue;
     const doc: AuthorizationServer = {
-      issuer: typeof json.issuer === "string" ? trimTrailingSlashes(json.issuer) : key,
+      // The issuer asked for, which was checked, not the document's own word: RFC 8414 wants them equal, and
+      // what the row keeps is what the next Authorise asks again.
+      issuer: key,
       authorization_endpoint: json.authorization_endpoint,
       token_endpoint: json.token_endpoint,
       ...(typeof json.registration_endpoint === "string"

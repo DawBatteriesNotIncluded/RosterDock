@@ -126,7 +126,9 @@ board:
   # public addresses only.
   # An entry for one company alone takes its id (Settings > Connections shows it to its owners and admins):
   # no other company reaches it through a connection or sees it (a stdio command with free arguments, above,
-  # is not held to this list at all). A destination may be a list of entries for that company.
+  # is not held to this list at all), unless an entry for every company covers it too (a range it is in, a
+  # `*.` name it is under, a range its address falls in). A destination may be a list of entries for that
+  # company; a plain string that holds a company's entry and a comma is refused: one entry per item.
   #  - "playwright-mcp.tools.svc.cluster.local" # http://playwright-mcp.tools.svc.cluster.local:8931/mcp
   #  - company: "4f1aee73-e65e-4c8d-83f7-aa1169379d7f"
   #    destination: "ollama.acme.svc.cluster.local"

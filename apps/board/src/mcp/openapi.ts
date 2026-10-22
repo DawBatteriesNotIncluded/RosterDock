@@ -244,6 +244,15 @@ function scrub(text: string, secret: string | null): string {
   return secret && secret.length >= 6 ? text.split(secret).join("[redacted]") : text;
 }
 
+/** The same, for text cut at a cap: the start of the credential, where the cut fell inside it, goes too. */
+function scrubCut(text: string, secret: string | null): string {
+  const whole = scrub(text, secret);
+  if (!secret || secret.length < 6) return whole;
+  for (let n = Math.min(secret.length - 1, whole.length); n >= 2; n--)
+    if (whole.endsWith(secret.slice(0, n))) return `${whole.slice(0, -n)}[redacted]`;
+  return whole;
+}
+
 function buildUrl(
   base: string,
   op: OpenApiOperation,
@@ -395,7 +404,8 @@ export async function callOpenApiOperation(
     };
   }
   const truncated = read.cut;
-  const text = scrub(Buffer.from(read.bytes).toString("utf8"), secret);
+  const raw = Buffer.from(read.bytes).toString("utf8");
+  const text = truncated ? scrubCut(raw, secret) : scrub(raw, secret);
   let result: unknown = text;
   if (!truncated) {
     try {

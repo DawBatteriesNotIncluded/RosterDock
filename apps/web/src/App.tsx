@@ -67,6 +67,8 @@ export function App() {
   useEffect(() => {
     if (!me) return;
     let alive = true;
+    // The private destinations given to the last company are not this one's, even if the board cannot be asked.
+    setFeatures((f) => ({ ...f, privateDestinations: undefined, companyPrivateDestinations: undefined }));
     client
       .features(companyId ?? undefined)
       .then((f) => alive && setFeatures(f))

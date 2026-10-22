@@ -273,8 +273,10 @@ describe("needs-you by email", () => {
         ),
       );
     };
-    // A greeting that never ends its line, and one that never ends its reply.
+    // A greeting that never ends its line, one whose line is too long though it ends in the same read, and
+    // one that never ends its reply.
     const endless = await flood((s) => s.write("220 " + "x".repeat(64 * 1024)));
+    const longLine = await flood((s) => s.write("220 " + "x".repeat(2000) + "\r\n"));
     const longReply = await flood((s) =>
       s.write(Array.from({ length: 200 }, () => "220-hello\r\n").join("")),
     );
@@ -282,15 +284,17 @@ describe("needs-you by email", () => {
       const started = Date.now();
       const sent = await Promise.allSettled([
         sendMail(`smtp://127.0.0.1:${endless.port}/`, message, { timeoutMs: 10_000 }),
+        sendMail(`smtp://127.0.0.1:${longLine.port}/`, message, { timeoutMs: 10_000 }),
         sendMail(`smtp://127.0.0.1:${longReply.port}/`, message, { timeoutMs: 10_000 }),
       ]);
       expect(sent.map((o) => (o.status === "rejected" ? (o.reason as Error).message : "sent"))).toEqual([
+        "the server sent a line longer than an SMTP reply's; the board read no further",
         "the server sent a line longer than an SMTP reply's; the board read no further",
         "the server sent a reply of more than 100 lines",
       ]);
       expect(Date.now() - started).toBeLessThan(5000);
     } finally {
-      await Promise.all([endless.close(), longReply.close()]);
+      await Promise.all([endless.close(), longLine.close(), longReply.close()]);
     }
   });
 

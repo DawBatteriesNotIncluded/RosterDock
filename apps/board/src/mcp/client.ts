@@ -25,7 +25,7 @@ import { sha256Hex, type StdioCommand } from "@rosterdock/shared";
 import { stdioRefusal } from "../operator.js";
 import { notSetForCompany } from "../secrets/company.js";
 import type { SecretStore } from "../secrets/store.js";
-import { isExpiring, refreshTokens, type TokenAuth } from "./oauth.js";
+import { isExpiring, refreshTokens, resourceAllowed, type TokenAuth } from "./oauth.js";
 import { defaultEgress, egressFetch, READ_NO_FURTHER, type Egress } from "../web/egress.js";
 import type { WebReader } from "../web/transport.js";
 
@@ -189,6 +189,12 @@ export class McpTargetError extends Error {
  */
 async function resolveCredential(target: McpTarget, deps: McpClientDeps): Promise<string | null> {
   if (target.oauth) {
+    // A row kept from before the board checked the resource a server declares: its token is for something
+    // else, so it is neither sent nor refreshed.
+    if (target.oauth.resource && target.url && !resourceAllowed(target.oauth.resource, target.url))
+      throw new McpTargetError(
+        "the connection's authorisation names a resource this server may not speak for (press Authorise on its card); nothing was called",
+      );
     const store = deps.secrets;
     if (!store)
       throw new McpTargetError("the board has no secret store, so an OAuth connection cannot be called");
@@ -297,8 +303,9 @@ export async function withMcpClient<T>(
     (s): s is string => !!s,
   );
   const timeout = deps.timeoutMs ?? MCP_CALL_TIMEOUT_MS;
-  const connect = async (): Promise<Client> => {
+  const connect = async (watch?: (client: Client) => void): Promise<Client> => {
     const client = new Client({ name: "rosterdock-board", version: "0.5.0" });
+    watch?.(client);
     let transport: Transport;
     try {
       transport = buildTransport(target, deps, secret);
@@ -326,18 +333,22 @@ export async function withMcpClient<T>(
       throw new Error(scrub((err as Error).message ?? String(err), secrets));
     }
   }
+  // An answer cut at its cap inside an event stream reaches the SDK's onerror, not the call waiting on it,
+  // which would otherwise wait out its timeout: the call ends with the cut, from initialize on. The client
+  // closes at once, so the SDK does not resume the stream: each resume would be a new answer, cut afresh.
+  let cut: (err: Error) => void = () => {};
+  const tooBig = new Promise<never>((_, reject) => (cut = reject));
+  tooBig.catch(() => {});
+  const watch = (c: Client) => {
+    c.onerror = (err) => {
+      if (!err.message.includes(READ_NO_FURTHER)) return;
+      cut(new Error(err.message.replace(/^SSE stream disconnected: (Error: )?/, "")));
+      void c.close().catch(() => {});
+    };
+  };
   let client: Client | null = null;
   try {
-    client = await connect();
-    // An answer cut at its cap inside an event stream reaches the SDK's onerror, not the call waiting on it,
-    // which would otherwise wait out its timeout: the call ends with the cut instead.
-    let cut: (err: Error) => void = () => {};
-    const tooBig = new Promise<never>((_, reject) => (cut = reject));
-    tooBig.catch(() => {});
-    client.onerror = (err) => {
-      if (err.message.includes(READ_NO_FURTHER))
-        cut(new Error(err.message.replace(/^SSE stream disconnected: (Error: )?/, "")));
-    };
+    client = await Promise.race([connect(watch), tooBig]);
     return await Promise.race([fn(client), tooBig]);
   } catch (err) {
     if (err instanceof McpTargetError) throw err;

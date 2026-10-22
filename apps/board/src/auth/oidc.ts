@@ -421,7 +421,14 @@ export async function upsertOidcUser(
 
 /** A return-to path the board will send the browser back to: same origin, a path only. */
 export function safeReturnTo(value: unknown): string {
-  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || value.includes("\\"))
+  // A URL parser drops tabs and line breaks, so "/\t/host" would read as "//host", another site.
+  if (
+    typeof value !== "string" ||
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("\\") ||
+    [...value].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)
+  )
     return "/";
   return value.slice(0, 500);
 }

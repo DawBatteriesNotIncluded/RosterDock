@@ -54,6 +54,7 @@ import { plannerRouter, probePlanners, type PlannerStatus } from "./peter/planne
 import { anthropicModel, tracedModel, type PeterModel } from "./peter/model.js";
 import { startReaper } from "./runs/reaper.js";
 import { sourceFetcher, type SourceFetcher } from "./reviews/sources.js";
+import { coveringEntry } from "@rosterdock/shared";
 import { isUuid } from "./validate.js";
 import { boardEgress, type Egress } from "./web/egress.js";
 import { boardWebReader, type Resolve, type WebReader } from "./web/transport.js";
@@ -375,10 +376,10 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
           [p.actor.id, companyId],
         )
       ).rowCount;
-    // What the company has alone: an entry every company has too is not shown as its own.
+    // What the company was given: an entry an entry every company has already covers is not shown as its own.
     const own = managesCompany
       ? (config.privateDestinations.companies?.[companyId!]?.entries ?? []).filter(
-          (e) => !config.privateDestinations.entries.includes(e),
+          (e) => !coveringEntry(e, config.privateDestinations),
         )
       : [];
     return {

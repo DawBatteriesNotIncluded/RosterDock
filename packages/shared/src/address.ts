@@ -196,6 +196,8 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
     const entry = company === null ? written : written.slice(eq + 1).trim();
     const out =
       company === null ? all : ((all.companies ??= {})[company] ??= { names: [], ranges: [], entries: [] });
+    // The same entry twice is one entry.
+    if (out.entries.includes(entry)) continue;
     const [addr, bitsText, extra] = entry.replace(/^\[|\](?=\/|$)/g, "").split("/");
     const bytes = entry.includes("%") ? null : addressBytes(addr!);
     const name = addr!.replace(/\.$/, "");
@@ -265,6 +267,38 @@ export function nameListed(host: string, allow: PrivateDestinations): boolean {
 export function addressListed(address: string, allow: PrivateDestinations): boolean {
   const bytes = addressBytes(address);
   return !!bytes && allow.ranges.some((r) => r[0].length === bytes.length && inRange(bytes, r));
+}
+
+/**
+ * The entry every company has that already covers this one, written as the operator wrote it, or null: an
+ * address or range inside a listed range, the same name, or a name under a listed `*.` name. Giving a covered
+ * entry to one company gives it nothing alone. What a list cannot see is a name whose address falls in a
+ * range listed for every company: that is known only once the name resolves.
+ */
+export function coveringEntry(entry: string, allow: PrivateDestinations): string | null {
+  let one: PrivateDestinations;
+  try {
+    one = parsePrivateDestinations(entry);
+  } catch {
+    return null;
+  }
+  for (const [prefix, bits] of one.ranges) {
+    const wide = allow.ranges.find(
+      (r) => r[0].length === prefix.length && r[1] <= bits && inRange(prefix, r),
+    );
+    if (wide) return wide[2];
+  }
+  for (const name of one.names) {
+    // A `*.` name covers the names under it, the names under a name under it too.
+    const domain = name.startsWith("*.") ? name.slice(2) : null;
+    const wide = allow.names.find((n) =>
+      domain === null
+        ? nameListed(name, { ...allow, names: [n] })
+        : n.startsWith("*.") && (domain === n.slice(2) || domain.endsWith(n.slice(1))),
+    );
+    if (wide) return wide;
+  }
+  return null;
 }
 
 /** Whether the operator lists this host: the name itself (or under a `*.` entry), or an address in a listed range. */

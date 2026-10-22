@@ -11,10 +11,12 @@ import { fileURLToPath } from "node:url";
 import type { EventRecord } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { callConnectionTool } from "../src/mcp/call.js";
+import { callMcpTool } from "../src/mcp/client.js";
 import { loadConnection } from "../src/mcp/connections.js";
 import {
   authorizationUrl,
   discoverAuthorizationServer,
+  resourceAllowed,
   discoverResource,
   OAuthError,
   refreshTokens,
@@ -198,6 +200,33 @@ describe("a company's MCP server over HTTP", () => {
     expect(mcp.requests[0]!.headers.authorization).toBe("Bearer slash-token-000000");
   });
 
+  it("refuses to use or refresh a token a row kept for a resource its server may not speak for", async () => {
+    sent.length = 0;
+    const called = await callMcpTool(
+      {
+        transport: "http",
+        url: "https://mcp.hostile.test/mcp",
+        oauth: {
+          secretName: "rosterdock-connection-kept",
+          tokenEndpoint: "https://auth.real.test/token",
+          clientId: "c",
+          resource: "https://api.real.test/mcp",
+          tokenAuth: null,
+          clientSecretEnvName: null,
+        },
+      },
+      { egress: testEgress(transport, { resolve }) },
+      "whoami",
+      {},
+    );
+    expect(called).toEqual({
+      ok: false,
+      error:
+        "the connection's authorisation names a resource this server may not speak for (press Authorise on its card); nothing was called",
+    });
+    expect(sent).toEqual([]);
+  });
+
   it("reaches what the operator lists, a name or a range, and nothing beside it; a tool call is held to the same", async () => {
     const { api, base, companyId } = await seedCompany(board, "egress-allow@example.com");
     const add = async (name: string, url: string) =>
@@ -378,12 +407,53 @@ describe("OAuth for a company's connection", () => {
       "one.example.test names an authorization server that is a javascript URL, not https",
     );
     await expect(discoverResource("https://two.example.test/mcp", deps())).rejects.toThrow(
-      "two.example.test declares itself a resource on another server",
+      "two.example.test declares itself a resource that is not this server",
     );
     expect(await discoverResource("https://three.example.test/mcp", deps())).toMatchObject({
       authorizationServer: "https://auth.example.test",
       resource: "https://three.example.test",
     });
+    // On a shared origin, a server speaks for its own path and what is above it, never for a sibling.
+    resourceAt("https://gw.example.test/servers/a/mcp", {
+      authorization_servers: ["https://auth.example.test"],
+      resource: "https://gw.example.test/servers/b",
+    });
+    resourceAt("https://gw.example.test/servers/c/mcp", {
+      authorization_servers: ["https://auth.example.test"],
+      resource: "https://gw.example.test/servers/c",
+    });
+    await expect(discoverResource("https://gw.example.test/servers/a/mcp", deps())).rejects.toThrow(
+      "gw.example.test declares itself a resource that is not this server",
+    );
+    expect(await discoverResource("https://gw.example.test/servers/c/mcp", deps())).toMatchObject({
+      resource: "https://gw.example.test/servers/c",
+    });
+    for (const [declared, ok] of [
+      ["https://gw.example.test/servers/c/mcp", true],
+      ["https://gw.example.test/servers/c/", true],
+      ["https://gw.example.test/", true],
+      ["https://gw.example.test/servers/cc", false],
+      ["https://gw.example.test/servers/c/mcp/more", false],
+      ["https://gw.example.test:8443/servers/c", false],
+      ["not a url", false],
+    ] as const)
+      expect(resourceAllowed(declared, "https://gw.example.test/servers/c/mcp"), declared).toBe(ok);
+    // The issuer a row keeps is the one asked for and checked, whatever the document calls itself; and a
+    // document past its cap is said to be one, not a server out of reach.
+    metadata["https://keyed.example.test/.well-known/oauth-authorization-server"] = {
+      issuer: "http://keycloak.internal:8080/realms/x",
+      authorization_endpoint: "https://keyed.example.test/authorize",
+      token_endpoint: "https://keyed.example.test/token",
+    };
+    expect((await discoverAuthorizationServer("https://keyed.example.test", deps())).issuer).toBe(
+      "https://keyed.example.test",
+    );
+    metadata["https://big.example.test/.well-known/oauth-authorization-server"] = {
+      padding: "x".repeat(300_000),
+    };
+    await expect(discoverAuthorizationServer("https://big.example.test", deps())).rejects.toThrow(
+      "big.example.test answered with a document larger than 256 KB",
+    );
     // Plain http to a name whose every address is in a listed range is taken, as for a connection.
     names["keycloak.ranged.test"] = ["10.40.0.5"];
     server("http://keycloak.ranged.test", {});
@@ -572,9 +642,10 @@ describe("a private destination the operator gives one company", () => {
   it("is that company's alone: its connections, OAuth and webhook reach it, another company's are refused", async () => {
     const a = await seedCompany(board, "egress-company-a@example.com");
     const b = await seedCompany(board, "egress-company-b@example.com");
-    // 10.9.0.0/16 is every company's already: listed for A too, it is not shown as A's own.
+    // 10.9.0.0/16 is every company's already, and covers 10.9.4.0/24: listed for A too, neither is shown as
+    // A's own.
     allow.companies = parsePrivateDestinations(
-      `${a.companyId}=mcp.only-a.test,${a.companyId}=hooks.only-a.test,${a.companyId}=10.9.0.0/16`,
+      `${a.companyId}=mcp.only-a.test,${a.companyId}=hooks.only-a.test,${a.companyId}=10.9.0.0/16,${a.companyId}=10.9.4.0/24`,
     ).companies;
     try {
       const refused = (host: string) => `refused: ${host} resolves to a private address, ${NOT_ALLOWED}`;

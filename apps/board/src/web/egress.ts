@@ -93,6 +93,18 @@ const BODY_HEADERS = [
   "content-location",
 ];
 
+/** What to give a connection whose server moved it within itself, without naming a path. */
+function sameServerHint(from: URL, to: URL): string {
+  const upgrade = from.protocol === "http:" && to.protocol === "https:";
+  const path = (u: URL) => u.pathname.replace(/\/+$/, "");
+  const samePath = from.pathname === to.pathname && from.search === to.search;
+  const slashOnly = !samePath && path(from) === path(to) && from.search === to.search;
+  if (upgrade && samePath) return "give the connection its address over https";
+  if (slashOnly)
+    return `give the connection its address ${upgrade ? "over https and " : ""}${to.pathname.endsWith("/") ? "with" : "without"} the trailing slash`;
+  return "give the connection the address it points to, on the same server";
+}
+
 /** Where a refused redirect pointed, for a person: the server, or the kind of URL; never a path. */
 function redirectTarget(from: URL, to: URL): string {
   if (to.protocol !== "http:" && to.protocol !== "https:") return `a ${to.protocol.replace(":", "")} URL`;
@@ -184,11 +196,11 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
         const toGet =
           (res.status === 303 && method !== "GET" && method !== "HEAD") ||
           ((res.status === 301 || res.status === 302) && method === "POST");
-        // A call that must arrive as it was sent (MCP's JSON-RPC) is refused instead, with where to send it: the
-        // same server's address, which the connection already shows, without its query.
+        // A call that must arrive as it was sent (MCP's JSON-RPC) is refused instead, saying what to change
+        // without naming a path, which may carry a token.
         if (toGet && opts.redirect === "same-origin")
           throw new Error(
-            `${url.host} answered ${res.status} to a ${method}, which would arrive at ${next.origin}${next.pathname} as a GET without its body: use that address`,
+            `${url.host} answered ${res.status} to a ${method}, which would arrive as a GET without its body: ${sameServerHint(url, next)}`,
           );
         if (toGet) {
           method = "GET";

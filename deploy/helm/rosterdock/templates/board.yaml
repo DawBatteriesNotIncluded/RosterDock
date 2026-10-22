@@ -111,6 +111,9 @@ spec:
             {{- $entries = append $entries (printf "%s=%s" $company (toString .)) }}
             {{- end }}
             {{- else }}
+            {{- if and (contains "=" (toString .)) (contains "," (toString .)) }}
+            {{- fail (printf "board.privateDestinations: %q holds a company's entry and more in one string, where the rest would go to every company; write one entry per item, or use { company, destination }" (toString .)) }}
+            {{- end }}
             {{- $entries = append $entries (toString .) }}
             {{- end }}
             {{- end }}

@@ -135,6 +135,7 @@ class Session {
     while ((i = this.buffer.indexOf("\r\n")) >= 0) {
       const line = this.buffer.slice(0, i);
       this.buffer = this.buffer.slice(i + 2);
+      if (line.length > MAX_LINE) return this.tooMuch("a line longer than an SMTP reply's");
       if (this.waiter) {
         const w = this.waiter;
         this.waiter = null;

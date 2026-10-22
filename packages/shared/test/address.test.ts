@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 import { describe, expect, it } from "vitest";
 import {
   addressListed,
+  coveringEntry,
   forCompany,
   hostListed,
   isAddress,
@@ -106,5 +107,35 @@ describe("addresses without node", () => {
       `${a}=*`,
     ])
       expect(() => parsePrivateDestinations(bad), bad).toThrow(/^ROSTERDOCK_PRIVATE_DESTINATIONS: /);
+  });
+
+  it("says when an entry every company has already covers one given to a company, and keeps an entry once", () => {
+    const board = parsePrivateDestinations("10.20.0.0/16,*.svc.cluster.local,ollama.internal,fd00::/8");
+    const covered: [string, string][] = [
+      ["10.20.4.0/24", "10.20.0.0/16"],
+      ["10.20.4.5", "10.20.0.0/16"],
+      ["::ffff:10.20.4.5", "10.20.0.0/16"],
+      ["fd00:1::/32", "fd00::/8"],
+      ["ollama.acme.svc.cluster.local", "*.svc.cluster.local"],
+      ["*.acme.svc.cluster.local", "*.svc.cluster.local"],
+      ["*.svc.cluster.local", "*.svc.cluster.local"],
+      ["ollama.internal", "ollama.internal"],
+    ];
+    for (const [entry, by] of covered) expect(coveringEntry(entry, board), entry).toBe(by);
+    for (const entry of [
+      "10.0.0.0/8",
+      "10.21.0.1",
+      "svc.cluster.local",
+      "ollama.acme.internal",
+      "*.internal",
+      "fc00::/8",
+    ])
+      expect(coveringEntry(entry, board), entry).toBeNull();
+    const twice = parsePrivateDestinations(
+      "10.20.0.0/16,10.20.0.0/16,4f1aee73-e65e-4c8d-83f7-aa1169379d7f=x.internal,4f1aee73-e65e-4c8d-83f7-aa1169379d7f=x.internal",
+    );
+    expect(twice.entries).toEqual(["10.20.0.0/16"]);
+    expect(twice.ranges).toHaveLength(1);
+    expect(twice.companies?.["4f1aee73-e65e-4c8d-83f7-aa1169379d7f"]?.entries).toEqual(["x.internal"]);
   });
 });
