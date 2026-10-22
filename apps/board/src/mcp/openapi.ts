@@ -394,9 +394,7 @@ export async function callOpenApiOperation(
     .toString("utf8")
     .replace(/^\uFEFF/, "");
   const clean = scrubber([secret]);
-  const text = truncated ? clean.cut(raw) : clean.text(raw);
-  const result = truncated ? null : readAnswer(text, clean);
-  return { ok: true, result: truncated ? { truncated: true, text } : result };
+  return { ok: true, result: truncated ? { truncated: true, text: clean.cut(raw) } : readAnswer(raw, clean) };
 }
 
 /** A parsed value with secret-looking keys redacted and the credential out of every string. */
@@ -405,20 +403,22 @@ function cleaned(value: unknown, clean: Scrubber): unknown {
 }
 
 /**
- * A whole answer as the teammate reads it: JSON parsed and cleaned; newline-delimited JSON (a log, an export)
- * cleaned line by line and written back as lines; anything else the scrubbed text.
+ * A whole answer as the teammate reads it, parsed before anything is scrubbed, so a number in it is looked
+ * at as a number: JSON cleaned; newline-delimited JSON (a log, an export) cleaned line by line and written
+ * back as lines; anything else the scrubbed text.
  */
-function readAnswer(text: string, clean: Scrubber): unknown {
+function readAnswer(raw: string, clean: Scrubber): unknown {
   try {
-    return cleaned(JSON.parse(text), clean);
+    return cleaned(JSON.parse(raw), clean);
   } catch {
     // not one JSON value
   }
-  const lines = text.split("\n");
-  if (lines.filter((l) => l.trim()).length < 2) return text;
-  try {
-    return lines.map((l) => (l.trim() ? JSON.stringify(cleaned(JSON.parse(l), clean)) : l)).join("\n");
-  } catch {
-    return text;
-  }
+  const lines = raw.split("\n");
+  if (lines.filter((l) => l.trim()).length >= 2)
+    try {
+      return lines.map((l) => (l.trim() ? JSON.stringify(cleaned(JSON.parse(l), clean)) : l)).join("\n");
+    } catch {
+      // not JSON line by line
+    }
+  return clean.text(raw);
 }

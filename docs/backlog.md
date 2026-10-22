@@ -43,3 +43,6 @@ scheduled; delete it when it ships.
 /api/companies/:companyId/connections/:connectionId` with `oauth`): the card has no field for them. When an
   MCP server moves to another authorization server, a connection with a client id a person gave is removed
   and added again, losing the tool classifications and switches a person set. Add the fields to the card.
+- An MCP answer at its 8 MB cap nested about four million levels deep raises the board's memory by about
+  600 MB while the MCP SDK parses and checks it, before the board's own depth cut applies. Count the nesting
+  in the answer's stream (`egressFetch`) and refuse past a few thousand levels before the SDK reads it.

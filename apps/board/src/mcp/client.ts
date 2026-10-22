@@ -404,7 +404,8 @@ export async function discoverTools(target: McpTarget, deps: McpClientDeps = {})
         throw new Error(
           `the server answered ${MCP_EMPTY_PAGES_MAX} pages of its tool list in a row with no tool`,
         );
-      for (const t of page.tools) {
+      // A page past the thousandth tool is read no further: its fields are never scrubbed.
+      for (const t of page.tools.slice(0, 1000 - out.length)) {
         // Kept on the row and shown to every teammate: what the server says of its tools is scrubbed too.
         out.push({
           name: clean.prefix(t.name, 2000),
@@ -437,24 +438,22 @@ export async function callMcpTool(
         structuredContent?: unknown;
         isError?: boolean;
       };
-      // What the server says, an error included, never repeats the credential. What is kept is cut first,
-      // then scrubbed: the work is bounded by what a teammate reads, not by what the server sent.
-      const text = clean.head(
-        (res.content ?? [])
-          .filter((c) => c.type === "text" && typeof c.text === "string")
-          .map((c) => c.text as string)
-          .join("\n"),
-        MCP_RESULT_MAX_CHARS,
-      );
-      if (res.isError) return { ok: false, error: text || `${name} returned an error` };
-      // Text that is JSON is a value like structured content: its numbers are looked at too.
-      if (res.structuredContent == null) {
-        const parsed = parseMaybeJson(text);
-        return { ok: true, result: typeof parsed === "string" ? parsed : clean.value(parsed) };
-      }
-      // Structured content as the broker keeps it (levels past 12 are "[depth]"), walked as a value within
-      // what a teammate reads of a text: what is past it is left out, and the result says so.
-      const { value, cut } = clean.bounded(res.structuredContent, MCP_RESULT_MAX_CHARS);
+      // What the server says, an error included, never repeats the credential, and the work is bounded by
+      // what a teammate reads, not by what the server sent: a text is cut before it is scrubbed, a value
+      // walked within a budget.
+      const text = (res.content ?? [])
+        .filter((c) => c.type === "text" && typeof c.text === "string")
+        .map((c) => c.text as string)
+        .join("\n");
+      if (res.isError)
+        return { ok: false, error: clean.head(text, MCP_RESULT_MAX_CHARS) || `${name} returned an error` };
+      // Text that is JSON is read as a value before anything is scrubbed, so a number in it is looked at as a
+      // number; structured content is one already. Levels past 12 are "[depth]", as the broker keeps them,
+      // and what is past the budget is left out, the result saying so.
+      const parsed = res.structuredContent != null ? res.structuredContent : jsonOf(text);
+      if (parsed === undefined)
+        return { ok: true, result: text.trim() ? clean.head(text, MCP_RESULT_MAX_CHARS) : null };
+      const { value, cut } = clean.bounded(parsed, MCP_RESULT_MAX_CHARS);
       return { ok: true, result: cut ? { truncated: true, value } : value };
     });
   } catch (err) {
@@ -462,15 +461,13 @@ export async function callMcpTool(
   }
 }
 
-function parseMaybeJson(text: string): unknown {
+/** The value a text that is one JSON object or array holds; undefined for any other text. */
+function jsonOf(text: string): unknown {
   const t = text.trim();
-  if (!t) return null;
-  if (t.startsWith("{") || t.startsWith("[")) {
-    try {
-      return JSON.parse(t);
-    } catch {
-      return text;
-    }
+  if (!t.startsWith("{") && !t.startsWith("[")) return undefined;
+  try {
+    return JSON.parse(t) as unknown;
+  } catch {
+    return undefined;
   }
-  return text;
 }

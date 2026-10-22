@@ -124,10 +124,41 @@ describe("scrubbing a credential", () => {
     // What only looks like the start of something is kept, and a credential whole before the cut is redacted.
     expect(clean.prefix(`${"z".repeat(1995)}QQQQQQQQ`, 2000)).toBe(`${"z".repeat(1995)}QQQQQ`);
     expect(clean.prefix(`${secret}${"z".repeat(3000)}`, 2000)).toBe(`[redacted]${"z".repeat(2000 - 16)}`);
+    // A level that ends in two broken escapes: a text whose every character is written as an escape, cut
+    // anywhere in the credential, never shows four characters of it at any level.
+    const every = (t: string) =>
+      Array.from({ length: t.length }, (_, i) => `\\u${t.charCodeAt(i).toString(16).padStart(4, "0")}`).join(
+        "",
+      );
+    const outer = every(`zz ${"AbC\\u002BdEf\\u002BGhI\\/jKl="} zz`);
+    for (let at = 20; at < outer.length - 20; at += 3) {
+      const shown = decodeAll(clean.prefix(`${outer.slice(0, at)}${"q".repeat(3000)}`, at));
+      for (let i = 0; i + 4 <= secret.length; i++)
+        expect(
+          shown.some((level) => level.includes(secret.slice(i, i + 4))),
+          `cut at ${at}`,
+        ).toBe(false);
+    }
     // The work is bounded by `max`, whatever the text's length.
     const before = scrubbedChars();
     clean.prefix(`${"\\".repeat(256)}x`.repeat(30_000), 2000);
     expect(scrubbedChars() - before).toBeLessThan(9 * 2000);
+  });
+
+  it("keeps nothing of a credential between calls, and holds credentials that share a start in the nodes they share", () => {
+    const one = scrubber([secret]);
+    expect(scrubber([secret])).not.toBe(one);
+    // A credential holding U+0000 is itself, not the two it would split into.
+    expect(scrubber(["abcdef\u0000ghijkl"]).text("abcdef and ghijkl")).toBe("abcdef and ghijkl");
+    expect(scrubber(["abcdef", "ghijkl"]).text("abcdef and ghijkl")).toBe("[redacted] and [redacted]");
+    // 51 credentials of 8,192 characters sharing 8,191: about 8,200 nodes, not 418,000.
+    const common = "k".repeat(8191);
+    const shared = Array.from({ length: 51 }, (_, i) => `${common}${String.fromCharCode(65 + i)}`);
+    const automaton = (scrubber(shared) as unknown as { automaton: { nodes: number; bytes: number } })
+      .automaton;
+    expect(automaton.nodes).toBeLessThan(8300);
+    expect(automaton.bytes).toBeLessThan(200_000);
+    expect(scrubber(shared).text(`x ${shared[7]} y`)).toBe("x [redacted] y");
   });
 
   it("walks a parsed value within a budget, keeping what fits and saying it cut the rest", () => {
@@ -154,6 +185,13 @@ describe("scrubbing a credential", () => {
     for (let i = 0; i < 13; i++) out = (out as unknown[])[0];
     expect(out).toBe("[depth]");
     expect(scrubber(["12345678"]).bounded({ pin: 12345678 }, 100).value).toEqual({ pin: "[redacted]" });
+    // A key the budget would cut, or that uses it up, leaves its entry out: cut, "api_key" could read "api_ke",
+    // and the number under it pass the broker's redaction.
+    expect(clean.bounded({ a: 1, [`api_key_${"x".repeat(50)}`]: 123456 }, 30)).toEqual({
+      value: { a: 1 },
+      cut: true,
+    });
+    expect(clean.bounded({ abc: 1 }, 4)).toEqual({ value: {}, cut: true });
   });
 
   it("stays quick at the sizes callers keep: a short and a long credential, many credentials, deep escapes", () => {
@@ -214,6 +252,27 @@ describe("scrubbing a credential", () => {
     expect(result.length).toBeGreaterThan(0);
   });
 });
+
+/** A text and every level of escapes read from it, up to eight. */
+function decodeAll(text: string): string[] {
+  const levels = [text];
+  for (let d = 0; d < 8; d++) {
+    const last = levels[levels.length - 1]!;
+    let read = "";
+    for (let i = 0; i < last.length;) {
+      if (last[i] === "\\" && last[i + 1] === "u" && /^[\da-fA-F]{4}$/.test(last.slice(i + 2, i + 6))) {
+        read += String.fromCharCode(parseInt(last.slice(i + 2, i + 6), 16));
+        i += 6;
+      } else if (last[i] === "\\" && i + 1 < last.length && last[i + 1]! in SHORT) {
+        read += SHORT[last[i + 1]!];
+        i += 2;
+      } else read += last[i++];
+    }
+    if (read === last) break;
+    levels.push(read);
+  }
+  return levels;
+}
 
 // A plain reader to check the scrubber against: whole levels read with string concatenation, as before,
 // and every occurrence of every credential found with indexOf, overlapping or not.

@@ -5,7 +5,7 @@
 //
 // A text is searched as it is, then read one level of escapes at a time, the whole text each time, and
 // searched again: nine levels at most, fewer once a level holds no escape. Every credential is searched at
-// once (Aho-Corasick, built once per set of credentials and kept for the next call), and every place one
+// once (Aho-Corasick, built for each call from the credentials it holds), and every place one
 // is found is marked in one array the size of the text, so the work and the memory are linear in the text,
 // however many credentials there are and however often they occur. What is scrubbed is bounded first: a
 // long text is cut before it is read, and a parsed value is walked within a budget.
@@ -69,18 +69,27 @@ function fromCodes(codes: Uint16Array, n: number): string {
  * Where an escape the end of a text cut short begins: a run of backslashes at the very end, or one before
  * a `u` and fewer than four hex digits. The text's length when it ends on no such thing.
  */
-function brokenEscape(s: string): number {
-  let i = s.length;
+function brokenEscape(s: string, end = s.length): number {
+  let i = end;
   let digits = 0;
   while (digits < 3 && i > 0 && isHex(s.charCodeAt(i - 1))) {
     i--;
     digits++;
   }
   if (i > 1 && s.charCodeAt(i - 1) === U && s.charCodeAt(i - 2) === BACKSLASH) i--;
-  else i = s.length;
-  if (i === s.length || s.charCodeAt(i - 1) === BACKSLASH)
-    while (i > 0 && s.charCodeAt(i - 1) === BACKSLASH) i--;
+  else i = end;
+  if (i === end || s.charCodeAt(i - 1) === BACKSLASH) while (i > 0 && s.charCodeAt(i - 1) === BACKSLASH) i--;
   return i;
+}
+
+/**
+ * Where the escapes a cut broke begin, however many end the text: a level read from one cut short can end
+ * in the remains of several (an escape's digits written as escapes themselves, cut off), one after another.
+ */
+function brokenEscapes(s: string): number {
+  let end = s.length;
+  for (let next = brokenEscape(s, end); next < end; next = brokenEscape(s, end)) end = next;
+  return end;
 }
 
 // Every character a scrubber has searched, at every level, in this process: what tests hold the work to.
@@ -144,11 +153,11 @@ function readLevel(level: Level, end: number): Level | null {
 class Automaton {
   private readonly rootAscii = new Int32Array(128);
   private readonly rootOther = new Map<number, number>();
-  private readonly char: Int32Array;
-  private readonly child: Int32Array;
-  private readonly fail: Int32Array;
-  private readonly longest: Int32Array;
-  private readonly depth: Int32Array;
+  private char: Int32Array;
+  private child: Int32Array;
+  private fail: Int32Array;
+  private longest: Int32Array;
+  private depth: Int32Array;
   private readonly more = new Map<number, Map<number, number>>();
   readonly nodes: number;
 
@@ -187,6 +196,12 @@ class Automaton {
       this.longest[node] = text.length;
     }
     this.nodes = nodes;
+    // Credentials that share a start share nodes: the arrays keep only the nodes there are.
+    this.char = this.char.slice(0, nodes);
+    this.child = this.child.slice(0, nodes);
+    this.fail = this.fail.slice(0, nodes);
+    this.longest = this.longest.slice(0, nodes);
+    this.depth = this.depth.slice(0, nodes);
     // Failure links, breadth first: a node's is the longest proper suffix of its text that is in the trie.
     const queue = firsts;
     for (let q = 0; q < queue.length; q++) {
@@ -205,6 +220,11 @@ class Automaton {
       if (this.char[u]! >= 0) link(this.char[u]!, this.child[u]!);
       for (const [c, v] of this.more.get(u) ?? []) link(c, v);
     }
+  }
+
+  /** What the automaton holds in its arrays, in bytes. */
+  get bytes(): number {
+    return 20 * this.nodes;
   }
 
   /** Where `c` leads from `node` in the trie: from the root always somewhere (0: the root); below it, -1 for nowhere. */
@@ -325,7 +345,7 @@ class Scrubbing implements Scrubber {
     let level: Level | null = { s: t, from: null };
     for (let depth = 0; level; depth++) {
       const current: Level = level;
-      const broken = guard ? brokenEscape(current.s) : current.s.length;
+      const broken = guard ? brokenEscapes(current.s) : current.s.length;
       const partial = automaton.scan(
         current.s,
         (start, end) => {
@@ -349,7 +369,7 @@ class Scrubbing implements Scrubber {
 
   cut(t: string): string {
     const { marks } = this.find(t, false);
-    return assemble(t, marks, brokenEscape(t.slice(0, Math.max(0, t.length - this.tail))));
+    return assemble(t, marks, brokenEscapes(t.slice(0, Math.max(0, t.length - this.tail))));
   }
 
   head(t: string, max: number): string {
@@ -418,10 +438,14 @@ class Scrubbing implements Scrubber {
           left.cut = true;
           break;
         }
-        const key =
-          left && k.length > left.chars ? ((left.cut = true), this.head(k, left.chars)) : this.text(k);
+        // A key the budget would cut, or that uses it up, leaves its entry out: a cut key could lose the
+        // name that marks its value secret, and a value under it with no budget left would pass whole.
+        if (left && k.length + 1 >= left.chars) {
+          left.cut = true;
+          break;
+        }
         spend(k.length + 1);
-        out[key] = this.walk((v as Record<string, unknown>)[k], depth + 1, left);
+        out[this.text(k)] = this.walk((v as Record<string, unknown>)[k], depth + 1, left);
       }
       return out;
     }
@@ -430,35 +454,13 @@ class Scrubbing implements Scrubber {
   }
 }
 
-// Scrubbers kept by their set of credentials: a connection's calls share one, and the automaton is built
-// once. At most CACHE_NODES automaton nodes are kept together (about 20 bytes each), the oldest dropped first.
-const CACHE_NODES = 1_000_000;
-const cache = new Map<string, Scrubbing>();
-let cachedNodes = 0;
-
-/** A scrubber for these credentials: the ones set and long enough to tell from ordinary text. */
+/**
+ * A scrubber for these credentials: the ones set and long enough to tell from ordinary text. Built for each
+ * call and dropped with it: nothing of a credential outlives the call that used it.
+ */
 export function scrubber(secrets: readonly (string | null | undefined)[]): Scrubber {
-  const needles = [...new Set(secrets.filter((s): s is string => !!s && s.length >= SCRUB_MIN_CHARS))].sort();
-  if (!needles.length) return new Scrubbing([], null);
-  const key = needles.join("\u0000");
-  const kept = cache.get(key);
-  if (kept) {
-    cache.delete(key);
-    cache.set(key, kept);
-    return kept;
-  }
-  const automaton = new Automaton(needles);
-  const made = new Scrubbing(needles, automaton);
-  if (automaton.nodes <= CACHE_NODES) {
-    cache.set(key, made);
-    cachedNodes += automaton.nodes;
-    for (const [k, s] of cache) {
-      if (cachedNodes <= CACHE_NODES) break;
-      cache.delete(k);
-      cachedNodes -= s.automaton?.nodes ?? 0;
-    }
-  }
-  return made;
+  const needles = [...new Set(secrets.filter((s): s is string => !!s && s.length >= SCRUB_MIN_CHARS))];
+  return new Scrubbing(needles, needles.length ? new Automaton(needles) : null);
 }
 
 /** One text, once: scrubber(secrets).text(text). */

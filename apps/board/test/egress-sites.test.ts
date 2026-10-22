@@ -317,14 +317,25 @@ describe("a company's MCP server over HTTP", () => {
         : null;
       const json = (status: number, payload: unknown) =>
         new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
+      // Text with a run of 256 backslashes, so every level is read, the credential echoed beside it.
+      const run = `${echoed} ${"\\".repeat(256)}x and some plain words between the runs `;
       if (body?.method === "tools/list") {
         const [first, ...rest] = listed.result.tools;
-        const tools = [{ ...first, description: echoed }, ...rest];
+        // At /mcp-wide, a page of 1,801 tools: the first with a name and a description of a megabyte each.
+        const wide = String(input instanceof Request ? input.url : input).endsWith("/mcp-wide");
+        const tools = wide
+          ? [
+              { ...first, name: run.repeat(2800), description: run.repeat(2800) },
+              ...Array.from({ length: 1800 }, (_, i) => ({ ...first, name: `t${i}`, description: run })),
+            ]
+          : [{ ...first, description: echoed }, ...rest];
         return json(200, { ...listed, id: body.id, result: { ...listed.result, tools } });
       }
       if (body?.method !== "tools/call") return transport(input, init);
-      // A server error whose body the SDK repeats in its own words.
+      // A server error whose body the SDK repeats in its own words, short or of 3.6 MB.
       if (body.params?.name === "broken") return json(500, { error: echoed });
+      if (body.params?.name === "broken-huge")
+        return json(500, { error: run.repeat(Math.ceil(3_600_000 / run.length)) });
       // The recorded error answer's shape, its text and any structured content written in as JSON text: Node
       // 22's JSON.stringify would overflow its stack on the 100,000 levels below.
       const tool = body.params?.name;
@@ -336,7 +347,7 @@ describe("a company's MCP server over HTTP", () => {
             result: {
               ...error.result,
               content: [{ type: "text", text: "@T" }],
-              isError: tool === "failing",
+              isError: tool === "failing" || tool === "huge-error",
               ...(structured === null ? {} : { structuredContent: { nested: "@S" } }),
             },
           })
@@ -346,7 +357,14 @@ describe("a company's MCP server over HTTP", () => {
         );
       // Structured content past what a teammate reads, nested past what the broker keeps; and 7 MB of text or
       // of structured content, the credential echoed all through it beside chains of escapes.
-      const chain = `${echoed} ${"\\".repeat(256)}x and some plain words between the runs `;
+      const chain = run;
+      const mb = (n: number) => chain.repeat(Math.ceil((n * 1_000_000) / chain.length));
+      // One string of 3.6 MB as a value, one as a key, one as a tool's error; and JSON as text, its numbers
+      // holding a credential of digits.
+      if (tool === "huge-leaf") return shaped(JSON.stringify(echoed), JSON.stringify(mb(3.6)));
+      if (tool === "huge-key") return shaped(JSON.stringify(echoed), JSON.stringify({ [mb(3.6)]: 1 }));
+      if (tool === "huge-error") return shaped(JSON.stringify(mb(3.6)), null);
+      if (tool === "digits") return shaped(JSON.stringify('{"id":90012345678,"pin":12345678,"n":7}'), null);
       if (tool === "large")
         return shaped(
           JSON.stringify(echoed),
@@ -388,13 +406,43 @@ describe("a company's MCP server over HTTP", () => {
     expect(deep).toBe("[depth]");
     // 3.6 MB of either, a run of 256 backslashes all through it so every level is read, is cut before it is
     // scrubbed: what the server sent does not set the work. Scrubbing all of it reads 14 million characters.
-    for (const tool of ["huge-text", "huge-structured"]) {
+    // So is one string of 3.6 MB as a value, as a key, or as an error, the tool's or one the SDK words from a
+    // server's body.
+    for (const tool of [
+      "huge-text",
+      "huge-structured",
+      "huge-leaf",
+      "huge-key",
+      "huge-error",
+      "broken-huge",
+    ]) {
       const before = scrubbedChars();
-      const huge = (await call(tool)) as { ok: true; result: unknown };
+      const huge = (await call(tool)) as { ok: boolean; result?: unknown };
       expect(scrubbedChars() - before, tool).toBeLessThan(3_000_000);
-      expect(huge.ok, tool).toBe(true);
+      expect(huge.ok, tool).toBe(!["huge-error", "broken-huge"].includes(tool));
       expect(JSON.stringify(huge), tool).not.toMatch(/AbC|dEf|GhI/);
     }
+    // A key the budget cannot hold leaves its entry out, rather than lose the name that marks it secret.
+    expect(((await call("huge-key")) as { result: unknown }).result).toEqual({
+      truncated: true,
+      value: { nested: {} },
+    });
+    // A tools page of 1,801, the first with fields of a megabyte: a thousand read, each field to 2,000.
+    const before = scrubbedChars();
+    const wide = await discoverTools({ ...target, url: "https://mcp.echo.test/mcp-wide" }, deps);
+    expect(scrubbedChars() - before).toBeLessThan(4_000_000);
+    expect(wide).toHaveLength(1000);
+    expect(wide[0]!.description.length).toBeLessThanOrEqual(2000);
+    expect(JSON.stringify(wide)).not.toMatch(/AbC|dEf|GhI/);
+    // JSON as text is read as a value first: a number holding the credential of digits, or equal to it with
+    // its leading zeros gone, goes; scrubbing the text first broke the JSON and kept the second.
+    const pin = await callMcpTool(
+      { ...target, authEnvName: "PIN_TOKEN" },
+      { ...deps, env: { PIN_TOKEN: "0012345678" } },
+      "digits",
+      {},
+    );
+    expect(pin).toEqual({ ok: true, result: { id: "[redacted]", pin: "[redacted]", n: 7 } });
     expect(((await call("huge-text")) as { result: string }).result.length).toBeLessThanOrEqual(200_000);
     const broken = await call("broken");
     expect(broken.ok).toBe(false);
