@@ -56,7 +56,13 @@ beforeAll(async () => {
       notifyFetch: webhook,
       env,
       smtp: { tls: { ca: SMTP_CERT } },
-      egressResolve: async (host) => (host === "localhost" ? ["127.0.0.1"] : [PUBLIC_TEST_ADDRESS]),
+      // Webhooks go to the recording fetch; a name nothing here should reach does not resolve, so a socket
+      // is never handed a real address.
+      egressResolve: async (host) => {
+        if (host === "localhost") return ["127.0.0.1"];
+        if (host.startsWith("hooks.")) return [PUBLIC_TEST_ADDRESS];
+        throw Object.assign(new Error(`${host} is not in this test`), { code: "ENOTFOUND" });
+      },
     },
   );
 });
@@ -246,6 +252,24 @@ describe("needs-you notifications", () => {
 });
 
 describe("needs-you by email", () => {
+  it("does not repeat what another service says when an SMTP URL points at it", async () => {
+    const ssh = createServer((s) => {
+      s.on("error", () => {});
+      s.end("SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.5\r\n");
+    });
+    await new Promise<void>((r) => ssh.listen(0, "127.0.0.1", r));
+    try {
+      const err = await sendMail(
+        `smtp://127.0.0.1:${(ssh.address() as AddressInfo).port}/`,
+        { from: "board@example.test", to: ["ops@example.test"], subject: "s", text: "t" },
+        { timeoutMs: 2000 },
+      ).catch((e: Error) => e);
+      expect((err as Error).message).toBe("the server answered with something that is not an SMTP reply");
+    } finally {
+      await new Promise((r) => ssh.close(r));
+    }
+  });
+
   it("gives up at the deadline in a TLS handshake or after STARTTLS, and closes its side", async () => {
     // One server takes the connection and says nothing; the other agrees to STARTTLS, then says nothing.
     const held: Socket[] = [];

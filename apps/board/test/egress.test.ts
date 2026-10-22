@@ -8,6 +8,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { discoverTools } from "../src/mcp/client.js";
@@ -18,10 +19,13 @@ import {
   RefusedAddress,
   refuseDestination,
 } from "../src/web/address.js";
-import { boardEgress, egressFetch } from "../src/web/egress.js";
+import { boardEgress, egressFetch, egressSocket, readCapped, type Egress } from "../src/web/egress.js";
+import { pinnedFetch } from "../src/web/transport.js";
 import { PUBLIC_TEST_ADDRESS, testEgress } from "./helpers.js";
 
 const NOT_ALLOWED = "which this board's operator has not allowed";
+/** The cap where a test is not about the cap. */
+const MB = 1024 * 1024;
 
 describe("the private destinations an operator allows", () => {
   it("reads names, names under a domain, addresses and ranges, and stops the board on anything else", () => {
@@ -153,7 +157,11 @@ const resolve = async (host: string) => names[host] ?? [PUBLIC_TEST_ADDRESS];
 describe("a company's destination through the egress", () => {
   it("refuses a private address before anything is sent: in the URL, or behind a name", async () => {
     const t = transport();
-    const f = egressFetch(testEgress(t.fetch, { resolve }), { redirect: "error", timeoutMs: 2000 });
+    const f = egressFetch(testEgress(t.fetch, { resolve }), {
+      redirect: "error",
+      timeoutMs: 2000,
+      maxBytes: MB,
+    });
     await expect(f("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(
       `refused: 169.254.169.254 is a link-local address, where cloud metadata lives, ${NOT_ALLOWED}`,
     );
@@ -185,6 +193,7 @@ describe("a company's destination through the egress", () => {
     const f = egressFetch(testEgress(t.fetch, { resolve, allow: "localhost,10.0.0.5" }), {
       redirect: "error",
       timeoutMs: 2000,
+      maxBytes: MB,
     });
     expect((await f("http://localhost:3001/mcp")).status).toBe(200);
     expect((await f("https://intranet.example.com/mcp")).status).toBe(200);
@@ -210,7 +219,11 @@ describe("a company's destination through the egress", () => {
       ),
       "https://auth.example.com/b": moved(301, "https://internal.example.com/c"),
     });
-    const follow = egressFetch(testEgress(t.fetch, { resolve }), { redirect: "follow", timeoutMs: 2000 });
+    const follow = egressFetch(testEgress(t.fetch, { resolve }), {
+      redirect: "follow",
+      timeoutMs: 2000,
+      maxBytes: MB,
+    });
     await expect(follow("https://auth.example.com/.well-known/oauth-authorization-server")).rejects.toThrow(
       `refused: 169.254.169.254 is a link-local address, where cloud metadata lives, ${NOT_ALLOWED}`,
     );
@@ -229,7 +242,11 @@ describe("a company's destination through the egress", () => {
       "https://a.example.com/x": moved(307, "https://b.example.com/y"),
       "https://a.example.com/loop": moved(302, "/loop"),
     });
-    const follow = egressFetch(testEgress(t.fetch, { resolve }), { redirect: "follow", timeoutMs: 2000 });
+    const follow = egressFetch(testEgress(t.fetch, { resolve }), {
+      redirect: "follow",
+      timeoutMs: 2000,
+      maxBytes: MB,
+    });
     const auth = { authorization: "Bearer a-token-000000", "content-type": "application/json" };
     expect(
       (await follow("https://a.example.com/token", { method: "POST", headers: auth, body: "{}" })).status,
@@ -247,24 +264,102 @@ describe("a company's destination through the egress", () => {
     expect(t.calls).toHaveLength(4);
   });
 
-  it("refuses a redirect where the call site says so, naming no more than the host, and hands one back where it asks", async () => {
+  it("refuses a redirect where the call site says so, naming the server and never the path, and hands one back where it asks", async () => {
     const hook = "https://hooks.example.com/services/T0/B0/secret-token-000";
     const t = transport({
-      [hook]: moved(307, "https://other.example.com/services/T0/B0/secret-token-000?token=abc"),
+      [hook]: moved(307, "https://other.example.com:8443/services/T0/B0/secret-token-000?token=abc"),
       "https://mcp.example.com/mcp": moved(308, "https://mcp.example.com/mcp/"),
+      "https://files.example.com/": moved(302, "file:///etc/passwd"),
     });
     const egress = testEgress(t.fetch, { resolve });
-    const refuse = egressFetch(egress, { redirect: "error", timeoutMs: 2000 });
+    const refuse = egressFetch(egress, { redirect: "error", timeoutMs: 2000, maxBytes: MB });
     const err = await refuse(hook, { method: "POST", body: "{}" }).catch((e: Error) => e);
     expect((err as Error).message).toBe(
-      "hooks.example.com answered 307, a redirect to other.example.com, which the board does not follow here: use the address it points to",
+      "hooks.example.com answered 307, a redirect to https://other.example.com:8443, which the board does not follow here: use the address it points to",
     );
     await expect(refuse("https://mcp.example.com/mcp", { method: "POST", body: "{}" })).rejects.toThrow(
-      "mcp.example.com answered 308, a redirect to another address on the same host, which the board does not follow here",
+      "mcp.example.com answered 308, a redirect to another address on the same server, which the board does not follow here",
     );
-    const handed = await egressFetch(egress, { redirect: "manual", timeoutMs: 2000 })(hook);
+    await expect(refuse("https://files.example.com/")).rejects.toThrow(
+      "files.example.com answered 302, a redirect to a file URL, which the board does not follow here",
+    );
+    const handed = await egressFetch(egress, { redirect: "manual", timeoutMs: 2000, maxBytes: MB })(hook);
     expect(handed.status).toBe(307);
-    expect(t.calls.map((c) => c.url)).toEqual([hook, "https://mcp.example.com/mcp", hook]);
+    expect(t.calls.map((c) => c.url)).toEqual([
+      hook,
+      "https://mcp.example.com/mcp",
+      "https://files.example.com/",
+      hook,
+    ]);
+  });
+
+  it("follows a redirect on the server's own origin with the credential kept, and refuses one that leaves it", async () => {
+    const t = transport({
+      "https://mcp.example.com/mcp": moved(308, "/mcp/"),
+      "http://plain.example.com/mcp": moved(301, "https://plain.example.com/mcp"),
+      "https://away.example.com/mcp": moved(307, "https://elsewhere.example.com/mcp"),
+      "https://away.example.com/port": moved(307, "https://away.example.com:8443/mcp"),
+    });
+    const same = egressFetch(testEgress(t.fetch, { resolve }), {
+      redirect: "same-origin",
+      timeoutMs: 2000,
+      maxBytes: MB,
+    });
+    const bearer = { authorization: "Bearer a-token-000000", "content-type": "application/json" };
+    expect(
+      (await same("https://mcp.example.com/mcp", { method: "POST", headers: bearer, body: "{}" })).status,
+    ).toBe(200);
+    expect(t.calls[1]).toMatchObject({ url: "https://mcp.example.com/mcp/", method: "POST", body: "{}" });
+    expect(t.calls[1]!.headers.get("authorization")).toBe("Bearer a-token-000000");
+    // The same host moving from http to https keeps it too.
+    await same("http://plain.example.com/mcp", { headers: bearer });
+    expect(t.calls[3]!.url).toBe("https://plain.example.com/mcp");
+    expect(t.calls[3]!.headers.get("authorization")).toBe("Bearer a-token-000000");
+    await expect(same("https://away.example.com/mcp", { headers: bearer })).rejects.toThrow(
+      "away.example.com answered 307, a redirect to https://elsewhere.example.com, which the board does not follow here",
+    );
+    await expect(same("https://away.example.com/port", { headers: bearer })).rejects.toThrow(
+      "a redirect to https://away.example.com:8443,",
+    );
+    expect(t.calls).toHaveLength(6);
+    // Where a call site follows any redirect, a hop to another origin keeps no header that could be a credential.
+    const follow = egressFetch(testEgress(t.fetch, { resolve }), {
+      redirect: "follow",
+      timeoutMs: 2000,
+      maxBytes: MB,
+    });
+    await follow("https://away.example.com/mcp", {
+      headers: { accept: "application/json", "x-api-key": "a-key-000000", "private-token": "a-token-000000" },
+    });
+    const hop = t.calls.at(-1)!;
+    expect(hop.url).toBe("https://elsewhere.example.com/mcp");
+    expect([...hop.headers.keys()]).toEqual(["accept"]);
+  });
+
+  it("reads no more of an answer than the call site's cap, decoded", async () => {
+    const big = (bytes: number) => () => new Response(new Uint8Array(bytes).fill(97), { status: 200 });
+    const t = transport({
+      "https://big.example.com/": big(300_000),
+      "https://small.example.com/": big(1000),
+    });
+    const f = egressFetch(testEgress(t.fetch, { resolve }), {
+      redirect: "error",
+      timeoutMs: 2000,
+      maxBytes: 100_000,
+    });
+    await expect((await f("https://big.example.com/")).text()).rejects.toThrow(
+      "big.example.com answered more than 98 KB; the board read no further",
+    );
+    expect((await (await f("https://small.example.com/")).text()).length).toBe(1000);
+    // A caller that keeps the start of a longer answer: the cap, and that there was more.
+    const g = egressFetch(testEgress(t.fetch, { resolve }), {
+      redirect: "error",
+      timeoutMs: 2000,
+      maxBytes: 5001,
+    });
+    expect(await readCapped(await g("https://big.example.com/"), 5000)).toMatchObject({ cut: true });
+    expect((await readCapped(await g("https://big.example.com/"), 5000)).bytes.byteLength).toBe(5000);
+    expect(await readCapped(await g("https://small.example.com/"), 5000)).toMatchObject({ cut: false });
   });
 
   it("gives up at the deadline, a name that never resolves included, and leaves a stream open once its headers are in", async () => {
@@ -291,7 +386,7 @@ describe("a company's destination through the egress", () => {
         { status: 200 },
       )) as typeof fetch;
     const never = async () => new Promise<string[]>(() => {});
-    const opts = { redirect: "error", timeoutMs: 1000 } as const;
+    const opts = { redirect: "error", timeoutMs: 1000, maxBytes: MB } as const;
     const [slowDns, slowServer, streamed, whole] = await Promise.allSettled([
       egressFetch(testEgress(hang, { resolve: never }), opts)("https://slow-dns.example.com/"),
       egressFetch(testEgress(hang, { resolve }), opts)("https://slow.example.com/"),
@@ -338,6 +433,15 @@ describe("the pinned transport for a company's destinations", () => {
               body,
             }),
           );
+        } else if (req.url === "/bomb") {
+          // 20 MB of zeros, sent as some 20 KB of gzip.
+          const packed = gzipSync(Buffer.alloc(20 * 1024 * 1024));
+          res.writeHead(200, {
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+            "content-length": String(packed.length),
+          });
+          res.end(packed);
         } else if (req.url === "/events") {
           // One event now, the next only when the test says: a transport that waited for the end would hang.
           res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
@@ -362,7 +466,11 @@ describe("the pinned transport for a company's destinations", () => {
   const toServer = async () => ["127.0.0.1"];
 
   it("sends a body whole to an address the operator lists, and refuses at the socket what the check would refuse", async () => {
-    const allowed = egressFetch(boardEgress(loopback, toServer), { redirect: "error", timeoutMs: 5000 });
+    const allowed = egressFetch(boardEgress(loopback, toServer), {
+      redirect: "error",
+      timeoutMs: 5000,
+      maxBytes: MB,
+    });
     const echo = await allowed(`http://echo.test:${port}/echo`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -400,16 +508,24 @@ describe("the pinned transport for a company's destinations", () => {
     seen.length = 0;
     // Nothing listed: the check refuses before anything is sent.
     await expect(
-      egressFetch(boardEgress(NO_PRIVATE_DESTINATIONS, toServer), { redirect: "error", timeoutMs: 5000 })(
-        `http://echo.test:${port}/echo`,
-      ),
+      egressFetch(boardEgress(NO_PRIVATE_DESTINATIONS, toServer), {
+        redirect: "error",
+        timeoutMs: 5000,
+        maxBytes: MB,
+      })(`http://echo.test:${port}/echo`),
     ).rejects.toThrow(`refused: echo.test resolves to a loopback address, ${NOT_ALLOWED}`);
     // A name that answers the check with a public address and the socket with this one (DNS rebinding): the
     // socket connects only to what its own lookup admitted, so nothing reaches the server.
-    let asked = 0;
-    const rebinding = async () => (asked++ === 0 ? [PUBLIC_TEST_ADDRESS] : ["127.0.0.1"]);
+    // The check is asked through one resolver and the socket through another, so the socket is never handed
+    // the public answer: were the order ever to change, the test fails instead of connecting out.
+    const socket = egressSocket({ resolve: toServer, allow: NO_PRIVATE_DESTINATIONS });
+    const rebinding: Egress = {
+      fetch: pinnedFetch(socket.lookup, { literal: socket.literal }),
+      resolve: async () => [PUBLIC_TEST_ADDRESS],
+      allow: NO_PRIVATE_DESTINATIONS,
+    };
     await expect(
-      egressFetch(boardEgress(NO_PRIVATE_DESTINATIONS, rebinding), { redirect: "error", timeoutMs: 5000 })(
+      egressFetch(rebinding, { redirect: "error", timeoutMs: 5000, maxBytes: MB })(
         `http://rebind.test:${port}/echo`,
       ),
     ).rejects.toThrow(`refused: rebind.test resolves to a loopback address, ${NOT_ALLOWED}`);
@@ -420,10 +536,23 @@ describe("the pinned transport for a company's destinations", () => {
     expect(seen).toEqual([]);
   });
 
+  it("decodes a compressed answer only as far as the cap, and says the length and encoding no longer hold", async () => {
+    const f = egressFetch(boardEgress(loopback, toServer), {
+      redirect: "error",
+      timeoutMs: 5000,
+      maxBytes: MB,
+    });
+    const res = await f(`http://bomb.test:${port}/bomb`);
+    expect(res.headers.get("content-encoding")).toBeNull();
+    expect(res.headers.get("content-length")).toBeNull();
+    await expect(res.arrayBuffer()).rejects.toThrow("bomb.test:" + port + " answered more than 1 MB");
+  });
+
   it("streams an event stream as it arrives, past the deadline once its headers are in", async () => {
     const f = egressFetch(boardEgress(loopback, toServer), {
       redirect: "error",
       timeoutMs: 300,
+      maxBytes: MB,
       stream: true,
     });
     const res = await f(`http://events.test:${port}/events`, { headers: { accept: "text/event-stream" } });
@@ -465,11 +594,11 @@ describe("the pinned transport for a company's destinations", () => {
 });
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "mcp");
-const recorded = (name: string) =>
+const fixture = (name: string) =>
   JSON.parse(readFileSync(path.join(fixtures, name), "utf8")) as { result: Record<string, unknown> };
 
 /**
- * The recorded MCP answers (fixtures/mcp) over streamable HTTP, each as an event stream; the answer to
+ * The MCP fixtures (fixtures/mcp, written from the spec) over streamable HTTP, each as an event stream; the answer to
  * tools/list is never ended, so a client gets it only if the transport hands the stream on as it arrives.
  */
 function mcpServer(method: string, raw: string, res: http.ServerResponse): void {
@@ -486,9 +615,9 @@ function mcpServer(method: string, raw: string, res: http.ServerResponse): void 
   }
   const result =
     msg.method === "initialize"
-      ? recorded("initialize.json").result
+      ? fixture("initialize.json").result
       : msg.method === "tools/list"
-        ? recorded("tools-list.json").result
+        ? fixture("tools-list.json").result
         : {};
   res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
   res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result })}\n\n`);

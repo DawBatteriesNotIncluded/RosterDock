@@ -18,7 +18,7 @@ import {
 } from "@rosterdock/shared";
 import YAML from "yaml";
 import { notSetForCompany } from "../secrets/company.js";
-import { defaultEgress, egressFetch, type Egress } from "../web/egress.js";
+import { defaultEgress, egressFetch, readCapped, type Egress } from "../web/egress.js";
 import type { McpCallOutcome } from "./client.js";
 
 export type OpenApiManifest = OpenApiManifestInput;
@@ -214,6 +214,9 @@ export interface OpenApiTarget {
   authEnvName?: string | null;
 }
 
+/** A check reads no body; this bounds what is pulled before the body is dropped. */
+const PROBE_MAX_BYTES = 64 * 1024;
+
 export interface OpenApiDeps {
   /** How the service is reached (web/egress.ts); tests inject its transport and resolver. Default: the board's own. */
   egress?: Egress;
@@ -286,6 +289,7 @@ export async function probeOpenApi(
   const doFetch = egressFetch(deps.egress ?? defaultEgress(), {
     redirect: "manual",
     timeoutMs: manifest.timeoutMs,
+    maxBytes: PROBE_MAX_BYTES,
   });
   try {
     const response = await doFetch(target.url, {
@@ -293,6 +297,8 @@ export async function probeOpenApi(
       headers,
       signal: AbortSignal.timeout(manifest.timeoutMs),
     });
+    // The status says it all; the body is never read.
+    await response.body?.cancel().catch(() => {});
     if (response.status === 401 || response.status === 403)
       return {
         ok: false,
@@ -354,6 +360,7 @@ export async function callOpenApiOperation(
   const doFetch = egressFetch(deps.egress ?? defaultEgress(), {
     redirect: "error",
     timeoutMs: manifest.timeoutMs,
+    maxBytes: manifest.maxResponseBytes + 1,
   });
   let response: Response;
   try {
@@ -371,18 +378,24 @@ export async function callOpenApiOperation(
   }
   if (!response.ok) {
     // Error bodies never travel: the status line only.
+    await response.body?.cancel().catch(() => {});
     return {
       ok: false,
       error: `${name} answered HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`,
     };
   }
-  let text = await response.text();
-  let truncated = false;
-  if (Buffer.byteLength(text, "utf8") > manifest.maxResponseBytes) {
-    text = text.slice(0, manifest.maxResponseBytes);
-    truncated = true;
+  // Read up to the cap and no further, decoded: what a server compresses never grows past it in memory.
+  let read: Awaited<ReturnType<typeof readCapped>>;
+  try {
+    read = await readCapped(response, manifest.maxResponseBytes);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `${name} could not be read: ${scrub((err as Error).message, secret).slice(0, 200)}`,
+    };
   }
-  text = scrub(text, secret);
+  const truncated = read.cut;
+  const text = scrub(Buffer.from(read.bytes).toString("utf8"), secret);
   let result: unknown = text;
   if (!truncated) {
     try {

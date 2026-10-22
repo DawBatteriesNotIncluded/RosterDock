@@ -181,7 +181,8 @@ class Session {
     for (;;) {
       const l = await this.line();
       const m = /^(\d{3})([ -]?)(.*)$/.exec(l);
-      if (!m) throw new SmtpError(`the server sent something that is not a reply: ${l.slice(0, 80)}`);
+      // Not quoted: a company could point its SMTP URL at another service and read its banner here.
+      if (!m) throw new SmtpError("the server answered with something that is not an SMTP reply");
       lines.push(m[3]!);
       if (m[2] !== "-") return { code: Number(m[1]), lines };
     }

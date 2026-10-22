@@ -313,22 +313,38 @@ their own, each with its own database and workers.
   its authorization server's metadata, registration, the code exchange and every refresh), and the
   company's own webhook and SMTP server from Settings. A style pack's download, from RosterDock's own
   catalog, goes the same way.
-- **The rule.** http and https only, no credentials in the URL. An address written in the URL is checked as
-  it is; a name is resolved and every address it gets is checked, and one address the board may not reach
-  refuses the name whole. Loopback, private, link-local (where cloud metadata lives), unique-local, shared
-  (carrier-grade NAT) and the other special-purpose ranges are refused, an IPv4 written as IPv6 by its
-  IPv4, as for the web connection (Reading the web, below). The board connects only to the addresses its
+- **The rule.** A connection, its OAuth and a webhook are http or https, with no credentials in the URL; an
+  SMTP server's `smtp://` or `smtps://` URL carries its credentials by design. An address written in the URL
+  is checked as it is, so a public one is reached (the web connection, unlike this, refuses every written
+  address). A name is resolved and every address it gets is checked, and one address the board may not
+  reach refuses the name whole. Loopback, private, link-local (where cloud metadata lives), unique-local,
+  shared (carrier-grade NAT) and the other special-purpose ranges are refused, an IPv4 written as IPv6 by
+  its IPv4, as for the web connection (Reading the web, below). The board connects only to the addresses its
   own lookup admitted, so a name cannot pass the check with one address and send the connection to
   another; the SMTP connection's socket takes the same lookup. The board sets the Host header and the
   body's framing itself, so no header a company names (a credential header called Host) reaches another
   server behind a shared ingress. A refusal reads "refused: ... which this board's operator has not
   allowed" on the connection's check, in Activity and in the call's result, and names the kind of address
-  a name resolves to, never the address.
-- **Redirects.** An MCP server, an OpenAPI operation, a webhook, OAuth registration and the token requests
-  follow none: the credential and the call go to the URL the company gave, or nowhere, and the error names
-  the host it pointed to (no more, since a path may carry a token). An OpenAPI connection's check takes a
-  redirect as its answer and follows nothing. OAuth discovery and a style pack's download follow three at
-  most, every hop checked again, and a hop that leaves the origin loses the credential headers.
+  a name resolves to, never the address. An SMTP server's errors quote only what is shaped like an SMTP
+  reply, so another service's banner is never repeated.
+- **OAuth's endpoints.** The authorization server an MCP server names, and the authorization, token and
+  registration endpoints that server's metadata names, must be https, or plain http to a destination the
+  operator lists (a server on this machine in development); a script or data URL never reaches a person's
+  browser, and the web checks the consent page's scheme again before it goes there. The resource an MCP
+  server declares must be on its own origin, so it cannot have the board ask for another service's token.
+- **Redirects.** An MCP server is followed within its own server (`/mcp` to `/mcp/`, or http to https on
+  the same host), its credential kept and every hop checked again, and refused when it points to another
+  server. An OpenAPI operation, a webhook, OAuth registration and the token requests follow none: the
+  credential and the call go to the URL the company gave, or nowhere. A refusal names the server it pointed
+  to (scheme, host and port), or the kind of URL, never a path, which may carry a token. An OpenAPI
+  connection's check takes a redirect as its answer and follows nothing. OAuth discovery and a style pack's
+  download follow three at most, every hop checked again, and a hop to another origin keeps only the
+  headers that say what is wanted (no credential, whatever it is called).
+- **Size.** The board reads no more of an answer than its call site's cap, decoded, so a small compressed
+  body cannot fill the board's memory: an MCP answer 8 MB (an event stream counts every event on it),
+  OAuth metadata and token answers 256 KB, an OpenAPI operation its manifest's response cap (the answer is
+  cut there and read no further), a style pack 256 KB. A webhook's answer and an OpenAPI check's body are
+  never read.
 - **Time.** One deadline per request, looking names up included: an MCP request's is the call's timeout
   (30 seconds) up to the answer's headers, after which an event stream stays open until the call ends;
   an OpenAPI operation takes its manifest's timeout, OAuth 15 seconds, a webhook 15, and an SMTP exchange
@@ -336,8 +352,13 @@ their own, each with its own database and workers.
   seconds.
 - **The operator's list.** `ROSTERDOCK_PRIVATE_DESTINATIONS` (chart `board.privateDestinations`) names the
   private destinations companies may use: host names (`*.tools.svc.cluster.local` for the names under
-  one), addresses and ranges (`10.20.0.0/16`). A listed name is trusted with whatever it resolves to, so
-  list names whose DNS you control; a listed address or range is reached whatever name led to it. Every
+  one), addresses and ranges (`10.20.0.0/16`). A name is matched as the connection's URL writes it, without
+  search domains. A listed address or range is reached whatever name led to it; a listed name is trusted
+  with whatever it resolves to, so list only names whose DNS you control. Not a wildcard over the cluster's
+  domain: cluster DNS answers `a-b-c-d.<namespace>.pod.cluster.local` with the address a.b.c.d (CoreDNS's
+  `pods insecure`, the kubeadm, kind and EKS default), so `*.cluster.local` or `*.pod.cluster.local` hands
+  every company `169-254-169-254.default.pod.cluster.local`, the cloud's metadata; and an ExternalName
+  service is a CNAME to anywhere. List each service, or a namespace only you create services in. Every
   company on the board may use what is listed. Unset, nothing private is: the board refuses to start on an
   entry it cannot read rather than guess. `apps/board/.env.example` lists loopback for development only.
 - **What is not checked.** What the operator configures: the git hosts' APIs, the OIDC provider, the OTLP
@@ -346,9 +367,13 @@ their own, each with its own database and workers.
   internal on purpose, and no company can change them. A stdio server (the operator's commands) and the
   worker's git clones are outside the board's check too (Workers run model output, above, and Reading the
   web, below).
-- An address is judged by its range alone: where a cluster gives pods or services globally routable IPv6
-  addresses, or translates through a NAT64 prefix of its own, those look public to the board. Narrow
-  `networkPolicy.board.egressTo` too; the check is the board's, the network policy is the cluster's.
+- **What the check cannot see.** An address is judged by its range alone, so these look public to the board
+  and pass: pod or service IPv6 that is globally routable; a NAT64 prefix of the cluster's own; IPv4 pod or
+  service ranges outside the private and shared ranges (GKE's privately used public IPs, an on-premises
+  cluster on squatted space); and public addresses that lead inside (Azure's platform endpoint
+  168.63.129.16, a node's public IP with a NodePort, the cluster's own load balancer). Narrow
+  `networkPolicy.board.egressTo` to keep companies from those: the check is the board's, the network policy
+  is the cluster's.
 
 ## Reading the web
 

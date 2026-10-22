@@ -32,7 +32,8 @@ import {
   ConnectionsPanel,
   connectionSummary,
   heldReads,
-  privateUnlisted,
+  consentUrl,
+  privateFlag,
   stdioListed,
 } from "../src/views/ConnectionsPanel.tsx";
 import { ConnectionGrant } from "../src/views/ToolboxEditor.tsx";
@@ -787,32 +788,75 @@ describe("views render with sample data", () => {
     ).not.toContain("which the operator must allow");
   });
 
-  it("says before the board's check does that a URL looks private and the operator lists it nowhere", () => {
-    const listed = ["*.tools.svc.cluster.local", "10.20.0.0/16", "127.0.0.1", "ollama.internal", "[::1]"];
+  it("says before the board's check does what it refuses, by the board's own rules", () => {
+    const listed = [
+      "*.tools.svc.cluster.local",
+      "10.20.0.0/16",
+      "127.0.0.1",
+      "ollama.internal.",
+      "[::1]",
+      "fd00::/8",
+      "::ffff:192.168.7.0/120",
+    ];
+    // An address the board refuses, whatever form the URL writes it in.
+    for (const url of [
+      "http://169.254.169.254/latest",
+      "http://10.21.0.1/mcp",
+      "http://127.0.0.2/mcp",
+      "http://[fc00::1]/mcp",
+      "http://[::ffff:169.254.169.254]/latest",
+      "http://[64:ff9b::a9fe:a9fe]/latest",
+      "http://[2002:a9fe:a9fe::1]/",
+      "http://0x7f.0.0.2/",
+      "http://2130706434/",
+      "http://198.18.0.1/",
+      "http://[fe80::1]/",
+    ])
+      expect(privateFlag(url, listed), url).toBe("refused");
+    // A name that looks private and no entry names: refused only if it resolves outside the listed ranges.
     for (const url of [
       "http://localhost:3001/mcp",
       "http://playwright-mcp:8931/mcp",
       "https://n8n.office.lan/mcp",
       "http://other.ns.svc.cluster.local/mcp",
-      "http://169.254.169.254/latest",
-      "http://10.21.0.1/mcp",
-      "http://127.0.0.2/mcp",
-      "http://[fd00::1]/mcp",
       "http://tools.svc.cluster.local/mcp",
     ])
-      expect(privateUnlisted(url, listed), url).toBe(true);
+      expect(privateFlag(url, listed), url).toBe("unless-listed");
+    // Public, or listed: nothing to say.
     for (const url of [
       "https://mcp.hubspot.com/mcp",
       "http://8.8.8.8/",
       "http://playwright.tools.svc.cluster.local:8931/mcp",
+      "http://ollama.internal:11434/",
+      "http://ollama.internal.:11434/",
       "http://10.20.3.4/mcp",
       "http://127.0.0.1:3001/mcp",
       "http://[::1]:3001/mcp",
-      "http://ollama.internal:11434/",
+      "http://[0:0:0:0:0:0:0:1]/",
+      "http://[fd12::5]/mcp",
+      "http://[::ffff:10.20.0.9]/",
+      "http://192.168.7.9/",
       "not a url",
       "",
     ])
-      expect(privateUnlisted(url, listed), url).toBe(false);
+      expect(privateFlag(url, listed), url).toBeNull();
+    // Nothing listed: every private address is refused.
+    expect(privateFlag("http://127.0.0.1:3001/", [])).toBe("refused");
+  });
+
+  it("opens only a web page as a connection's consent page", () => {
+    expect(consentUrl("https://auth.example.test/authorize?state=1")).toBe(
+      "https://auth.example.test/authorize?state=1",
+    );
+    expect(consentUrl("http://localhost:9000/authorize")).toBe("http://localhost:9000/authorize");
+    for (const url of [
+      "javascript:alert(document.domain)//?x=1",
+      "data:text/html,hi",
+      "JAVASCRIPT:alert(1)",
+      " ",
+      "/relative",
+    ])
+      expect(() => consentUrl(url), url).toThrow("not a web page");
   });
 
   it("tools only the server calls read-only are listed on their connection for a person to confirm as reads", () => {

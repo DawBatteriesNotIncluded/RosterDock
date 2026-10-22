@@ -69,14 +69,20 @@ Against the images built from the pre-release tree (then called Pharo, not publi
   page loaded them from Google Fonts: an install without internet access shows them, and no page load sends
   a visitor's address to Google.
 - What a company chooses the board should reach (an MCP server or OpenAPI service, the OAuth endpoints its
-  server names, the company's own webhook and SMTP server) must be at a public address, checked as the web
-  connection's pages are, unless the operator lists it in `board.privateDestinations`
-  (`ROSTERDOCK_PRIVATE_DESTINATIONS`; empty by default). A connection at a cluster-internal or other private
-  address fails its check and its calls with "refused: … which this board's operator has not allowed" until
-  it is listed, and one whose server answers with a redirect fails and names where it pointed. The board's
-  own destinations (git hosts, OIDC, OTLP, the bucket, the API server, the model API, its webhook and SMTP
-  server) are not checked. Settings shows owners and admins the list and flags a URL that looks private and
-  is not on it. `docs/operator.md` (Private destinations) says what to list.
+  server names, the company's own webhook and SMTP server) must be at a public address, by the address
+  ranges the web connection refuses, unless the operator lists it in `board.privateDestinations`
+  (`ROSTERDOCK_PRIVATE_DESTINATIONS`; empty by default). A connection at a private address (loopback, the
+  private ranges, link-local and cloud metadata) fails its check and its calls with "refused: … which this
+  board's operator has not allowed" until it is listed. The check goes by address range: cluster addresses
+  outside the private ranges, and public addresses that lead inside, pass it, so the network policy still
+  matters (`docs/security.md`). An MCP server that redirects to another server, and an OpenAPI operation or a
+  webhook that answers with any redirect, fails and names the server it pointed to; an MCP server's
+  redirect within its own server is followed as before. An answer is read only up to its call site's cap,
+  decoded. OAuth endpoints must be https (http only to a listed destination), and the resource an MCP server
+  declares must be on its own origin. The board's own destinations (git hosts, OIDC, OTLP, the bucket, the
+  API server, the model API, its webhook and SMTP server) are not checked. Settings shows owners and admins
+  the list, and flags a URL whose address the board refuses or whose name looks private and is not listed.
+  `docs/operator.md` (Private destinations) says what to list.
 
 ### Renamed
 

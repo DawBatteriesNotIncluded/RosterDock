@@ -233,7 +233,7 @@ export const CONNECTOR_CATALOG: CatalogEntry[] = [
     category: WEB_CATEGORY,
     kind: "mcp",
     transport: "http",
-    urlExample: "http://playwright-mcp:8931/mcp",
+    urlExample: "http://playwright-mcp.tools.svc.cluster.local:8931/mcp",
     commandExample: "npx -y @playwright/mcp@0.0.83 --headless --isolated --browser chromium",
     docsUrl: "https://github.com/microsoft/playwright-mcp",
     reads: [

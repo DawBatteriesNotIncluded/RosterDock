@@ -31,6 +31,8 @@ import type { WebReader } from "../web/transport.js";
 
 export const MCP_CALL_TIMEOUT_MS = 30_000;
 export const MCP_RESULT_MAX_CHARS = 200_000;
+/** The most of one answer the board reads from an MCP server, decoded: a tools/list, a result, an event stream. */
+export const MCP_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
 
 export interface McpTarget {
   transport: "http" | "stdio";
@@ -248,14 +250,15 @@ function buildTransport(target: McpTarget, deps: McpClientDeps, secret: string |
       throw new McpTargetError(`${notSetForCompany(target.authEnvName)}; nothing was called`);
     if (target.oauth && !secret)
       throw new McpTargetError("the connection is not authorised; nothing was called");
-    // A redirect is refused, not followed: the bearer and the call go where the connection says, or nowhere.
-    // The answer may be an event stream, so the deadline stops at its headers and the call's own timeout and
-    // the client's close end the rest.
+    // A redirect is followed only on the server's own origin (/mcp to /mcp/, http to https), checked again:
+    // the bearer and the call never go to another server. The answer may be an event stream, so the deadline
+    // stops at its headers and the call's own timeout and the client's close end the rest.
     return new StreamableHTTPClientTransport(new URL(target.url), {
       fetch: egressFetch(deps.egress ?? defaultEgress(), {
-        redirect: "error",
+        redirect: "same-origin",
         timeoutMs: deps.timeoutMs ?? MCP_CALL_TIMEOUT_MS,
         stream: true,
+        maxBytes: MCP_ANSWER_MAX_BYTES,
       }),
       requestInit: secret ? { headers: { authorization: `Bearer ${secret}` } } : {},
     });

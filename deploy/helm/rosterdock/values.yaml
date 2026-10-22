@@ -111,13 +111,20 @@ board:
   fetchSources: true
   # The private destinations companies may make the board reach (ROSTERDOCK_PRIVATE_DESTINATIONS). What a
   # company chooses (an MCP server or OpenAPI service, the OAuth endpoints its server names, its own webhook
-  # and SMTP server) must be at a public address: loopback, private, link-local (where cloud metadata lives),
-  # the cluster's own and the other special ranges are refused, a name that resolves to one included, unless
-  # it is listed here. Host names ("*.tools.svc.cluster.local" for the names under one), addresses and ranges
-  # ("10.20.0.0/16"); a listed name is trusted with whatever it resolves to, so list names you control. What
-  # you configure yourself (the git hosts, OIDC, OTLP, the bucket, the API server, the model API, notifySecret
-  # and notifyEmail above) is not held to it. Empty: public addresses only.
-  #  - "playwright-mcp.tools.svc.cluster.local"
+  # and SMTP server) must be at a public address unless it is listed here: loopback, private, link-local
+  # (where cloud metadata lives) and the other special-purpose ranges are refused, a name that resolves to
+  # one included. The board judges an address by its range alone: cluster addresses outside those ranges
+  # (GKE's privately used public IPs, routable pod IPv6) and public addresses that lead inside (a node's
+  # NodePort, Azure's 168.63.129.16) pass it, so keep networkPolicy.board.egressTo narrow (docs/security.md).
+  # Entries: host names, matched as a connection's URL writes them ("*.tools.svc.cluster.local" for the
+  # names under one), addresses and ranges ("10.20.0.0/16"). A listed name is trusted with whatever it
+  # resolves to: never list a wildcard over the cluster's domain (*.cluster.local, *.svc.cluster.local,
+  # *.pod.cluster.local), whose DNS answers some names with any address, cloud metadata included; list each
+  # service, or a namespace only you create services in. With networkPolicy.enabled, add the services'
+  # ports to networkPolicy.board.egressPorts. What you configure yourself (the git hosts, OIDC, OTLP, the
+  # bucket, the API server, the model API, notifySecret and notifyEmail above) is not held to it. Empty:
+  # public addresses only.
+  #  - "playwright-mcp.tools.svc.cluster.local" # http://playwright-mcp.tools.svc.cluster.local:8931/mcp
   #  - "ollama.ai.svc.cluster.local"
   privateDestinations: []
   # More environment for the board container, as Kubernetes env entries, for the settings with no value of
@@ -324,8 +331,11 @@ networkPolicy:
   # Extra sources allowed to reach the board's port directly (a metrics scraper, an admin pod).
   boardIngressFrom: []
   board:
-    # Everything the board calls lives outside the cluster; allow all egress on these ports, or list
-    # destinations as NetworkPolicyPeers below to narrow.
+    # The board calls the model API, the git hosts, companies' MCP servers, services and webhooks, and the
+    # private destinations board.privateDestinations lists. With egressTo empty it may reach any address on
+    # these ports (its own check still refuses a company's private destination that is not listed); list
+    # NetworkPolicyPeers in egressTo to narrow, and add the ports of the private destinations you list
+    # (8931 for the Playwright browser, 11434 for Ollama).
     egressPorts: [443, 80]
     egressTo: []
   worker:

@@ -39,7 +39,7 @@ export default tseslint.config(
               name: "@rosterdock/shared",
               allowTypeImports: true,
               message:
-                "Import types only; take values from @rosterdock/shared/events, @rosterdock/shared/text or @rosterdock/shared/web.",
+                "Import types only; take values from @rosterdock/shared/events, @rosterdock/shared/text, @rosterdock/shared/web or @rosterdock/shared/address.",
             },
           ],
         },
