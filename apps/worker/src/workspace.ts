@@ -437,30 +437,43 @@ async function readArtifact(
  * Where git checks a link out as a plain file holding its target (core.symlinks false, as Git for Windows has
  * it), git add keeps the link's type for that file, whatever the run wrote in it (or staged itself), and the
  * diff would show the link pointing at the file's new contents. The run wrote a file there: each committed
- * link (HEAD's) whose file is now a regular one with other contents leaves the index and comes back as that
- * file, forced, since the add after this skips a path .gitignore matches. The diff then shows the link
- * replaced by the file, as on Linux, where this changes nothing.
+ * link (HEAD's) still in the index as one, whose file is now a regular one with other contents, leaves the
+ * index and comes back as that file, forced, since the add after this skips a path .gitignore matches. The
+ * diff then shows the link replaced by the file, as on Linux, where this changes nothing. A link the run took
+ * out of the index itself stays out: forced back, an ignored file it keeps locally would land in the diff.
+ * Nothing is forced when the removal fails, and a failed add puts HEAD's entries back.
  */
 async function unstageLinksMadeFiles(ws: Workspace): Promise<void> {
-  const [tree, changed] = await Promise.all([
+  const [tree, index, changed] = await Promise.all([
     git(["ls-tree", "-r", "-z", "--full-tree", "HEAD"], ws.dir),
+    git(["ls-files", "--stage", "-z"], ws.dir),
     git(
       ["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "HEAD", "--"],
       ws.dir,
     ),
   ]);
-  if (tree.code !== 0 || changed.code !== 0) return;
+  if (tree.code !== 0 || index.code !== 0 || changed.code !== 0) return;
+  const links = (out: string, entry: RegExp) =>
+    new Set(out.split("\0").flatMap((e) => entry.exec(e)?.[1] ?? []));
+  // ls-tree: mode, type, object, path; ls-files --stage: mode, object, stage, path.
+  const committed = links(tree.stdout, /^120000 blob [0-9a-f]+\t(.+)$/s);
+  const staged = links(index.stdout, /^120000 [0-9a-f]+ \d\t(.+)$/s);
   const differs = new Set(changed.stdout.split("\0"));
   const files: string[] = [];
-  for (const entry of tree.stdout.split("\0")) {
-    const link = /^120000 \S+ [0-9a-f]+\t(.+)$/s.exec(entry)?.[1];
+  for (const link of committed) {
     // The handover and the blocked note stay out of the add, so out of this too.
-    if (!link || link === HANDOVER_FILE || link === BLOCKED_FILE || !differs.has(link)) continue;
+    if (link === HANDOVER_FILE || link === BLOCKED_FILE || !staged.has(link) || !differs.has(link)) continue;
     if ((await lstat(path.join(ws.dir, link)).catch(() => null))?.isFile()) files.push(link);
   }
   if (!files.length) return;
-  await git(["--literal-pathspecs", "rm", "--cached", "--quiet", "--", ...files], ws.dir);
-  await git(["--literal-pathspecs", "add", "--force", "--", ...files], ws.dir);
+  const literal = ["--literal-pathspecs"];
+  const out = await git(
+    [...literal, "rm", "--cached", "--quiet", "--ignore-unmatch", "--", ...files],
+    ws.dir,
+  );
+  if (out.code !== 0) return;
+  const back = await git([...literal, "add", "--force", "--", ...files], ws.dir);
+  if (back.code !== 0) await git([...literal, "reset", "--quiet", "--", ...files], ws.dir);
 }
 
 /** Declared outputs (or, if none were declared, new and changed files), the handover, blocked note and diff. */

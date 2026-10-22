@@ -469,7 +469,8 @@ describe("a rework run and links", () => {
    */
   async function commit(src: string, files: Record<string, string>, links: Record<string, string> = {}) {
     await writeTree(src, files);
-    if (Object.keys(files).length) await run(["add", "--", ...Object.keys(files)], src);
+    // Forced: a file named here is committed though .gitignore matches it, as a repository may hold one.
+    if (Object.keys(files).length) await run(["add", "--force", "--", ...Object.keys(files)], src);
     for (const [at, target] of Object.entries(links)) {
       const blob = path.join(root, "link-target");
       await writeFile(blob, target, "utf8");
@@ -648,6 +649,56 @@ describe("a rework run and links", () => {
       expect(diff).toMatch(/^\+MODE=dev$/m);
     }
   });
+
+  it("leaves out a committed link the engine itself untracked, and its ignored local file, wherever it runs", async () => {
+    const { repo } = await linkRepo(
+      "untracked-link",
+      { ".gitignore": ".env\n", ".env.example": "MODE=example\n", a: "a\n" },
+      { ".env": ".env.example", l: "a" },
+    );
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `untracked-link-${windows ? "win" : "posix"}`, windows, [".env", "l"]);
+      // "Stop tracking .env and keep a local one", and l made a file beside it.
+      await run(["rm", "--cached", "--quiet", ".env"], ws.dir);
+      for (const [at, text] of [
+        [".env", "MODE=the-developers-own\n"],
+        ["l", "now a file\n"],
+      ] as const) {
+        await rm(path.join(ws.dir, at));
+        await writeFile(path.join(ws.dir, at), text, "utf8");
+      }
+      const diff = (await harvestWorkspace(ws, [])).artifacts.find((a) => a.kind === "diff")?.content ?? "";
+      expect(diff).not.toContain("the-developers-own");
+      // .env as the engine left it, untracked; l, as on Linux, a link replaced by a file.
+      expect(diff).not.toMatch(/^index \S+ 120000$/m);
+      expect(parseUnifiedDiff(diff).map((f) => f.path)).toEqual([".env", "l", "l"]);
+      expect(diff).toMatch(/^\+now a file$/m);
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "takes a committed link's name as it is, never as a pattern, beside an ignored file",
+    async () => {
+      // Windows allows neither name. As patterns, they would take every tracked file out of the index (kept.log,
+      // which .gitignore matches, would not come back) and force every ignored file in.
+      const { repo } = await linkRepo(
+        "glob-link",
+        { ".gitignore": "secret.env\n*.log\n", a: "a\n", "kept.log": "kept\n" },
+        { "*": "a", ":(glob)*": "a" },
+      );
+      for (const windows of CLONES) {
+        const ws = await cloneFor(repo, `glob-link-${windows ? "win" : "posix"}`, windows, ["*", ":(glob)*"]);
+        await writeFile(path.join(ws.dir, "secret.env"), "TOKEN=not-for-the-review\n", "utf8");
+        for (const at of ["*", ":(glob)*"]) {
+          await rm(path.join(ws.dir, at));
+          await writeFile(path.join(ws.dir, at), "now a file\n", "utf8");
+        }
+        const diff = (await harvestWorkspace(ws, [])).artifacts.find((a) => a.kind === "diff")?.content ?? "";
+        expect(diff).not.toContain("not-for-the-review");
+        expect(parseUnifiedDiff(diff).map((f) => f.path)).toEqual(["*", "*", ":(glob)*", ":(glob)*"]);
+      }
+    },
+  );
 
   it("records a committed link the engine itself staged as a file, where links are plain files", async () => {
     const { repo } = await linkRepo("staged-link", { a: "a\n" }, { l: "a" });
