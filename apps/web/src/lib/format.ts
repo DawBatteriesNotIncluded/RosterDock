@@ -616,7 +616,7 @@ export function describeEvent(
     case "model_provider.archived":
       return { text: `${who} archived the model provider ${p(ev).label ?? p(ev).name}` };
     case "model_provider.deleted":
-      return { text: `${who} removed the model provider ${p(ev).name}` };
+      return { text: `${who} removed the model provider ${p(ev).label ?? p(ev).name}` };
     case "connection.checked": {
       const extra = ((p(ev).extra as string[] | undefined) ?? []).length;
       const missing = ((p(ev).missing as string[] | undefined) ?? []).length;

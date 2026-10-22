@@ -408,12 +408,31 @@ function plan(row: ProviderRow, patch: UpdateModelProviderInput) {
     c.endpoint !== row.endpoint && "endpoint",
     c.region !== row.region && "region",
     c.authHeader !== row.auth_header && "authHeader",
-    JSON.stringify(c.credentials) !== JSON.stringify(row.credentials) && "credentials",
-    JSON.stringify(models) !== JSON.stringify(row.models) && "models",
+    !sameJson(c.credentials, row.credentials) && "credentials",
+    !sameJson(models, row.models) && "models",
     next.enabled !== row.enabled && "enabled",
     (archive || restore) && "archived",
   ].filter((f): f is string => !!f);
   return { next, c, models, archive, restore, changes };
+}
+
+/**
+ * Whether two JSON values are the same whatever order their keys are in: Postgres keeps jsonb's keys in its
+ * own order (by length, then bytes), never the order the board wrote them in.
+ */
+function sameJson(a: unknown, b: unknown): boolean {
+  const canonical = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(canonical)
+      : v && typeof v === "object"
+        ? Object.fromEntries(
+            Object.entries(v as Record<string, unknown>)
+              .filter(([, x]) => x !== undefined)
+              .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+              .map(([k, x]) => [k, canonical(x)]),
+          )
+        : v;
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 }
 
 /** A change that changes nothing: nothing is written, no event says otherwise, and the row is answered as it is. */
@@ -502,7 +521,7 @@ export async function deleteProvider(db: Db, companyId: string, actor: ActorRef,
     await ctx.emit(
       "model_provider.deleted",
       { kind: "model_provider", id },
-      { name: gone.name, kind: gone.kind },
+      { name: gone.name, label: gone.label, kind: gone.kind },
     );
   });
 }

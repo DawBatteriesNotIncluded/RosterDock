@@ -24,6 +24,9 @@ import { modelId, SecretNameSchema } from "./schemas.js";
 
 export * from "./provider-kinds.js";
 
+/** A Bedrock OpenAI model Runtime takes: a cross-Region inference profile id, or an inference profile's ARN. */
+const BEDROCK_OPENAI_ID_RE = /^(?:(?:global|[a-z]{2,4})\.openai\.|arn:aws[a-z-]*:bedrock:)/;
+
 /** A provider's name: short, lowercase, unique in the company. */
 const providerName = z
   .string()
@@ -145,13 +148,14 @@ export const ModelProviderSchema = z
             .join(" and ")} models here, not ${FAMILY_LABELS[m.family]} ones`,
         });
       // Bedrock serves OpenAI's models at two endpoints: bare openai.* ids are Mantle's, which the board
-      // does not reach yet; Runtime takes cross-Region inference profiles (global.openai.…, us.openai.…).
-      if (p.kind === "bedrock" && m.family === "openai" && m.id.startsWith("openai."))
+      // does not reach yet; Runtime takes cross-Region inference profiles (global.openai.…, us.openai.…), or
+      // a profile's ARN.
+      if (p.kind === "bedrock" && m.family === "openai" && !BEDROCK_OPENAI_ID_RE.test(m.id))
         ctx.addIssue({
           code: "custom",
           path: ["models", i, "id"],
           message:
-            "a bare openai.* id is Bedrock's Mantle endpoint, which this board does not reach yet; use a cross-Region inference profile id (global.openai.… or us.openai.…)",
+            "a Bedrock OpenAI model is a cross-Region inference profile id (global.openai.… or us.openai.…) or its ARN; a bare openai.* id is Bedrock's Mantle endpoint, which this board does not reach yet",
         });
     });
     if (p.kind === "openai_compatible" && p.authHeader && !p.credentials.apiKey)
