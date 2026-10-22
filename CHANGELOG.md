@@ -40,6 +40,9 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
   no other, a company's list of sites narrowed by a department and a client, every page an event. The
   catalog has search, browser and fetch servers a company may run instead (Brave Search, Tavily, Exa,
   Playwright, the MCP reference fetch server), and the brief tells each teammate which web tools it has.
+- A worker that runs natively on Windows (`pnpm dev:worker` with Git for Windows), tested there in CI, with
+  the worker's git and file rules kept by Windows' own means; Docker or WSL2 stays the place for
+  repositories you would not run yourself (`docs/security.md`).
 
 ### Changed
 

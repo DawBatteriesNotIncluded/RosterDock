@@ -10,6 +10,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { WorkerCheckInput } from "@rosterdock/shared";
+import { killTree } from "./kill.js";
 import { tail } from "./text.js";
 import type { Workspace } from "./workspace.js";
 
@@ -57,7 +58,10 @@ export function testEnvironment(env: Record<string, string | undefined>): Record
   return { ...out, CI: "1" };
 }
 
-/** Run a package-manager command, capturing interleaved stdout and stderr. */
+/**
+ * Run a package-manager command, capturing interleaved stdout and stderr. Past the time limit it is ended:
+ * on Windows with everything it started, since there it runs under cmd.exe, and npm would outlive cmd.
+ */
 export const execCommand: Exec = (command, args, opts) =>
   new Promise((resolve) => {
     const win = process.platform === "win32";
@@ -80,7 +84,8 @@ export const execCommand: Exec = (command, args, opts) =>
     child.stderr.on("data", keep);
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      if (win) killTree(child);
+      else child.kill();
     }, opts.timeoutMs);
     child.on("error", (err) => {
       clearTimeout(timer);

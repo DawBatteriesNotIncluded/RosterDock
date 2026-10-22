@@ -10,6 +10,7 @@ import {
   execCommand,
   MAX_TEST_OUTPUT_CHARS,
   runRepoTests,
+  testEnvironment,
   type Exec,
 } from "../src/tests.js";
 
@@ -156,15 +157,39 @@ describe("runRepoTests", () => {
   });
 
   it("reads a command's output as a stream, so a character on a pipe boundary arrives whole", async () => {
-    // This Node stands in for the package manager: no npm runs here.
-    const res = await execCommand(
-      process.execPath,
-      ["-e", 'process.stdout.write("— ✅ 😀 ".repeat(20000))'],
-      { cwd: root, env: { PATH: process.env.PATH ?? "" }, timeoutMs: 10_000 },
+    // This Node stands in for the package manager: no npm runs here. By name and with a script file, as a
+    // package manager is run: on Windows the command goes through cmd, which splits a path or code with spaces.
+    await writeFile(
+      path.join(root, "stream.js"),
+      'process.stdout.write("— ✅ 😀 ".repeat(20000));\n',
+      "utf8",
     );
+    const res = await execCommand("node", ["stream.js"], {
+      cwd: root,
+      env: { PATH: process.env.PATH ?? "" },
+      timeoutMs: 10_000,
+    });
     expect(res.code).toBe(0);
     expect(res.output.includes("\ufffd")).toBe(false);
     expect(res.output.endsWith("— ✅ 😀 ")).toBe(true);
+  });
+
+  it("ends a command past its time limit, with what a Windows shim started under it", async () => {
+    // Found on PATH like a package manager: on Windows a .cmd shim, which cmd.exe runs and which starts
+    // this Node in turn; elsewhere the program itself. It would hold the step for a minute.
+    const bin = path.join(root, "sleeper-bin");
+    await mkdir(bin, { recursive: true });
+    const sleep = `"${process.execPath}" -e "setTimeout(() => {}, 60000)"`;
+    if (process.platform === "win32") await writeFile(path.join(bin, "sleeper.cmd"), `@${sleep}\r\n`);
+    else await writeFile(path.join(bin, "sleeper"), `#!/bin/sh\nexec ${sleep}\n`, { mode: 0o755 });
+    const started = Date.now();
+    const res = await execCommand("sleeper", [], {
+      cwd: root,
+      env: { ...testEnvironment(process.env), PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+      timeoutMs: 500,
+    });
+    expect(res.timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(10_000);
   });
 
   it("detects the package manager from the lockfile", async () => {
