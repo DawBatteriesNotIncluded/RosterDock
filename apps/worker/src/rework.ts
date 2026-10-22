@@ -14,7 +14,7 @@
 
 import { lstat, mkdir, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseUnifiedDiff, sha256Hex, type RunCompleteInput } from "@rosterdock/shared";
+import { sha256Hex, type RunCompleteInput } from "@rosterdock/shared";
 import { clip } from "./text.js";
 import { git, redactGit, type Workspace } from "./workspace.js";
 
@@ -192,6 +192,14 @@ async function caseFold(ws: Workspace): Promise<(p: string) => string> {
   return ignorecase.stdout.trim() === "true" ? (p) => p.toLowerCase() : (p) => p;
 }
 
+/**
+ * How many files the round's diff names: a stanza each, by its `diff --git` line (a line of a hunk starts with its
+ * +, - or space). Counted so, not parsed: git applies what the parser would refuse a line of.
+ */
+function countFiles(diff: string): number {
+  return diff.split("\n").filter((l) => l.startsWith("diff --git ")).length;
+}
+
 /** Where a diff copies or renames files to (or from, where it names no destination). */
 function copiedOrRenamed(diff: string): string[] {
   const moved = [...diff.matchAll(/^(?:copy|rename) (from|to|old|new) (.+)$/gm)];
@@ -302,7 +310,7 @@ export async function applyPreviousRound(
     const named = new Map<string, string>();
     for (const p of [...(made ?? []), ...(left ?? []), ...(declared ?? [])]) named.set(fold(p), p);
     const links = left && declared && made && [...named.values()].sort();
-    if (links?.length === 0) return { round, applied: true, files: parseUnifiedDiff(rework.diff).length };
+    if (links?.length === 0) return { round, applied: true, files: countFiles(rework.diff) };
     await undoApply(ws, before);
     return {
       round,

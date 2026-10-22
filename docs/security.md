@@ -178,18 +178,21 @@ their own, each with its own database and workers.
 - Each run gets a fresh directory on an ephemeral volume that dies with the pod; the next run sees
   nothing of it, and only what the board stores (artifacts, checkpoints, usage) outlives the run. The
   pod's home and temp directories last as long as the pod, so runs the pod takes in turn share them.
-- git in the worker gets PATH, the temp directory and the locale, none of the worker's credentials, and
-  reads no system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL` empty), so a
-  `~/.gitconfig` an earlier run left behind changes nothing. It runs no hook and no fsmonitor, and the
-  diff runs no textconv. Before the worker reads a run's changes back, it puts the clone's `.git/config`
-  back as the clone wrote it, so a filter the run added never runs; a run that replaced `.git` gets no
-  review of its changes.
-- The git token (`worker.gitSecret`) goes into a clone's URL only over https and only to the hosts it is
-  for (`worker.gitSecret.hosts`, `ROSTERDOCK_GIT_TOKEN_HOSTS`; github.com by default), and the clone's
-  remote is set back without it. A clone that fails, or that Stop, the time limit or a shutdown ends
-  part-way, is removed at once, so no `.git/config` with the token in its URL stays on disk. A project
-  whose repository is on any other host is cloned with no token, so whoever sets a project's repository
-  cannot send the fleet's token somewhere else.
+- git in the worker gets PATH, the temp directory and the locale (its messages in English), none of the
+  worker's credentials, and reads no system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`
+  empty), so a `~/.gitconfig` an earlier run left behind changes nothing. It runs no hook and no fsmonitor,
+  and the diff runs no textconv. Before the worker reads a run's changes back, it puts the clone's
+  `.git/config` back as the clone wrote it, so a filter the run added never runs; a run that replaced `.git`
+  gets no review of its changes.
+- The git token (`worker.gitSecret`) goes into a clone's URL only over https and only to the hosts it is for
+  (`worker.gitSecret.hosts`, `ROSTERDOCK_GIT_TOKEN_HOSTS`; github.com by default), and the clone's remote is
+  set back without it. A clone that fails, or that Stop, the time limit or a shutdown ends part-way, is
+  removed at once, so no `.git/config` with the token in its URL stays on disk. On Windows, where a git ended
+  by taskkill can hold its files a moment longer, it goes as soon as git lets go, tried for half a minute,
+  which a worker shutting down waits out; a file held past that keeps the folder until a run is prepared in it
+  again. A project
+  whose repository is on any other host is cloned with no token, so whoever sets a project's repository cannot
+  send the fleet's token somewhere else.
 - An artifact over 512 KB goes to the object store as bytes the board has already scanned for raw
   secrets, under a key of the company, the run and its hash; the board signs each request itself with a
   key pair it reads by name, and the worker never holds that pair.
@@ -249,7 +252,13 @@ their own, each with its own database and workers.
   server's word that a tool writes or destroys outweighs the catalog and the name. Anything else is a write.
 - A run's diff is scanned for secret-shaped values before review, anywhere in an added line (a key after
   `NAME=`, in a string, behind `Bearer`), and for values given to secret-named keys, quoted or as
-  `NAME=value`; a hit fails the check.
+  `NAME=value`; a hit fails the check. The board reads the diff strictly: a line git would not write in one, a
+  hunk longer than its header says, or a path that is not in the repository (absolute, with a `..` or a `.git`
+  part) opens the review with none of its files and a failing secrets check, so none of it is scanned in part
+  or merged (the reviewer teammate's run still reads the diff as the run wrote it). A pull request is built
+  from the files the review showed, and only while the review's diff, read again with the sha256 it was opened
+  with, still reads as them: one an older board read otherwise, or that cannot be read back from the object
+  store, fails and says why.
 - A run delivers files, never links. The worker reads a declared output, a changed file, the handover and
   `blocked.md` only as a regular file inside the run's directory, reached without a symbolic link. A link
   (`report.md -> /proc/self/environ`, a linked directory on the way) or a path out of the directory is never
@@ -258,8 +267,12 @@ their own, each with its own database and workers.
   outputs declared, the changed files are those git status lists, each by its name as it is (a moved one by
   its new name), but never a path it calls deleted: a file the run took out of the index and kept there (a
   local `.env` that `.gitignore` matches) is not delivered, whatever it holds. Where git cannot read the
-  changes back (a lock left by a git that something ended part-way, a folder it cannot open), a run that would
-  complete fails rather than send part of them for review; one that is blocked or failed says so as it would.
+  changes back (a lock left by a git that something ended part-way, a folder it cannot open, a name that is
+  not UTF-8, which the review could not tell from another), a run that would complete fails rather than send
+  part of them for review; one that is blocked or failed says so as it would. It fails as well on two names
+  that differ only by spaces or a U+FEFF at an end, which a reviewer could not tell apart, and, without a
+  repository, on a file named `.git`, which no diff can show and which is not delivered. An artifact keeps
+  its name as the run gave it, never trimmed into another's.
 - A run sent back with changes requested starts from that round only as its diff, checked against the
   sha256 the review recorded and applied with `git apply`, which writes nothing outside the clone, into
   `.git` or through a link. A round that would leave a link in the clone is undone, and the run starts

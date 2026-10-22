@@ -9,6 +9,7 @@ import {
   MoveTaskSchema,
   CreateTeammateSchema,
   ModelPriceInputSchema,
+  RunArtifactSchema,
   UpdateProjectSchema,
   UpdateTeammateSchema,
 } from "../src/index.js";
@@ -91,6 +92,13 @@ describe("request schemas", () => {
     expect(
       CreateTaskSchema.safeParse({ projectId: id, title: "T", assignee: { kind: "bot", id } }).success,
     ).toBe(false);
+  });
+});
+
+describe("a run's artifact", () => {
+  it("keeps its path as the run named it: one with a space or a U+FEFF at an end is another file", () => {
+    for (const name of ["\ufeffreport.md", " report.md", "report.md "])
+      expect(RunArtifactSchema.parse({ path: name, content: "x" }).path).toBe(name);
   });
 });
 

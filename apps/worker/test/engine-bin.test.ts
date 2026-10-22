@@ -49,7 +49,8 @@ it("starts today's Claude Code by its claude.exe and Codex's script with this No
   expect(resolveEngineBin("opencode", { PATH: prefix }, "win32")).toEqual({ bin: "opencode", prefix: [] });
 });
 
-it.runIf(process.platform !== "win32")(
+// As root a folder's mode stops nobody, and Windows has none.
+it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
   "passes over a PATH folder it cannot read, where a stat there throws, and finds the CLI after it",
   async () => {
     const locked = path.join(prefix, "locked");

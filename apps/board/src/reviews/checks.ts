@@ -33,8 +33,18 @@ export interface CheckResult {
 const ASSIGNED_SECRET_RE =
   /(?:api[_-]?key|secret|password|passwd|token|private[_-]?key)["']?\s*[:=]\s*["'][^"'\s]{8,}["']/i;
 
-/** Secret-shaped strings anywhere in the added lines. Reports lines, never values. */
-export function secretsCheck(files: DiffFile[]): CheckResult {
+/**
+ * Secret-shaped strings anywhere in the added lines. Reports lines, never values. `unread`: why the run's diff
+ * could not be read (parseUnifiedDiff threw), so nothing of it was scanned, and the check fails.
+ */
+export function secretsCheck(files: DiffFile[], unread?: string): CheckResult {
+  if (unread !== undefined)
+    return {
+      kind: "secrets",
+      ok: false,
+      title: "The run's diff could not be read, so it was not scanned and the review shows none of its files",
+      detail: { unread },
+    };
   const lines: { path: string; line: number }[] = [];
   for (const f of files) {
     for (const h of f.hunks) {

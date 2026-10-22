@@ -480,9 +480,9 @@ export const RunCheckpointSchema = z.object({ checkpoint: z.record(z.string(), z
 /** The largest artifact a run may report when the board has an object store; an inline row stops at 512 KB. */
 export const ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
 export const RunArtifactSchema = z.object({
+  // Never trimmed: a name with a space or a U+FEFF at an end is another file than the one without.
   path: z
     .string()
-    .trim()
     .min(1)
     .max(500)
     .regex(/^[^\0]+$/)
