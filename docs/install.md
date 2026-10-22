@@ -155,6 +155,7 @@ and which optional secrets exist. Everything in `values.yaml` is commented. The 
 | `board.oauth.enabled`            | Connections may authorise by OAuth; the board keeps the tokens in Secrets of its own (a Role).        |
 | `board.sharedEnvNames`           | Keys of `rosterdock-connections` every company may name; no other key reaches a company. Empty: none. |
 | `board.stdioCommands`            | Command lines a stdio connection may run inside the board, exactly (a final `*`: more arguments).     |
+| `board.privateDestinations`      | Private names, addresses and ranges companies' connections may reach. Empty: public addresses only.   |
 | `board.companyCreators`          | Who may create a company: emails, `@domain`s or `*`. Empty: the first company only.                   |
 | `worker.autoscaling`             | A KEDA ScaledObject: one worker per waiting run between the bounds. Needs KEDA installed.             |
 | `worker.image`                   | The worker image with Claude Code that you build (Engines on the worker, below). Empty: the chart's.  |

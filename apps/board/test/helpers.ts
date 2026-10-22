@@ -12,9 +12,26 @@ import type { SmtpOptions } from "../src/notify/smtp.js";
 import type { PlannerStatus } from "../src/peter/planners.js";
 import type { StylePack } from "../src/styles/catalog.js";
 import { migrate } from "../src/db/migrate.js";
+import { NO_PRIVATE_DESTINATIONS, parsePrivateDestinations, type Resolve } from "../src/web/address.js";
+import type { Egress } from "../src/web/egress.js";
 
 /** What a name resolves to in a test that does not say: an address the board's guard takes as public. */
 export const PUBLIC_TEST_ADDRESS = "93.184.215.14";
+
+/**
+ * A company's destinations in a test (web/egress.ts): the fake transport given, every name public unless
+ * the test resolves it otherwise, and the private destinations it allows (as ROSTERDOCK_PRIVATE_DESTINATIONS).
+ */
+export function testEgress(
+  transport: typeof fetch,
+  opts: { resolve?: Resolve; allow?: string } = {},
+): Egress {
+  return {
+    fetch: transport,
+    resolve: opts.resolve ?? (async () => [PUBLIC_TEST_ADDRESS]),
+    allow: parsePrivateDestinations(opts.allow),
+  };
+}
 
 const ADMIN_URL =
   process.env.ROSTERDOCK_TEST_ADMIN_URL ?? "postgres://rosterdock:rosterdock@localhost:5432/postgres";
@@ -103,6 +120,7 @@ export function testConfig(databaseUrl: string, overrides: Partial<BoardConfig> 
     storage: null,
     metricsToken: null,
     fetchSources: true,
+    privateDestinations: NO_PRIVATE_DESTINATIONS,
     secretStore: null,
     sharedEnvNames: [],
     stdioCommands: [],
@@ -168,6 +186,7 @@ export async function startTestBoard(
     storageFetch?: typeof fetch;
     webFetch?: typeof fetch;
     webResolve?: (host: string) => Promise<string[]>;
+    egressResolve?: Resolve;
     smtp?: SmtpOptions;
     env?: NodeJS.ProcessEnv;
   } = {},
@@ -211,6 +230,8 @@ export async function startTestBoard(
     // Nor the web: a page a test does not fake answers nothing, and a name it does not resolve is public.
     webFetch: opts.webFetch ?? (async () => new Response("no web in this test", { status: 503 })),
     webResolve: opts.webResolve ?? (async () => [PUBLIC_TEST_ADDRESS]),
+    // Nor a company's destinations: a name a test does not resolve is public, and nothing reaches the network.
+    egressResolve: opts.egressResolve ?? (async () => [PUBLIC_TEST_ADDRESS]),
     ...(opts.approvalExecutor ? { approvalExecutor: opts.approvalExecutor } : {}),
     // Never the real fetch: a board without a fake MCP server gets one that answers nothing.
     mcpFetch:

@@ -291,6 +291,8 @@ export interface Features {
   sharedEnvNames?: string[];
   /** The command lines a stdio connection may run inside the board, as the operator wrote them; a final `*` lets more arguments follow. Only for people who manage connections. */
   stdioCommands?: string[];
+  /** The private names (`*.` for the names under one), addresses and ranges a connection may reach; everything else must be public. Only for people who manage connections. */
+  privateDestinations?: string[];
   /** Whether the board reads the web (the web connection's pages, research sources); false: its operator keeps it off. */
   web?: boolean;
 }

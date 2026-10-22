@@ -32,6 +32,7 @@ import {
   ConnectionsPanel,
   connectionSummary,
   heldReads,
+  privateUnlisted,
   stdioListed,
 } from "../src/views/ConnectionsPanel.tsx";
 import { ConnectionGrant } from "../src/views/ToolboxEditor.tsx";
@@ -761,6 +762,57 @@ describe("views render with sample data", () => {
     );
     expect(stdioListed(lines, "sh -c env")).toBe(false);
     expect(stdioListed([], "npx -y @xeroapi/xero-mcp-server@1.0.0")).toBe(false);
+
+    // A catalog server usually run on a private address says the operator must allow it, unless they do.
+    const playwright = [
+      {
+        id: "playwright",
+        name: "Playwright browser",
+        description: "A real browser",
+        category: "Web",
+        kind: "mcp" as const,
+        transport: "http" as const,
+        urlExample: "http://playwright-mcp:8931/mcp",
+        reads: [],
+        writes: [],
+      },
+    ];
+    const nothing = { ...none, privateDestinations: [] };
+    expect(
+      render(<ConnectionsPanel {...props} initialCatalog={playwright} features={nothing} canEdit />),
+    ).toContain("Playwright browser · Web · usually on a private address, which the operator must allow");
+    const allowed = { ...none, privateDestinations: ["playwright-mcp"] };
+    expect(
+      render(<ConnectionsPanel {...props} initialCatalog={playwright} features={allowed} canEdit />),
+    ).not.toContain("which the operator must allow");
+  });
+
+  it("says before the board's check does that a URL looks private and the operator lists it nowhere", () => {
+    const listed = ["*.tools.svc.cluster.local", "10.20.0.0/16", "127.0.0.1", "ollama.internal", "[::1]"];
+    for (const url of [
+      "http://localhost:3001/mcp",
+      "http://playwright-mcp:8931/mcp",
+      "https://n8n.office.lan/mcp",
+      "http://other.ns.svc.cluster.local/mcp",
+      "http://169.254.169.254/latest",
+      "http://10.21.0.1/mcp",
+      "http://127.0.0.2/mcp",
+      "http://[fd00::1]/mcp",
+      "http://tools.svc.cluster.local/mcp",
+    ])
+      expect(privateUnlisted(url, listed), url).toBe(true);
+    for (const url of [
+      "https://mcp.hubspot.com/mcp",
+      "http://8.8.8.8/",
+      "http://playwright.tools.svc.cluster.local:8931/mcp",
+      "http://10.20.3.4/mcp",
+      "http://127.0.0.1:3001/mcp",
+      "http://[::1]:3001/mcp",
+      "http://ollama.internal:11434/",
+      "not a url",
+      "",
+    ])
+      expect(privateUnlisted(url, listed), url).toBe(false);
   });
 
   it("tools only the server calls read-only are listed on their connection for a person to confirm as reads", () => {
