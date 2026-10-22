@@ -494,6 +494,27 @@ describe("a stalled clone", () => {
       expect(outcome.status).toBe("failed");
       expect(board.completion?.blocker?.code).toBe("timeout");
       expect(board.completion?.error).toMatch(/time limit/);
+      expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
+    } finally {
+      await host.close();
+    }
+  });
+
+  it("leaves nothing of a clone stopped part-way, the git token in its config included", async () => {
+    const host = await silentHost();
+    try {
+      // https to a host the token is for: git writes the URL, token and all, into .git/config before it connects.
+      const { port } = new URL(host.url);
+      const board = fakeBoard(PACK(), [], {
+        repoUrl: `https://127.0.0.1:${port}/stalled.git`,
+        stopAfterHeartbeats: 4,
+      });
+      const outcome = await executeRun(
+        { runId: "run-1", jobId: "job-1" },
+        deps(board, { gitCredential: { token: "partial-clone-token", hosts: [`127.0.0.1:${port}`] } }),
+      );
+      expect(outcome.status).toBe("stopped");
+      expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
     } finally {
       await host.close();
     }

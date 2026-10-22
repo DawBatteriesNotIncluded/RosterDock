@@ -153,7 +153,10 @@ export function redactGit(text: string): string {
 /** A clone that moves less than this many bytes a second for this many seconds gives up. */
 export const CLONE_LOW_SPEED = { bytesPerSecond: 1000, seconds: 60 };
 
-/** The run's directory, with the repository cloned into it. `signal` (Stop, the time limit, shutdown) ends the clone. */
+/**
+ * The run's directory, with the repository cloned into it. `signal` (Stop, the time limit, shutdown) ends the
+ * clone; a clone that fails or is ended leaves no directory behind.
+ */
 export async function prepareWorkspace(
   workRoot: string,
   runId: string,
@@ -165,6 +168,22 @@ export async function prepareWorkspace(
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
   if (!project.repoUrl) return { dir, repo: false };
+  try {
+    return await cloneInto(dir, { ...project, repoUrl: project.repoUrl }, credential, signal);
+  } catch (err) {
+    // A clone that failed or was stopped part-way leaves nothing: its .git/config holds the URL, token and all.
+    // Retried for a few seconds: on Windows a git just stopped still holds its files a moment (EBUSY).
+    await rm(dir, { recursive: true, force: true, maxRetries: 10 }).catch(() => {});
+    throw err;
+  }
+}
+
+async function cloneInto(
+  dir: string,
+  project: { repoUrl: string; defaultBranch: string },
+  credential: GitCredential | null,
+  signal?: AbortSignal,
+): Promise<Workspace> {
   const res = await git(
     [
       "-c",

@@ -183,8 +183,10 @@ their own, each with its own database and workers.
   review of its changes.
 - The git token (`worker.gitSecret`) goes into a clone's URL only over https and only to the hosts it is
   for (`worker.gitSecret.hosts`, `ROSTERDOCK_GIT_TOKEN_HOSTS`; github.com by default), and the clone's
-  remote is set back without it. A project whose repository is on any other host is cloned with no token,
-  so whoever sets a project's repository cannot send the fleet's token somewhere else.
+  remote is set back without it. A clone that fails, or that Stop, the time limit or a shutdown ends
+  part-way, is removed at once, so no `.git/config` with the token in its URL stays on disk. A project
+  whose repository is on any other host is cloned with no token, so whoever sets a project's repository
+  cannot send the fleet's token somewhere else.
 - An artifact over 512 KB goes to the object store as bytes the board has already scanned for raw
   secrets, under a key of the company, the run and its hash; the board signs each request itself with a
   key pair it reads by name, and the worker never holds that pair.
