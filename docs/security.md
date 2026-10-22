@@ -266,20 +266,23 @@ their own, each with its own database and workers.
   it all the same, by the same rules, as UTF-8 and, where a NUL byte says it may be wider, as UTF-16 in both
   byte orders from either of its first two bytes, as UTF-32 in both orders where most of its bytes are NUL, and
   without its NUL bytes, and records their sha256; a pull request writes those bytes and no others. The scan
-  runs before the transaction that opens the review, a file at a time, over 64 MB of a run's binary files at
-  most: past that a file is only hashed, the check fails, and a teammate's approval hands the review to people,
-  as below. The scan reads text only: a compressed or encoded file's content is not read, so for binary files
-  the person who approves is the control. A binary file goes into a pull request only where a person approved: a
-  teammate's approval that would open one with a binary file in it is refused, and the review goes to people,
-  who are told (a needs-you sentence; the reviewer's own brief says so first); a person's approval records the
-  files, and the pull request, which carries who approved it under its sha256, refuses a binary file a teammate
-  approved all the same. A repository whose `.gitattributes` marks files `-diff` or `binary` (a lock file)
-  therefore needs a person for each change to them. Where approving opens no pull request (research, a project
-  without a repository), a teammate approves as before, unless the scan could not read a binary file (no bytes
-  from the run, or past 64 MB): that is a person's too. A pull request starts opening only for a review still
-  approved, so a veto before then stops it; one that lands while the host is opening it leaves the change open
-  there, for the person who vetoed to close. A review an older board opened recorded no bytes, so its pull
-  request refuses its binary files.
+  runs before the transaction that opens the review, a file and a reading at a time and one run's at a time on
+  the board, over 64 MB and 100 of a run's binary files at most: past that a file is bound by the sha256 the
+  board stored for it, unread, the check fails, and a teammate's approval hands the review to people, as below.
+  A file with no bytes from the run has nothing delivered, and a pull request refuses it; one whose bytes came
+  under another spelling of its name (a worker whose file system ignores case) is not read, and fails the check
+  the same way. The scan reads text only: a compressed or encoded file's content is not read, so for binary
+  files the person who approves is the control. A binary file goes into a pull request only where a person
+  approved: a teammate's approval that would open one with a binary file in it is refused, and the review goes
+  to people, who are told (a needs-you sentence; the reviewer's own brief says so first); a person's approval
+  records the files, and the pull request, which carries who approved it under its sha256, refuses a binary file
+  a teammate approved all the same. A repository whose `.gitattributes` marks files `-diff` or `binary` (a lock
+  file) therefore needs a person for each change to them. Where approving opens no pull request (research, a
+  project without a repository), a teammate approves as before, unless the scan could not read a binary file
+  (past what it reads, or under another spelling of its name): that is a person's too. A pull request starts
+  opening only for a review still approved, so a veto before then stops it; one that lands while the host is
+  opening it leaves the change open there, for the person who vetoed to close. A review an older board opened
+  recorded no bytes, so its pull request refuses its binary files.
 - A pull request is built on the commit the run's clone was at, and on no other. The worker reports that commit
   to the board right after cloning, before the engine starts, with a key the claim gave the worker alone: the
   engine holds the same run token, never the key, so it cannot report one. The board keeps the first report of
@@ -300,12 +303,14 @@ their own, each with its own database and workers.
   spaces or a U+FEFF at an end, which a reviewer could not tell apart, and, without a repository, on a file
   named `.git`, which no diff can show and which is not delivered. In a repository, a declared output git leaves
   out of the diff (one `.gitignore` matches, or under `.git`) is not delivered and fails the run the same way;
-  one the repository holds unchanged is its own, and is delivered. Before it reads the changes back, the worker
-  clears the flags a run can set on the index (skip-worktree, assume-unchanged), which would keep git showing an
-  entry other than the file on disk; where the file system ignores case, a declared `Report.md` is delivered
-  under git's `report.md`, the name the review and its scan use. So does a file git reads as text with a NUL
-  byte in it (it looks in the first 8000 bytes only), and a diff the board refuses: no review opens without its
-  diff. An artifact keeps its name as the run gave it, never trimmed into another's.
+  one the repository holds unchanged is its own, and is delivered. A file git reads as text with a NUL byte in
+  it (it looks in the first 8000 bytes only), and a diff the board refuses, fail the run too: no review opens
+  without its diff. Before it reads the changes back, the worker clears the flags a run can set on the index
+  (skip-worktree, assume-unchanged), which would keep git showing an entry other than the file on disk; where
+  the file system ignores case, a declared `Report.md` is delivered under git's `report.md`, the name the review
+  and its scan use. A declared output whose bytes are not the blob git holds for it (an index entry the run
+  wrote by hand) is not delivered either, and fails the run. An artifact keeps its name as the run gave it,
+  never trimmed into another's.
 - A run sent back with changes requested starts from that round only as its diff, checked against the
   sha256 the review recorded and applied with `git apply`, which writes nothing outside the clone, into
   `.git` or through a link. A round that would leave a link in the clone is undone, and the run starts

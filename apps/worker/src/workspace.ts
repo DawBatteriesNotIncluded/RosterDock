@@ -825,9 +825,14 @@ export async function harvestWorkspace(
     const outside = out.filesWritten.filter(
       (f) => f !== HANDOVER_FILE && f !== BLOCKED_FILE && !inDiff.has(named(f)),
     );
-    const tracked = new Set(
-      outside.length ? decodeNames((await gitBytes(["ls-files", "-z"], ws.dir)).stdout).names.map(fold) : [],
+    // What the index holds, by name as the file system reads it: the blob of each entry.
+    const index = new Map(
+      decodeNames((await gitBytes(["ls-files", "-s", "-z"], ws.dir)).stdout).names.map((e) => {
+        const tab = e.indexOf("\t");
+        return [fold(e.slice(tab + 1)), e.slice(0, tab).split(" ")[1]!] as const;
+      }),
     );
+    const tracked = new Set(index.keys());
     const unseen = outside.filter((f) => !tracked.has(named(f)));
     // A declared output the fold matched travels under git's spelling, the one the review and its scan name.
     const spelled = new Map(diffNames.map((n) => [fold(n), n]));
@@ -842,6 +847,20 @@ export async function harvestWorkspace(
       out.artifacts = out.artifacts.filter((a) => a.kind === "handover" || !unseen.includes(a.path));
       out.filesWritten = out.filesWritten.filter((f) => !unseen.includes(f));
       out.unreadable ??= `the run's changes could not be read back for review (a declared output git leaves out of the diff, which the review would not show: ${spellName(unseen[0]!)})`;
+    }
+    // Each declared output delivered is what git holds for it: an index entry the run wrote by hand (the clean
+    // blob, with the file's own size and time) would have the add pass the file over and the review show the
+    // blob, while the file itself, read from disk, is delivered.
+    const held = out.filesWritten.filter((f) => f !== HANDOVER_FILE && f !== BLOCKED_FILE);
+    if (held.length) {
+      const hashed = await git(["hash-object", "--", ...held], ws.dir);
+      const disk = hashed.code === 0 ? hashed.stdout.trim().split("\n") : [];
+      const forged = held.filter((f, i) => disk[i] === undefined || index.get(named(f)) !== disk[i]);
+      if (forged.length) {
+        out.artifacts = out.artifacts.filter((a) => a.kind === "handover" || !forged.includes(a.path));
+        out.filesWritten = out.filesWritten.filter((f) => !forged.includes(f));
+        out.unreadable ??= `the run's changes could not be read back for review (a declared output is not what git holds for it, so the review would not show it: ${spellName(forged[0]!)})`;
+      }
     }
   }
   // Two files whose names are the same but for spaces or a U+FEFF at either end, which a reviewer cannot tell

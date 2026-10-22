@@ -55,7 +55,7 @@ export interface ScannedBinary {
   sha256: string | null;
   lines: number[];
   chars: number;
-  /** False where its bytes were not read for secrets: none from the run, or past what the board scans in one run. */
+  /** False where its bytes were not read for secrets: under another spelling of its name, or past what the board scans in a run. */
   scanned: boolean;
 }
 
@@ -63,34 +63,49 @@ export interface ScannedBinary {
  * Scan the bytes a pull request would write for a file the diff calls binary, as text: a file git calls binary
  * (an attribute, a NUL byte) may be text all the same. As UTF-8, and where a NUL byte says it may be wider: as
  * UTF-16 in both byte orders from either of its first two bytes, as UTF-32 in both orders where most bytes are
- * NUL, and without its NUL bytes. Anything else (compressed, encoded) it does not read. Each pattern runs over each reading once (secretLines). `scan` false: only
- * the sha256, where the run's binary files are past what the board scans.
+ * NUL, and without its NUL bytes. Anything else (compressed, encoded) it does not read. Each pattern runs over
+ * each reading once (secretLines), a reading at a time, with `between` awaited after each (the board lets its
+ * other work in). Null bytes: nothing of the file was delivered. `scan` false: only the sha256.
  */
-export function scanBinary(path: string, bytes: Buffer | null, scan = true): ScannedBinary {
-  // No bytes to read: not scanned, so a person approves it.
-  if (!bytes) return { path, sha256: null, lines: [], chars: 0, scanned: false };
+export async function scanBinary(
+  path: string,
+  bytes: Buffer | null,
+  scan = true,
+  between: () => Promise<void> = async () => {},
+): Promise<ScannedBinary> {
+  if (!bytes) return { path, sha256: null, lines: [], chars: 0, scanned: true };
   const sha256 = sha256Hex(bytes);
   if (!scan) return { path, sha256, lines: [], chars: 0, scanned: false };
-  const readings = [bytes.toString("utf8")];
+  // Each reading made when its turn comes, so no two are held at once.
+  const readings: (() => string)[] = [() => bytes.toString("utf8")];
   if (bytes.includes(0)) {
     // UTF-16 in both byte orders, from the first byte and from the second (a string inside a container).
     for (const from of [0, 1]) {
       const at = bytes.subarray(from);
       const even = at.subarray(0, at.length - (at.length % 2));
-      readings.push(even.toString("utf16le"), Buffer.from(even).swap16().toString("utf16le"));
+      readings.push(
+        () => even.toString("utf16le"),
+        () => Buffer.from(even).swap16().toString("utf16le"),
+      );
     }
     // UTF-32 in both byte orders where most bytes are NUL, as its text is (three in four).
     let nuls = 0;
     for (const b of bytes) if (b === 0) nuls++;
-    if (nuls * 2 >= bytes.length) readings.push(utf32(bytes, true), utf32(bytes, false));
+    if (nuls * 2 >= bytes.length)
+      readings.push(
+        () => utf32(bytes, true),
+        () => utf32(bytes, false),
+      );
     // And without its NUL bytes, for a NUL inside a key: each reading can only add lines.
-    readings.push(Buffer.from(bytes.toString("latin1").replace(/\0/g, ""), "latin1").toString("utf8"));
+    readings.push(() => Buffer.from(bytes.toString("latin1").replace(/\0/g, ""), "latin1").toString("utf8"));
   }
   const lines = new Set<number>();
   let chars = 0;
-  for (const text of readings) {
+  for (const read of readings) {
+    const text = read();
     chars += text.length;
     for (const line of secretLines(text, [ASSIGNED_SECRET_RE])) lines.add(line);
+    await between();
   }
   return { path, sha256, lines: [...lines].sort((a, b) => a - b), chars, scanned: true };
 }
@@ -163,7 +178,7 @@ export function secretsCheck(
     return {
       kind: "secrets",
       ok: false,
-      title: `${n} binary ${n === 1 ? "file was" : "files were"} not scanned (the run sent no bytes, or past the ${BINARY_SCAN_BYTES / 1024 / 1024} MB the board scans in a run): a person approves ${n === 1 ? "it" : "them"}: ${listed(unscanned)}`,
+      title: `${n} binary ${n === 1 ? "file was" : "files were"} not scanned (its bytes came under another spelling of its name, or past what the board scans in a run: ${BINARY_SCAN_BYTES / 1024 / 1024} MB, ${BINARY_SCAN_FILES} files): a person approves ${n === 1 ? "it" : "them"}: ${listed(unscanned)}`,
       detail: { ...detail, unscanned },
     };
   }
@@ -181,6 +196,8 @@ export function secretsCheck(
 
 /** The bytes of binary files the board scans in one run's review, all told; past it, a person approves. */
 export const BINARY_SCAN_BYTES = 64 * 1024 * 1024;
+/** And the binary files it reads in one run's review; past them, a person approves too. */
+export const BINARY_SCAN_FILES = 100;
 
 /** Every declared output is in the diff or among the run's artifacts. */
 export function outputsCheck(declared: string[], artifactPaths: string[], files: DiffFile[]): CheckResult {

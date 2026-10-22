@@ -13,7 +13,7 @@ import type { GitHosts } from "../src/git/hosts.js";
 import { needsYouText } from "../src/notify/notify.js";
 import { executePullRequest } from "../src/reviews/outcomes.js";
 import { approveReview, vetoReview } from "../src/reviews/service.js";
-import { oneScanAtATime } from "../src/runs/service.js";
+import { oneScanAtATime } from "../src/reviews/service.js";
 import { fakeGitHub } from "./github-fake.js";
 import { fakeGitLab } from "./gitlab-fake.js";
 import {
@@ -1330,15 +1330,22 @@ describe("reviews", () => {
       error: "logo.png is binary, which the review cannot show: only a person approves it",
     });
 
-    // A binary file the run sent no bytes for was never read: it is a person's too.
+    // A binary file the run sent no bytes for has nothing delivered: a teammate approves, and the pull request
+    // refuses it, naming it.
     const noBytes = await open("No bytes", [], ["blob.bin"]);
-    expect(noBytes.secrets).toMatchObject({ ok: false, detail: { unscanned: ["blob.bin"] } });
+    expect(noBytes.secrets).toMatchObject({ ok: true });
     const asVerifier3 = board.api(await reviewerToken(noBytes.task.id));
-    const noBytesRefused = await asVerifier3.post(`${base}/reviews/${noBytes.review.id}/approve`, {});
-    expect(noBytesRefused.status).toBe(409);
-    expect(noBytesRefused.body.error).toBe(
-      `#${noBytes.task.number} has binary files the secrets check did not read (blob.bin): a person decides it now, and has been asked`,
-    );
+    const noBytesApproved = await asVerifier3.post(`${base}/reviews/${noBytes.review.id}/approve`, {});
+    expect(noBytesApproved.status).toBe(200);
+    expect(noBytesApproved.body.pullRequests[0]).toMatchObject({ status: "failed" });
+    // One whose bytes came under another spelling of its name (a worker that folds case) was never scanned: a
+    // person's.
+    const folded = await open("Folded", [{ path: "Blob.bin", bytes: png }], ["blob.bin"]);
+    expect(folded.secrets).toMatchObject({ ok: false, detail: { unscanned: ["blob.bin"] } });
+    const foldedRefused = await board
+      .api(await reviewerToken(folded.task.id))
+      .post(`${base}/reviews/${folded.review.id}/approve`, {});
+    expect(foldedRefused.status).toBe(409);
     // A person who vetoes before the pull request is opened stops it: it opens only for an approved review.
     const vetoed = await open("Vetoed", [{ path: "yarn.lock", bytes: lock }]);
     const hosts: GitHosts = {

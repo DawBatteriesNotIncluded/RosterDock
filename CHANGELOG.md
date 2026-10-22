@@ -147,7 +147,7 @@ install built from that tree changes each of these:
   before the transaction that opens the review and up to 64 MB a run; a pull request writes only those bytes,
   and a binary file goes into a pull request only where a person approved: a teammate's approval hands the
   review to people, who are told (a needs-you sentence). A teammate still approves binary deliverables where no
-  pull request opens, unless the scan could not read one (no bytes, or past 64 MB). The worker takes out the
+  pull request opens, unless the scan could not read one (past 64 MB or 100 files, or under another spelling of its name). The worker takes out the
   `.git/info` the run could write and reads no system attributes file. A pull request now starts opening only
   for a review still approved. Upgrading: a review open before the upgrade with a binary file fails its pull
   request on approval, saying so; a person vetoes the approval and requests changes.

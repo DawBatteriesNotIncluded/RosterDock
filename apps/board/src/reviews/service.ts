@@ -34,6 +34,7 @@ import type { ObjectStore } from "../storage/s3.js";
 import { STATUS_LABEL, type TaskRow } from "../tasks/service.js";
 import {
   BINARY_SCAN_BYTES,
+  BINARY_SCAN_FILES,
   BLOCKING_CHECKS,
   evaluationCheck,
   outputsCheck,
@@ -451,16 +452,38 @@ export interface OpenedReview {
  */
 /**
  * Scan a completed run's binary files for its review, before the transaction that opens it: the bytes a pull
- * request would write for each file its diff calls binary, a file at a time, the board's other work let in
- * between, and no more than BINARY_SCAN_BYTES of them (past it, only their sha256). Empty where the diff cannot
- * be read; the review then shows none of it.
+ * request would write for each file its diff calls binary, a file and a reading at a time, the board's other work
+ * let in between, and one run's at a time on the board, whichever company it is for. No more than `budget` bytes
+ * or `most` files are read: past them a file's stored sha256 binds it, unread. A file with no artifact under its
+ * name has nothing delivered (a pull request refuses it); one with its bytes under another spelling of the name
+ * (a worker whose file system ignores case) is not scanned. Empty where the diff cannot be read; the review then
+ * shows none of it.
  */
-export async function scanRunBinaries(
+export function scanRunBinaries(
   db: Queryable,
   store: ObjectStore | null,
   runId: string,
-  /** How many of their bytes are scanned; a test's is smaller. */
+  /** How many bytes and files are read; a test's are fewer. */
   budget = BINARY_SCAN_BYTES,
+  most = BINARY_SCAN_FILES,
+): Promise<Map<string, ScannedBinary>> {
+  return oneScanAtATime(() => scanEachBinary(db, store, runId, budget, most));
+}
+
+/** The scans of runs' binary files, one at a time on the board, whichever companies they are for. */
+let scanning: Promise<unknown> = Promise.resolve();
+export function oneScanAtATime<T>(scan: () => Promise<T>): Promise<T> {
+  const turn = scanning.then(scan, scan);
+  scanning = turn.catch(() => {});
+  return turn;
+}
+
+async function scanEachBinary(
+  db: Queryable,
+  store: ObjectStore | null,
+  runId: string,
+  budget: number,
+  most: number,
 ): Promise<Map<string, ScannedBinary>> {
   const scanned = new Map<string, ScannedBinary>();
   const diff = (
@@ -476,19 +499,40 @@ export async function scanRunBinaries(
   } catch (err) {
     if (!(err instanceof DiffError)) throw err;
   }
+  const yieldNow = () => new Promise<void>((resolve) => setImmediate(resolve));
+  let read = 0;
   for (const f of files) {
     if (!f.binary || f.status === "deleted" || scanned.has(f.path)) continue;
     const row = (
-      await db.query<{ content: string | null; object_key: string | null; encoding: string | null }>(
-        "SELECT content, object_key, encoding FROM artifacts WHERE run_id = $1 AND path = $2",
+      await db.query<{
+        content: string | null;
+        object_key: string | null;
+        encoding: string | null;
+        sha256: string;
+        bytes: number;
+      }>(
+        "SELECT content, object_key, encoding, sha256, bytes FROM artifacts WHERE run_id = $1 AND path = $2",
         [runId, f.path],
       )
     ).rows[0];
-    const bytes = row ? await artifactBytes(store, row) : null;
-    const scan = bytes === null || bytes.length <= budget;
-    if (bytes && scan) budget -= bytes.length;
-    scanned.set(f.path, scanBinary(f.path, bytes, scan));
-    await new Promise((resolve) => setImmediate(resolve));
+    if (!row) {
+      const elsewhere = (
+        await db.query(
+          "SELECT 1 FROM artifacts WHERE run_id = $1 AND kind <> 'diff' AND lower(path) = lower($2) LIMIT 1",
+          [runId, f.path],
+        )
+      ).rowCount;
+      scanned.set(f.path, { path: f.path, sha256: null, lines: [], chars: 0, scanned: !elsewhere });
+      continue;
+    }
+    if (read >= most || row.bytes > budget) {
+      scanned.set(f.path, { path: f.path, sha256: row.sha256, lines: [], chars: 0, scanned: false });
+      continue;
+    }
+    read++;
+    budget -= row.bytes;
+    scanned.set(f.path, await scanBinary(f.path, await artifactBytes(store, row), true, yieldNow));
+    await yieldNow();
   }
   return scanned;
 }

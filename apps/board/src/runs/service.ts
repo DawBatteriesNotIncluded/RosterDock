@@ -1284,14 +1284,6 @@ const FINISHED_RUN: readonly string[] = ["completed", "failed", "stopped", "bloc
 /** The runs whose completion this board is recording now. */
 const completing = new Set<string>();
 
-/** The scans of runs' binary files, one at a time on the board, whichever companies they are for. */
-let scanning: Promise<unknown> = Promise.resolve();
-export function oneScanAtATime<T>(scan: () => Promise<T>): Promise<T> {
-  const turn = scanning.then(scan, scan);
-  scanning = turn.catch(() => {});
-  return turn;
-}
-
 async function recordCompletion(
   db: Db,
   first: RunRow,
@@ -1306,7 +1298,7 @@ async function recordCompletion(
   // A completed task run's binary files are scanned for its review before the transaction, which stays short.
   const scanned =
     first.kind === "task" && input.status === "completed"
-      ? await oneScanAtATime(() => scanRunBinaries(db, store, runId))
+      ? await scanRunBinaries(db, store, runId)
       : undefined;
   let opened: OpenedReview | null = null;
   const { result } = await mutate(db, first.company_id, actor, async (ctx) => {

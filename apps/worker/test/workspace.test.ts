@@ -1,5 +1,6 @@
 // Workspace against a local bare repository: no network.
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   chmod,
@@ -12,6 +13,7 @@ import {
   realpath,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -520,6 +522,42 @@ describe("workspace", () => {
     const diff = h.artifacts.find((a) => a.kind === "diff")!.content;
     expect(diff).toContain('+api_key = "not-a-real-value-123"');
     expect(diff).toContain('+password = "not-a-real-value-123"');
+    await cleanupWorkspace(ws);
+  });
+
+  it("delivers no declared output its index entry was forged to hide, and fails the run naming it", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-forged-index",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    const id = {
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.com",
+    };
+    // Staged with the key, then the entry's blob set back to HEAD's by hand, its size and times kept: git
+    // passes the file over, and its diff is empty.
+    await writeFile(path.join(ws.dir, "README.md"), '# demo\napi_key = "not-a-real-value-123"\n', "utf8");
+    // Its time well before the index's, so git takes the entry as it stands, as for any file not just written.
+    const before = new Date(Date.now() - 3600_000);
+    await utimes(path.join(ws.dir, "README.md"), before, before);
+    expect((await git(["add", "README.md"], ws.dir, id)).code).toBe(0);
+    const staged = (await git(["rev-parse", ":README.md"], ws.dir, id)).stdout.trim();
+    const clean = (await git(["rev-parse", "HEAD:README.md"], ws.dir, id)).stdout.trim();
+    const indexFile = path.join(ws.dir, ".git", "index");
+    const index = await readFile(indexFile);
+    Buffer.from(clean, "hex").copy(index, index.indexOf(Buffer.from(staged, "hex")));
+    const body = index.subarray(0, index.length - 20);
+    await writeFile(indexFile, Buffer.concat([body, createHash("sha1").update(body).digest()]));
+    expect((await git(["diff", "--cached", "--name-only"], ws.dir, id)).stdout).toBe("");
+    const h = await harvestWorkspace(ws, ["README.md"]);
+    expect(h.unreadable).toBe(
+      'the run\'s changes could not be read back for review (a declared output is not what git holds for it, so the review would not show it: "README.md")',
+    );
+    expect(h.artifacts.map((a) => a.path)).not.toContain("README.md");
     await cleanupWorkspace(ws);
   });
 
