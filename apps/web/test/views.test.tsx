@@ -2047,6 +2047,7 @@ describe("pure helpers", () => {
         load: async () => ({ offered: { kinds: [], board: true }, providers: [] }),
         loadSecrets: async () => [],
         setSecret: asyncNoop,
+        checkNew: async () => ({ ok: true }),
         create: async () => Promise.reject(new Error("not in this test")),
         update: async () => Promise.reject(new Error("not in this test")),
         remove: asyncNoop,

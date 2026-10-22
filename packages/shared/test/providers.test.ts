@@ -189,6 +189,21 @@ describe("a provider's schema", () => {
     expect(labelLooksLikeKey("Acme Azure (prod)")).toBe(false);
     expect(labelLooksLikeKey("Production-Claude-Opus-Deployment-2026")).toBe(false);
     expect(labelLooksLikeKey("Acme a3f9c2e1b4d5f60718293a4b5c6d7e8f")).toBe(true);
+    expect(labelLooksLikeKey("Acme a3f9c2e1-b4d5-4c6d-8e7f-0123456789ab")).toBe(true);
+    // Labels people write: long words, addresses, brackets, slashes, other scripts.
+    for (const label of [
+      "Azure Entwicklungsumgebung",
+      "Acme (acme-prod.openai.azure.com)",
+      "Owner: dana.lee@acme.com",
+      "SK-Telecom Azure",
+      "xoxo-labs vLLM",
+      "Production/Development",
+      "生産環境のアズールオープンエーアイ接続設定用プロバイダー",
+      "gpt4o-prod-eastus2-deployment",
+    ])
+      expect(labelLooksLikeKey(label), label).toBe(false);
+    expect(providerNameRefusal("acme-internationalization")).toBeNull();
+    expect(nameLooksLikeKey("githubPersonalAccessToken")).toBe(false);
     expect(labelLooksLikeKey("sk-ant-api03-abcdefghijklmnopqrstuvwxyz")).toBe(true);
     const r = parse({
       kind: "openai",

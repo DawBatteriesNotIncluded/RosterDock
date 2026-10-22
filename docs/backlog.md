@@ -56,4 +56,5 @@ scheduled; delete it when it ships.
   32-character Azure key that starts with a letter, an AWS key id, a long token's tail. The raw-secret guard's
   check on reference fields wants 40 or more characters for a bare run. Model providers and company secrets'
   names refuse these with `nameLooksLikeKey` (`packages/shared/src/provider-kinds.ts`); every env var NAME field
-  should.
+  should. Settings > Connections > Secrets should check it before it sends the name, as Settings > Models does:
+  the board refuses one, but the name is in the request's URL, which the request log keeps.

@@ -5,6 +5,7 @@
 import { ModelProviderSchema, UpdateModelProviderSchema } from "@rosterdock/shared";
 import type { FastifyInstance } from "fastify";
 import {
+  checkNewProvider,
   createProvider,
   credentialStates,
   deleteProvider,
@@ -52,6 +53,17 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ProviderDeps)
       const row = await createProvider(deps, req.companyId, req.principal.actor, body);
       reply.code(201);
       return one(req.companyId, row);
+    },
+  );
+
+  // Would this provider be added? The same checks as adding it, and nothing written: no row, no event.
+  app.post(
+    "/api/companies/:companyId/model-providers/check-new",
+    { config: { action: "model.manage" } },
+    async (req) => {
+      const body = parseProviderBody(ModelProviderSchema, req.body);
+      await checkNewProvider(deps, req.companyId, body);
+      return { ok: true };
     },
   );
 

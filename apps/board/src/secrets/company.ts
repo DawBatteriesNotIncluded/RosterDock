@@ -100,7 +100,11 @@ function requireStore(store: SecretStore | null | undefined): SecretStore {
   return store;
 }
 
-/** Set (or replace) one value. The value goes to the store inside the transaction; the row and the event carry the name only. */
+/**
+ * Set (or replace) one value. The value goes to the store inside the transaction; the row and the event carry
+ * the name only. With `createOnly`, a name already set is refused (409) and its value left as it was: the row
+ * is claimed first, so of two at once only one sets it.
+ */
 export async function setCompanySecret(
   db: Db,
   store: SecretStore | null | undefined,
@@ -108,22 +112,28 @@ export async function setCompanySecret(
   actor: ActorRef,
   name: string,
   value: string,
+  opts: { createOnly?: boolean } = {},
 ): Promise<CompanySecretRow> {
   const s = requireStore(store);
   const entry = companySecretName(companyId);
   const { result } = await mutate(db, companyId, actor, async (ctx) => {
-    const existing = (await s.get(entry)) ?? {};
-    await s.put(entry, { ...existing, [name]: value });
     const row = (
       await ctx.client.query<CompanySecretRow>(
         `INSERT INTO company_secrets (company_id, name, updated_by_kind, updated_by_id)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (company_id, name)
-         DO UPDATE SET updated_at = now(), updated_by_kind = EXCLUDED.updated_by_kind, updated_by_id = EXCLUDED.updated_by_id
+         DO ${opts.createOnly ? "NOTHING" : "UPDATE SET updated_at = now(), updated_by_kind = EXCLUDED.updated_by_kind, updated_by_id = EXCLUDED.updated_by_id"}
          RETURNING *`,
         [companyId, name, actor.kind, actor.id],
       )
-    ).rows[0]!;
+    ).rows[0];
+    if (!row)
+      throw new HttpError(
+        409,
+        `${name} is already set for this company; use it as it is, or give the key another name`,
+      );
+    const existing = (await s.get(entry)) ?? {};
+    await s.put(entry, { ...existing, [name]: value });
     await ctx.emit("secret.set", { kind: "company", id: companyId }, { name, replaced: name in existing });
     return row;
   });

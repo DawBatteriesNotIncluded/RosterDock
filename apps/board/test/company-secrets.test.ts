@@ -145,12 +145,17 @@ describe("company secrets", () => {
   it("refuses what it must: a bad name, an empty value, an unknown name, and a board without a store", async () => {
     const { api, base } = await seedCompany(board, "cs4@example.com");
     expect((await api.put(`${base}/secrets/not-a-name`, { value: "x-000000" })).status).toBe(400);
-    // A key given as the name (a 32-character Azure key starts with a letter as often as not) is not kept as one.
+    // A key given as a new name (a 32-character Azure key starts with a letter as often as not) is not kept
+    // as one; a long name of letters alone is a name.
     const keyAsName = "a3f9c2e1b4d5f60718293a4b5c6d7e8f";
     const asName = await api.put(`${base}/secrets/${keyAsName}`, { value: "x-000000" });
     expect(asName.status).toBe(400);
     expect(JSON.stringify(asName.body)).not.toContain(keyAsName);
     expect((await api.get(`${base}/secrets`)).body).toEqual([]);
+    expect((await api.put(`${base}/secrets/githubPersonalAccessToken`, { value: "x-000000" })).status).toBe(
+      200,
+    );
+    expect((await api.del(`${base}/secrets/githubPersonalAccessToken`)).status).toBe(200);
     expect((await api.put(`${base}/secrets/A_TOKEN`, { value: "" })).status).toBe(400);
     expect((await api.put(`${base}/secrets/A_TOKEN`, {})).status).toBe(400);
     expect((await api.del(`${base}/secrets/A_TOKEN`)).status).toBe(404);
@@ -160,6 +165,40 @@ describe("company secrets", () => {
     expect(refused.status).toBe(409);
     expect(refused.body.error).toContain("secret store");
     expect((await none.api.get(`${none.base}/secrets`)).body).toEqual([]);
+  });
+
+  it("a name set before this rule can still be replaced and removed; a new one set only if new stays unset", async () => {
+    const { api, base, owner } = await seedCompany(board, "cs6@example.com");
+    const companyId = base.split("/").pop()!;
+    // Set before names that look like keys were refused: it can be rotated and, above all, removed.
+    const old = "a3f9c2e1b4d5f60718293a4b5c6d7e8f";
+    await board.db.query(
+      "INSERT INTO company_secrets (company_id, name, updated_by_kind, updated_by_id) SELECT $1, $2, 'user', user_id FROM memberships WHERE company_id = $1",
+      [companyId, old],
+    );
+    expect((await api.put(`${base}/secrets/${old}`, { value: "rotated-000000" })).status).toBe(200);
+    expect((await api.del(`${base}/secrets/${old}`)).status).toBe(200);
+    expect((await api.get(`${base}/secrets`)).body).toEqual([]);
+
+    // If-None-Match: * sets a new name, and never one already set: the value stays as it was.
+    const put = (value: string) =>
+      board.app.inject({
+        method: "PUT",
+        url: `${base}/secrets/MODELS_ACME_KEY`,
+        headers: { authorization: `Bearer ${owner.token}`, "if-none-match": "*" },
+        payload: { value },
+      });
+    expect((await put("first-value-000000")).statusCode).toBe(200);
+    const again = await put("second-value-000000");
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toBe(
+      "MODELS_ACME_KEY is already set for this company; use it as it is, or give the key another name",
+    );
+    expect(JSON.parse(readFileSync(path.join(dir, `rosterdock-company-${companyId}.json`), "utf8"))).toEqual({
+      MODELS_ACME_KEY: "first-value-000000",
+    });
+    const events = (await api.get(`${base}/events?limit=10`)).body as { type: string }[];
+    expect(events.filter((e) => e.type === "secret.set")).toHaveLength(2);
   });
 
   it("companyEnv: the store entry over the shared names, empty values ignored, the shared names alone without a store", async () => {

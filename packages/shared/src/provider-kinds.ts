@@ -146,16 +146,22 @@ export function compatibleEndpoint(raw: string): string | null {
 }
 
 /**
- * Whether what was given as an env var NAME looks like a key pasted in its place. A name is words joined by
- * underscores; a key is a long unbroken run (an Azure key is 32 hex characters, an AWS key id 20, a Stripe
- * key's tail longer), or one of the shapes the raw-secret guard knows.
+ * Whether one word looks like a key rather than a word: a run of hex (an Azure key is 32 characters; dashes
+ * aside, so a key written as a UUID too), or a long run that mixes letters and digits. A long word of letters
+ * alone (githubPersonalAccessToken, Entwicklungsumgebung) is a word.
+ */
+function wordLooksLikeKey(word: string): boolean {
+  if (/^[0-9a-f]{16,}$/i.test(word.replace(/-/g, ""))) return true;
+  return word.split(/[-_]/).some((part) => part.length >= 20 && /[0-9]/.test(part) && /[A-Za-z]/.test(part));
+}
+
+/**
+ * Whether what was given as an env var NAME looks like a key pasted in its place: one of the shapes the
+ * raw-secret guard knows, or a word between its underscores that looks like a key (an Azure key, an AWS key
+ * id, a token's long tail).
  */
 export function nameLooksLikeKey(name: string): boolean {
-  return (
-    looksLikeRawSecret(name) ||
-    /^[0-9a-f]{16,}$/i.test(name) ||
-    name.split("_").some((word) => word.length >= 20)
-  );
+  return looksLikeRawSecret(name) || name.split("_").some(wordLooksLikeKey);
 }
 
 /** A provider's name: short, lowercase, unique in the company, and never a key typed where the name goes. */
@@ -168,12 +174,16 @@ export function providerNameRefusal(name: string): string | null {
 
 /** The most a provider's label holds. */
 export const MAX_PROVIDER_LABEL = 80;
-/** Whether a label people read has a key in it: one of its words looks like one (a 32-character Azure key). */
+/**
+ * Whether a label people read has a key in it: a key's known shape anywhere, or a word that looks like one.
+ * Words split on spaces and the punctuation labels use, so an address or a note in brackets reads as words.
+ */
 export function labelLooksLikeKey(label: string): boolean {
+  if (containsRawSecret(label)) return true;
   return label
-    .split(/\s+/)
+    .split(/[\s/().,@:;]+/)
     .filter(Boolean)
-    .some((word) => looksLikeRawSecret(word) || nameLooksLikeKey(word.replace(/-/g, "_")));
+    .some(wordLooksLikeKey);
 }
 
 /** The headers an OpenAI-compatible server may take its key in. */

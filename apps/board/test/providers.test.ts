@@ -445,6 +445,39 @@ describe("model providers", () => {
     expect(listed.body.endpoint).toBe("http://vllm.internal.test:8000/v1");
   });
 
+  it("answers whether a provider would be added, writing nothing", async () => {
+    const { api, base } = await seedCompany(board, "mp9@example.com");
+    const body = {
+      kind: "anthropic",
+      name: "acme",
+      label: "Acme",
+      credentials: { apiKey: "MODELS_ACME_KEY" },
+    };
+    const check = (b: unknown) => api.post(`${base}/model-providers/check-new`, b);
+    expect((await check(body)).body).toEqual({ ok: true });
+    expect((await api.get(`${base}/model-providers`)).body.providers).toEqual([]);
+    expect((await providerEvents(api, base)).length).toBe(0);
+    // Refused as adding it would be: a private endpoint, a board-own name, a value, a name taken.
+    const privateEndpoint = await check({
+      kind: "openai_compatible",
+      name: "l",
+      label: "L",
+      endpoint: "https://vllm.internal.test/v1",
+    });
+    expect(privateEndpoint.status).toBe(422);
+    expect((await check({ ...body, credentials: { apiKey: "ANTHROPIC_API_KEY" } })).status).toBe(403);
+    expect(
+      (await check({ ...body, credentials: { apiKey: "a3f9c2e1b4d5f60718293a4b5c6d7e8f" } })).status,
+    ).toBe(400);
+    expect((await api.post(`${base}/model-providers`, body)).status).toBe(201);
+    expect((await check(body)).status).toBe(409);
+    // Only those who may add one may ask.
+    await api.post(`${base}/members`, { email: "mp9-viewer@example.com", role: "viewer" });
+    const viewer = board.api((await board.login("mp9-viewer@example.com")).token);
+    expect((await viewer.post(`${base}/model-providers/check-new`, body)).status).toBe(403);
+    expect((await providerEvents(api, base)).length).toBe(1);
+  });
+
   it("checks endpoints against the company's own private destinations, and no other company's", async () => {
     const mine = "6f9c1a4e-2b7d-4c3a-9e1f-0a1b2c3d4e5f";
     const theirs = "0d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6";

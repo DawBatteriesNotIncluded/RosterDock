@@ -1,6 +1,6 @@
 // Company model providers on the web: one Activity sentence per event, in a manager's words, from names only;
 // and Settings > Models.
-import type { EventRecord, EventType } from "@rosterdock/shared";
+import type { EventRecord, EventType, ModelProviderInput } from "@rosterdock/shared";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ModelProvider, ModelProviders } from "../src/api/types.ts";
@@ -13,10 +13,11 @@ import {
   credentialRole,
   engineLine,
   ModelsPanel,
+  formName,
   formProblem,
   formRequest,
   providerSlug,
-  saveProvider,
+  submitForm,
   suggestedSecretName,
   whereLine,
   type ModelsPanelProps,
@@ -109,7 +110,7 @@ const providers: ModelProviders = {
       region: "us-east-1",
       credentials: { bearerToken: "MODELS_OLD_KEY" },
       credentialStates: { bearerToken: { state: "missing" } },
-      models: [],
+      models: [{ id: "us.anthropic.claude-old", family: "claude", source: "typed" }],
       offered: false,
       archivedAt: "2026-10-20T12:00:00.000Z",
     }),
@@ -125,6 +126,7 @@ const panel = (over: Partial<ModelsPanelProps> = {}) =>
         load={async () => providers}
         loadSecrets={async () => []}
         setSecret={async () => undefined}
+        checkNew={async () => ({ ok: true })}
         create={async () => providers.providers[0]!}
         update={async () => providers.providers[0]!}
         remove={async () => undefined}
@@ -168,7 +170,7 @@ describe("Settings > Models", () => {
   const form = (over: Partial<ProviderForm> = {}): ProviderForm => ({
     kind: "anthropic",
     label: "Acme",
-    name: "",
+    name: null,
     endpoint: "",
     region: "",
     authHeader: "authorization",
@@ -177,7 +179,7 @@ describe("Settings > Models", () => {
     picked: "",
     ...over,
   });
-  const nothingTaken = { providers: [], secrets: [] };
+  const nothingTaken = { providers: [], secrets: [], shared: [] };
 
   it("saves names only, each kind with its own fields, and a pasted key under the name the body gives", () => {
     // The pasted key goes under the name the provider's body names, and never into the body.
@@ -243,19 +245,21 @@ describe("Settings > Models", () => {
     );
     // Another provider of that name, archived or not, and a key already set under the name: never replaced.
     const acme = { name: "acme", credentials: { apiKey: "MODELS_ACME_KEY" } };
-    expect(formProblem(form({ kind: "openai" }), { providers: [acme], secrets: [] })).toMatch(
+    expect(formProblem(form({ kind: "openai" }), { providers: [acme], secrets: [], shared: [] })).toMatch(
       /already has a provider named acme/,
     );
     expect(
       formProblem(form({ name: "acme2" }), {
         providers: [{ name: "other", credentials: { apiKey: "MODELS_ACME2_KEY" } }],
         secrets: [],
+        shared: [],
       }),
     ).toMatch(/^MODELS_ACME2_KEY is already set/);
     expect(
       formProblem(form(), {
         providers: [],
         secrets: [{ name: "MODELS_ACME_KEY", updatedAt: "", updatedBy: daniel }],
+        shared: [],
       }),
     ).toMatch(/^MODELS_ACME_KEY is already set/);
     // Using a saved secret that is already set is the point of it.
@@ -263,6 +267,7 @@ describe("Settings > Models", () => {
       formProblem(form({ how: "saved", picked: "MODELS_ACME_KEY" }), {
         providers: [],
         secrets: [{ name: "MODELS_ACME_KEY", updatedAt: "", updatedBy: daniel }],
+        shared: [],
       }),
     ).toBeNull();
     // Each kind's own fields, by the board's rules.
@@ -282,42 +287,68 @@ describe("Settings > Models", () => {
     expect(formProblem(form({ kind: "bedrock" }), nothingTaken)).toBe("missing");
   });
 
-  it("sets a pasted key in the company's secrets before it saves the provider, and saves nothing if it cannot", async () => {
+  it("asks the board first, then sets a pasted key under a new name, then saves the provider; a refusal stops the rest", async () => {
     const calls: string[] = [];
-    const { input } = formRequest(form());
-    await saveProvider(
-      input,
-      { name: "MODELS_ACME_KEY", value: "pasted" },
-      {
-        setSecret: async (name) => void calls.push(`PUT /secrets/${name}`),
-        create: async (body) => {
-          calls.push(`POST /model-providers ${JSON.stringify(body.credentials)}`);
-          return providers.providers[0]!;
-        },
+    const deps = (refuse?: "check" | "secret") => ({
+      checkNew: async () => {
+        calls.push("POST /model-providers/check-new");
+        if (refuse === "check") throw new Error("refused: llm.internal resolves to a private address");
       },
-    );
+      setSecret: async (name: string) => {
+        calls.push(`PUT /secrets/${name} (only if new)`);
+        if (refuse === "secret") throw new Error("MODELS_ACME_KEY is already set");
+      },
+      create: async (body: ModelProviderInput) => {
+        calls.push(`POST /model-providers ${JSON.stringify(body.credentials)}`);
+        return providers.providers[0]!;
+      },
+    });
+    expect(await submitForm(form(), nothingTaken, deps())).not.toBeNull();
     expect(calls).toEqual([
-      "PUT /secrets/MODELS_ACME_KEY",
+      "POST /model-providers/check-new",
+      "PUT /secrets/MODELS_ACME_KEY (only if new)",
       'POST /model-providers {"apiKey":"MODELS_ACME_KEY"}',
     ]);
     // The value never reaches the provider's body.
-    expect(calls.join(" ")).not.toContain("pasted");
+    expect(calls.join(" ")).not.toContain("pasted-value");
+    // The board refuses the provider: no key is set for it.
+    calls.length = 0;
+    await expect(submitForm(form(), nothingTaken, deps("check"))).rejects.toThrow("private address");
+    expect(calls).toEqual(["POST /model-providers/check-new"]);
+    // The name is taken after all: nothing is saved over it, and no provider names it.
+    calls.length = 0;
+    await expect(submitForm(form(), nothingTaken, deps("secret"))).rejects.toThrow("already set");
+    expect(calls).toEqual(["POST /model-providers/check-new", "PUT /secrets/MODELS_ACME_KEY (only if new)"]);
+    // A form with a problem sends nothing at all: a name an archived provider holds, a shared name, or
+    // secrets not loaded yet.
+    calls.length = 0;
+    const archived = { name: "acme", credentials: {} };
+    expect(await submitForm(form(), { ...nothingTaken, providers: [archived] }, deps())).toBeNull();
+    expect(await submitForm(form(), { ...nothingTaken, shared: ["MODELS_ACME_KEY"] }, deps())).toBeNull();
+    expect(await submitForm(form(), { ...nothingTaken, secrets: null }, deps())).toBeNull();
+    expect(await submitForm(form({ label: "" }), nothingTaken, deps())).toBeNull();
+    expect(calls).toEqual([]);
+  });
 
-    const refused: string[] = [];
-    await expect(
-      saveProvider(
-        input,
-        { name: "MODELS_ACME_KEY", value: "pasted" },
-        {
-          setSecret: async () => Promise.reject(new Error("no secret store")),
-          create: async () => {
-            refused.push("POST");
-            return providers.providers[0]!;
-          },
-        },
-      ),
-    ).rejects.toThrow("no secret store");
-    expect(refused).toEqual([]);
+  it("never pastes under a name the operator shares, and forgets a pick a reload took away", () => {
+    expect(formProblem(form(), { ...nothingTaken, shared: ["MODELS_ACME_KEY"] })).toBe(
+      "MODELS_ACME_KEY is a name your operator shares. Give this provider another name.",
+    );
+    const saved = form({ how: "saved", picked: "GONE_KEY" });
+    expect(formProblem(saved, nothingTaken)).toBe("missing");
+    expect(
+      formProblem(saved, {
+        ...nothingTaken,
+        secrets: [{ name: "GONE_KEY", updatedAt: "", updatedBy: daniel }],
+      }),
+    ).toBeNull();
+    expect(formProblem(form({ how: "shared", picked: "OLD" }), { ...nothingTaken, shared: ["NEW"] })).toBe(
+      "missing",
+    );
+    // A typed name is the person's: cleared, it is missing, not the label's again.
+    expect(formName(form({ name: "" }))).toBe("");
+    expect(formProblem(form({ name: "" }), nothingTaken)).toBe("missing");
+    expect(formName(form({ name: null, label: "Acme Azure" }))).toBe("acme-azure");
   });
 
   it("shows each provider by name, its key's source, its models and what the operator turned off", () => {
@@ -333,6 +364,10 @@ describe("Settings > Models", () => {
     expect(html).toContain("Teammates do not think with them yet");
     // Archived, of a kind no longer offered, and its key not set.
     expect(html).toContain("Archived");
+    // An archived provider's models stay listed, and nothing on them can be changed.
+    expect(html).toContain("us.anthropic.claude-old");
+    expect(html).not.toContain("Take us.anthropic.claude-old off the list");
+    expect(html).toContain("Take claude-opus-5-5 off the list");
     expect(html).toContain("Turned off by your operator");
     expect(html).toContain("not set yet");
     // Bedrock is not offered here: the form says so in words, and offers no Bedrock choice.

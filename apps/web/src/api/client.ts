@@ -95,11 +95,16 @@ export function messageWithIssues(message: string, details: unknown): string {
   return issues.length ? `${message}: ${issues.join("; ")}` : message;
 }
 
-async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+async function request<T>(
+  method: string,
+  url: string,
+  body?: unknown,
+  extraHeaders: Record<string, string> = {},
+): Promise<T> {
   const res = await fetch(url, {
     method,
     credentials: "include",
-    headers: body !== undefined ? { "content-type": "application/json" } : {},
+    headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...extraHeaders },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -251,11 +256,19 @@ export interface Client {
   features(companyId?: string): Promise<Features>;
   /** Company secrets: names only; the PUT body is the one value the board accepts, write-only. */
   secrets(companyId: string): Promise<CompanySecret[]>;
-  setSecret(companyId: string, name: string, value: string): Promise<CompanySecret>;
+  /** With createOnly, a name already set is refused (409) and its value kept. */
+  setSecret(
+    companyId: string,
+    name: string,
+    value: string,
+    opts?: { createOnly?: boolean },
+  ): Promise<CompanySecret>;
   deleteSecret(companyId: string, name: string): Promise<void>;
   /** Company model providers: what the operator offers, and the company's own, by name. */
   modelProviders(companyId: string): Promise<ModelProviders>;
   createModelProvider(companyId: string, input: ModelProviderInput): Promise<ModelProvider>;
+  /** Would this provider be added? Writes nothing; refuses as adding it would. */
+  checkNewModelProvider(companyId: string, input: ModelProviderInput): Promise<{ ok: true }>;
   updateModelProvider(
     companyId: string,
     providerId: string,
@@ -376,10 +389,17 @@ export const httpClient: Client = {
   features: (companyId) =>
     request("GET", `/api/features${companyId ? `?companyId=${encodeURIComponent(companyId)}` : ""}`),
   secrets: (id) => request("GET", `${c(id)}/secrets`),
-  setSecret: (id, name, value) => request("PUT", `${c(id)}/secrets/${encodeURIComponent(name)}`, { value }),
+  setSecret: (id, name, value, opts) =>
+    request(
+      "PUT",
+      `${c(id)}/secrets/${encodeURIComponent(name)}`,
+      { value },
+      opts?.createOnly ? { "if-none-match": "*" } : {},
+    ),
   deleteSecret: (id, name) => request("DELETE", `${c(id)}/secrets/${encodeURIComponent(name)}`),
   modelProviders: (id) => request("GET", `${c(id)}/model-providers`),
   createModelProvider: (id, input) => request("POST", `${c(id)}/model-providers`, input),
+  checkNewModelProvider: (id, input) => request("POST", `${c(id)}/model-providers/check-new`, input),
   updateModelProvider: (id, pid, input) => request("PATCH", `${c(id)}/model-providers/${pid}`, input),
   deleteModelProvider: (id, pid) => request("DELETE", `${c(id)}/model-providers/${pid}`),
   deleteConnection: (id, cn) => request("DELETE", `${c(id)}/connections/${cn}`),

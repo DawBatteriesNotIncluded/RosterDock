@@ -44,7 +44,10 @@ export interface ModelsPanelProps {
   features: Features;
   load(): Promise<ModelProviders>;
   loadSecrets(): Promise<CompanySecret[]>;
+  /** Sets a pasted key under a new name only: never over a value already set (the board refuses with 409). */
   setSecret(name: string, value: string): Promise<unknown>;
+  /** Would the board add this provider? Asked before a key is set, so a refusal leaves no key behind. */
+  checkNew(input: ModelProviderInput): Promise<unknown>;
   create(input: ModelProviderInput): Promise<ModelProvider>;
   update(id: string, input: UpdateModelProviderInput): Promise<ModelProvider>;
   remove(id: string): Promise<void>;
@@ -150,8 +153,8 @@ export type CredentialChoice = "paste" | "saved" | "shared" | "none";
 export interface ProviderForm {
   kind: ProviderKind;
   label: string;
-  /** The provider's name as typed; empty: made from the label. */
-  name: string;
+  /** The provider's name as typed; null: made from the label. */
+  name: string | null;
   endpoint: string;
   region: string;
   authHeader: CompatibleAuthHeader;
@@ -164,7 +167,7 @@ export interface ProviderForm {
 
 /** The provider's name: as typed, or made from the label. */
 export function formName(f: Pick<ProviderForm, "name" | "label">): string {
-  return f.name.trim() || providerSlug(f.label);
+  return f.name === null ? providerSlug(f.label) : f.name.trim();
 }
 
 /** The name a pasted key goes under, from the provider's name. */
@@ -211,8 +214,12 @@ export function formRequest(f: ProviderForm): {
 export function formProblem(
   f: ProviderForm,
   taken: {
+    /** Every provider, archived ones included. */
     providers: readonly Pick<ModelProvider, "name" | "credentials">[];
-    secrets: readonly CompanySecret[];
+    /** The company's secrets; null until they are loaded, and no key is pasted before. */
+    secrets: readonly CompanySecret[] | null;
+    /** The names the operator shares. */
+    shared: readonly string[];
   },
 ): string | "missing" | null {
   const label = f.label.trim();
@@ -232,30 +239,41 @@ export function formProblem(
     return "The region is an AWS region, such as us-east-1.";
   if (f.how === "paste" && name) {
     const secret = formSecretName(f);
-    // A pasted key never replaces another: a secret of that name may be another provider's live key.
+    // A pasted key never replaces another: a secret of that name may be another provider's live key, and a
+    // name the operator shares would be hidden from every connection behind this company's own value.
+    if (taken.shared.includes(secret))
+      return `${secret} is a name your operator shares. Give this provider another name.`;
     if (
-      taken.secrets.some((s) => s.name === secret) ||
+      (taken.secrets ?? []).some((s) => s.name === secret) ||
       taken.providers.some((v) => Object.values(v.credentials).includes(secret))
     )
       return `${secret} is already set. Choose "Use a saved secret" to use it, or give this provider another name.`;
+    if (taken.secrets === null) return "missing";
   }
   if (!label || !name) return "missing";
   if ((f.kind === "azure_openai" || f.kind === "openai_compatible") && !f.endpoint.trim()) return "missing";
   if (f.kind === "bedrock" && !f.region.trim()) return "missing";
   if (f.how === "paste" && !f.value.trim()) return "missing";
-  if ((f.how === "saved" || f.how === "shared") && !f.picked) return "missing";
+  // A pick a reload took away is no pick.
+  if (f.how === "saved" && !(taken.secrets ?? []).some((s) => s.name === f.picked)) return "missing";
+  if (f.how === "shared" && !taken.shared.includes(f.picked)) return "missing";
   return null;
 }
 
 /**
- * Save a provider: a pasted key first goes write-only into the company's secrets under its name, then the
- * provider is saved with that name. A key that could not be set saves nothing.
+ * Save the form: nothing while it has a problem; else the board checks the provider, a pasted key goes
+ * write-only into the company's secrets under a new name (never over one already set), and the provider is
+ * saved with that name. A refusal at any step stops the rest: no key is set for a provider the board refuses.
+ * Null: nothing was sent.
  */
-export async function saveProvider(
-  input: ModelProviderInput,
-  paste: { name: string; value: string } | null,
-  deps: Pick<ModelsPanelProps, "setSecret" | "create">,
-): Promise<ModelProvider> {
+export async function submitForm(
+  f: ProviderForm,
+  taken: Parameters<typeof formProblem>[1],
+  deps: Pick<ModelsPanelProps, "checkNew" | "setSecret" | "create">,
+): Promise<ModelProvider | null> {
+  if (formProblem(f, taken) !== null) return null;
+  const { input, paste } = formRequest(f);
+  await deps.checkNew(input);
   if (paste) await deps.setSecret(paste.name, paste.value);
   return deps.create(input);
 }
@@ -278,17 +296,19 @@ function given(models: readonly ProviderModel[]) {
 function AddProviderForm(p: {
   offered: ProviderKind[];
   features: Features;
-  secrets: CompanySecret[];
+  /** Null until loaded. */
+  secrets: CompanySecret[] | null;
+  /** Every provider, archived ones included. */
   providers: ModelProvider[];
   /** True once saved; false leaves the form as it was, with the reason shown above. */
-  onSave(input: ModelProviderInput, paste: { name: string; value: string } | null): Promise<boolean>;
+  onSubmit(f: ProviderForm, taken: Parameters<typeof formProblem>[1]): Promise<boolean>;
 }) {
   const canPaste = p.features.oauth;
   const shared = p.features.sharedEnvNames ?? [];
   const blank: ProviderForm = {
     kind: PROVIDER_KINDS.find((k) => p.offered.includes(k)) ?? "anthropic",
     label: "",
-    name: "",
+    name: null,
     endpoint: "",
     region: "",
     authHeader: "authorization",
@@ -299,7 +319,8 @@ function AddProviderForm(p: {
   const [f, setForm] = useState<ProviderForm>(blank);
   const set = (change: Partial<ProviderForm>) => setForm((was) => ({ ...was, ...change }));
   const [busy, setBusy] = useState(false);
-  const problem = formProblem(f, { providers: p.providers, secrets: p.secrets });
+  const taken = { providers: p.providers, secrets: p.secrets, shared };
+  const problem = formProblem(f, taken);
   const secretName = formSecretName(f);
   const turnedOff = PROVIDER_KINDS.filter((k) => !p.offered.includes(k));
   const choices: { value: CredentialChoice; label: string }[] = [
@@ -309,10 +330,8 @@ function AddProviderForm(p: {
     ...(f.kind === "openai_compatible" ? [{ value: "none" as const, label: "No key" }] : []),
   ];
   const save = async () => {
-    if (problem !== null) return;
     setBusy(true);
-    const { input, paste } = formRequest(f);
-    const saved = await p.onSave(input, paste);
+    const saved = await p.onSubmit(f, taken);
     setBusy(false);
     if (saved) setForm({ ...blank, kind: f.kind });
   };
@@ -359,7 +378,7 @@ function AddProviderForm(p: {
             aria-label="Name"
             className="mono"
             value={formName(f)}
-            // Cleared, it follows the label again.
+            // Once typed, the name is the person's, cleared or not.
             onChange={(e) => set({ name: e.target.value.toLowerCase() })}
             style={{ width: 180 }}
           />
@@ -440,7 +459,7 @@ function AddProviderForm(p: {
           <Field label="Secret" hint="Set under Settings > Connections > Secrets">
             <select aria-label="Secret" value={f.picked} onChange={(e) => set({ picked: e.target.value })}>
               <option value="">Pick one</option>
-              {p.secrets.map((s) => (
+              {(p.secrets ?? []).map((s) => (
                 <option key={s.name} value={s.name}>
                   {s.name}
                 </option>
@@ -629,15 +648,22 @@ function ProviderCard(p: {
 
 export function ModelsPanel(p: ModelsPanelProps) {
   const [info, setInfo] = useState<ModelProviders | null>(p.initial ?? null);
-  const [secrets, setSecrets] = useState<CompanySecret[]>(p.initialSecrets ?? []);
+  // Null until loaded: a key is not pasted before the form knows which names are taken.
+  const [secrets, setSecrets] = useState<CompanySecret[] | null>(p.initialSecrets ?? null);
   const [error, setError] = useState<string | null>(null);
   const reload = async () => setInfo(await p.load());
-  // Loaded again on every new event: a change someone else made is what the next change builds on.
-  const latestSeq = p.data.events[0]?.seq ?? 0;
+  // Loaded again when a provider, a secret or a price changes, here or anywhere: a change someone else made
+  // is what the next change builds on.
+  const changedSeq =
+    p.data.events.find(
+      (e) =>
+        e.type.startsWith("model_provider.") || e.type.startsWith("secret.") || e.type === "company.updated",
+    )?.seq ?? 0;
   useEffect(() => {
     void reload().catch((err: unknown) => setError((err as Error).message));
-    if (p.canEdit) void p.loadSecrets().then(setSecrets, () => setSecrets([]));
-  }, [latestSeq]);
+    // A list that cannot be read keeps the one before, never an empty one that would hide what is taken.
+    if (p.canEdit) void p.loadSecrets().then(setSecrets, () => {});
+  }, [changedSeq]);
   /** Make a change, then load the providers again; a refusal is shown above, and says false. */
   const change = async (fn: () => Promise<unknown>): Promise<boolean> => {
     let ok = false;
@@ -697,10 +723,13 @@ export function ModelsPanel(p: ModelsPanelProps) {
           features={p.features}
           secrets={secrets}
           providers={info.providers}
-          onSave={async (input, paste) => {
-            const saved = await change(() => saveProvider(input, paste, p));
-            if (paste) setSecrets(await p.loadSecrets().catch(() => secrets));
-            return saved;
+          onSubmit={async (f, taken) => {
+            let sent = false;
+            const ok = await change(async () => {
+              sent = (await submitForm(f, taken, p)) !== null;
+            });
+            if (f.how === "paste") setSecrets(await p.loadSecrets().catch(() => secrets));
+            return ok && sent;
           }}
         />
       ) : null}
