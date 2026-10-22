@@ -117,45 +117,78 @@ export function inJob(
   };
 }
 
+/** What probeJob found: the job works, or why not. Null: no answer in time, which says nothing yet. */
+export type JobProbe = { works: true } | { works: false; why: string } | null;
+
+/** How long probeJob waits for Windows PowerShell: a first start under an antivirus scan can take seconds. */
+export const PROBE_MS = 30_000;
+
 /**
  * Whether the job can start a command here at all: Windows PowerShell starts (a rule may block it), runs the
  * script in full language mode (AppLocker and WDAC put it in Constrained Language, which refuses the .NET the
  * script calls, and it would exit before cmd.exe starts) and starts the command through it. Tried with a
  * command that only exits with a code of its own.
  */
-export function probeJob(): Promise<boolean> {
+export function probeJob(): Promise<JobProbe> {
   const env = Object.fromEntries(
     Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined),
   );
   const job = inJob("exit", ["7"], env);
-  if (!job) return Promise.resolve(false);
+  if (!job) return Promise.resolve({ works: false, why: "there is no Windows PowerShell" });
   return new Promise((resolve) => {
     let child: ChildProcess;
+    const refused = (err: NodeJS.ErrnoException) =>
+      resolve({ works: false, why: `Windows PowerShell did not start (${err.code ?? err.message})` });
     try {
       child = spawn(job.file, job.args, { env, stdio: "ignore", windowsHide: true });
-    } catch {
+    } catch (err) {
       // Where a rule blocks powershell.exe, the spawn throws (EPERM, UNKNOWN).
-      return resolve(false);
+      return refused(err as NodeJS.ErrnoException);
     }
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      resolve(false);
-    }, 30_000);
-    child.on("error", () => {
+      resolve(null);
+    }, PROBE_MS);
+    child.on("error", (err) => {
       clearTimeout(timer);
-      resolve(false);
+      refused(err);
     });
     child.on("exit", (code) => {
       clearTimeout(timer);
-      resolve(code === 7);
+      resolve(
+        code === 7
+          ? { works: true }
+          : {
+              works: false,
+              why: `Windows PowerShell exited ${code ?? "on a signal"} before the command started (Constrained Language mode, as AppLocker and WDAC set it, refuses the job)`,
+            },
+      );
     });
   });
 }
 
 let jobs: Promise<boolean> | undefined;
+let heard: ((answer: Exclude<JobProbe, null>) => void) | undefined;
 
-/** probeJob, asked once for this worker. */
+/** Who hears probeJob's answer when it comes: the worker's log (main.ts). */
+export function onJobAnswer(listener: (answer: Exclude<JobProbe, null>) => void): void {
+  heard = listener;
+}
+
+/**
+ * probeJob, asked once for this worker, and told to onJobAnswer's listener: a definite answer is kept; none in
+ * time is no job for now, and asked again at the next command.
+ */
 export function jobsWork(): Promise<boolean> {
-  jobs ??= probeJob();
+  jobs ??= probeJob().then((answer) => {
+    if (!answer) jobs = undefined;
+    heard?.(
+      answer ?? {
+        works: false,
+        why: `Windows PowerShell did not answer in ${PROBE_MS / 1000} s, so it is asked again at the next tests`,
+      },
+    );
+    return answer?.works ?? false;
+  });
   return jobs;
 }

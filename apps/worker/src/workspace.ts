@@ -468,7 +468,9 @@ async function unstageLinksMadeFiles(ws: Workspace): Promise<void> {
   if (!files.length) return;
   const literal = ["--literal-pathspecs"];
   const out = await git(
-    [...literal, "rm", "--cached", "--quiet", "--ignore-unmatch", "--", ...files],
+    // --force: an entry the run staged and then changed again ("staged content different from both the file and
+    // the HEAD") is taken out too, not the whole list refused; --cached never touches the file itself.
+    [...literal, "rm", "--cached", "--force", "--quiet", "--ignore-unmatch", "--", ...files],
     ws.dir,
   );
   if (out.code !== 0) return;
@@ -503,8 +505,12 @@ export async function harvestWorkspace(
     candidates = declaredOutputs;
   } else if (ws.repo) {
     const status = await git(["status", "--porcelain", "--untracked-files=all"], ws.dir);
+    // A path git calls deleted is not a file the run wrote, whatever is on disk there: a file the run took out of
+    // the index and kept, ignored (a local .env), is listed only so. One it kept and git does not ignore is
+    // listed again as untracked.
     candidates = status.stdout
       .split("\n")
+      .filter((l) => l[0] !== "D" && l[1] !== "D")
       .map((l) => l.slice(3).trim())
       .filter((p) => p && p !== HANDOVER_FILE && p !== BLOCKED_FILE)
       .slice(0, MAX_UNDECLARED_FILES);
@@ -540,12 +546,24 @@ export async function harvestWorkspace(
     const head = await git(["rev-parse", "HEAD"], ws.dir);
     if (head.code === 0) out.baseSha = head.stdout.trim() || null;
     await unstageLinksMadeFiles(ws);
-    await git(["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`], ws.dir);
-    const diff = await git(
-      ["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv"],
+    const add = await git(
+      ["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`],
       ws.dir,
     );
-    if (diff.code === 0) diffText = diff.stdout;
+    const diff =
+      add.code === 0
+        ? await git(
+            ["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv"],
+            ws.dir,
+          )
+        : add;
+    // A part of the change the review would not show (an index.lock a git the time limit ended left behind):
+    // no review of half of it.
+    if (diff.code !== 0) {
+      const why = redactGit(diff.stderr).trim().split("\n").at(-1) || "no message";
+      throw new Error(`the run's changes could not be read back for review (git: ${why})`);
+    }
+    diffText = diff.stdout;
   } else {
     diffText = out.artifacts
       .filter((a) => a.kind !== "handover" && a.kind !== "diff")

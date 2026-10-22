@@ -38,19 +38,53 @@ it("ends the process alone, and throws nothing, when taskkill cannot even start"
 
 it("takes no job where Windows PowerShell is not there, cannot start, or cannot start the command", async () => {
   vi.mocked(existsSync).mockReturnValueOnce(false);
-  expect(await probeJob()).toBe(false);
+  expect(await probeJob()).toEqual({ works: false, why: "there is no Windows PowerShell" });
   // A rule that blocks powershell.exe: the spawn throws.
   vi.mocked(existsSync).mockReturnValueOnce(true);
   vi.mocked(spawn).mockImplementationOnce(() => {
     throw Object.assign(new Error("spawn UNKNOWN"), { code: "UNKNOWN", syscall: "spawn" });
   });
-  expect(await probeJob()).toBe(false);
+  expect(await probeJob()).toEqual({ works: false, why: "Windows PowerShell did not start (UNKNOWN)" });
   // Constrained Language (AppLocker, WDAC): the script exits before cmd.exe starts the command.
   vi.mocked(existsSync).mockReturnValueOnce(true);
   vi.mocked(spawn).mockImplementationOnce(() => exiting(1));
-  expect(await probeJob()).toBe(false);
+  expect(await probeJob()).toMatchObject({
+    works: false,
+    why: expect.stringMatching(/^Windows PowerShell exited 1 /),
+  });
   // The command ran, and its code came back through the job.
   vi.mocked(existsSync).mockReturnValueOnce(true);
   vi.mocked(spawn).mockImplementationOnce(() => exiting(7));
-  expect(await probeJob()).toBe(true);
+  expect(await probeJob()).toEqual({ works: true });
+});
+
+it("keeps a definite answer, says it, and asks again where Windows PowerShell did not answer in time", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.resetModules();
+    vi.mocked(spawn).mockClear();
+    const kill = await import("../src/kill.js");
+    const heard = vi.fn();
+    kill.onJobAnswer(heard);
+    // A first start that a scan holds past the probe's wait: no answer, no job for now.
+    vi.mocked(existsSync).mockReturnValue(true);
+    const hung = Object.assign(new EventEmitter(), { kill: vi.fn() }) as unknown as ChildProcess;
+    vi.mocked(spawn).mockImplementationOnce(() => hung);
+    const first = kill.jobsWork();
+    await vi.advanceTimersByTimeAsync(kill.PROBE_MS);
+    expect(await first).toBe(false);
+    expect(hung.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(heard).toHaveBeenLastCalledWith({ works: false, why: expect.stringMatching(/asked again/) });
+    // Asked again: an answer now, kept.
+    vi.mocked(spawn).mockImplementationOnce(() => exiting(7));
+    const second = kill.jobsWork();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await second).toBe(true);
+    expect(heard).toHaveBeenLastCalledWith({ works: true });
+    expect(await kill.jobsWork()).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.mocked(existsSync).mockReset();
+    vi.useRealTimers();
+  }
 });

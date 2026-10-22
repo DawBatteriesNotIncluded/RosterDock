@@ -367,6 +367,22 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
+  it("fails the harvest when git cannot stage the changes, never a review of part of them", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-index-lock",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    // What a git the time limit ended leaves behind.
+    await writeFile(path.join(ws.dir, ".git", "index.lock"), "", "utf8");
+    await expect(harvestWorkspace(ws, [])).rejects.toThrow(
+      /^the run's changes could not be read back for review \(git: .+\)$/,
+    );
+    await cleanupWorkspace(ws);
+  });
+
   it("refuses to read back a checkout whose .git the run replaced", async () => {
     const ws = await prepareWorkspace(
       path.join(root, "work"),

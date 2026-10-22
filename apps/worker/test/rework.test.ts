@@ -667,8 +667,11 @@ describe("a rework run and links", () => {
         await rm(path.join(ws.dir, at));
         await writeFile(path.join(ws.dir, at), text, "utf8");
       }
-      const diff = (await harvestWorkspace(ws, [])).artifacts.find((a) => a.kind === "diff")?.content ?? "";
-      expect(diff).not.toContain("the-developers-own");
+      const harvest = await harvestWorkspace(ws, []);
+      const diff = harvest.artifacts.find((a) => a.kind === "diff")?.content ?? "";
+      // Neither in the diff nor, with no outputs declared, as a file of the run's.
+      expect(JSON.stringify(harvest.artifacts)).not.toContain("the-developers-own");
+      expect(harvest.filesWritten).not.toContain(".env");
       // .env as the engine left it, untracked; l, as on Linux, a link replaced by a file.
       expect(diff).not.toMatch(/^index \S+ 120000$/m);
       expect(parseUnifiedDiff(diff).map((f) => f.path)).toEqual([".env", "l", "l"]);
@@ -699,6 +702,42 @@ describe("a rework run and links", () => {
       }
     },
   );
+
+  it("records a committed link the engine staged as a file and then changed again as the file it is now", async () => {
+    const { repo } = await linkRepo("restaged-link", { a: "a\n" }, { l: "a", m: "a" });
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `restaged-link-${windows ? "win" : "posix"}`, windows, ["l", "m"]);
+      // l staged and changed again (its index entry now differs from HEAD and the file); m made a file beside it.
+      for (const [at, text] of [
+        ["l", "first\n"],
+        ["m", "m now a file\n"],
+      ] as const) {
+        await rm(path.join(ws.dir, at));
+        await writeFile(path.join(ws.dir, at), text, "utf8");
+      }
+      await run(["add", "l"], ws.dir);
+      await writeFile(path.join(ws.dir, "l"), "second\n", "utf8");
+      const diff = (await harvestWorkspace(ws, [])).artifacts.find((a) => a.kind === "diff")?.content ?? "";
+      expect(diff).not.toMatch(/^index \S+ 120000$/m);
+      expect(parseUnifiedDiff(diff).map((f) => f.path)).toEqual(["l", "l", "m", "m"]);
+      expect(diff).toMatch(/^\+second$/m);
+    }
+  });
+
+  it("takes a committed link's name that Windows allows, `[ab]`, as it is, never as a pattern", async () => {
+    // As a pattern it names a and b: a, tracked though .gitignore matches it, would leave the index for good,
+    // and b, an ignored secret, would be forced in.
+    const { repo } = await linkRepo("bracket-link", { ".gitignore": "a\nb\n", a: "a\n" }, { "[ab]": "a" });
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `bracket-link-${windows ? "win" : "posix"}`, windows, ["[ab]"]);
+      await writeFile(path.join(ws.dir, "b"), "TOKEN=not-for-the-review\n", "utf8");
+      await rm(path.join(ws.dir, "[ab]"));
+      await writeFile(path.join(ws.dir, "[ab]"), "now a file\n", "utf8");
+      const diff = (await harvestWorkspace(ws, [])).artifacts.find((a) => a.kind === "diff")?.content ?? "";
+      expect(diff).not.toContain("not-for-the-review");
+      expect(parseUnifiedDiff(diff).map((f) => f.path)).toEqual(["[ab]", "[ab]"]);
+    }
+  });
 
   it("records a committed link the engine itself staged as a file, where links are plain files", async () => {
     const { repo } = await linkRepo("staged-link", { a: "a\n" }, { l: "a" });
@@ -766,7 +805,13 @@ describe("a rework run and links", () => {
       .replace(/^\+\+\+ b\/l$/m, "+++ b/L");
     for (const windows of CLONES) {
       const ws = await cloneFor(repo, `case-link-${windows ? "win" : "posix"}`, windows, ["l"]);
-      expect((await applyPreviousRound(ws, roundOf(diff), "main")).applied).toBe(false);
+      const start = await applyPreviousRound(ws, roundOf(diff), "main");
+      expect(start.applied).toBe(false);
+      // Where the file system ignores case, the link is named once, as the repository names it.
+      if (existsSync(path.join(ws.dir, "L")))
+        expect(start).toMatchObject({
+          reason: "l is a symbolic link, which a rework run does not carry over",
+        });
       expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
     }
   });

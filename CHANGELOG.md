@@ -117,6 +117,10 @@ install built from that tree changes each of these:
   the output open after a passing script held the step to its time limit, which it then reported as a
   timeout. The script now leads a process group of its own (a job object on Windows), which the step ends
   past its time limit, on Stop and when the script ends.
+- With no outputs declared, a file a run took out of the index and kept (a local `.env` that `.gitignore`
+  matches) was delivered as one of the run's files, with what it held. A path git calls deleted is no
+  longer delivered. And where git could not stage the changes (a lock left by a git the time limit ended),
+  the review showed part of them; the run now fails instead.
 - Handing Peter a goal could fail with an internal error, and leave it half planned, when Peter's loop started
   the plan's first task while the rest were still being filed: filing a task and starting the task it waits on
   took their locks in opposite orders, and Postgres broke the deadlock by cancelling the filing.

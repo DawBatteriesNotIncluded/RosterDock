@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   detectPackageManager,
   execCommand,
+  killDue,
   MAX_TEST_OUTPUT_CHARS,
   runRepoTests,
   testEnvironment,
@@ -230,13 +231,23 @@ describe("runRepoTests", () => {
       script,
       [
         'const { spawn } = require("node:child_process");',
-        stubborn
-          ? 'const held = spawn(process.execPath, ["-e", "process.on(`SIGTERM`, () => {}); setTimeout(() => {}, 60000)"], { stdio: "ignore" });'
-          : 'const held = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "inherit" });',
+        'const fs = require("node:fs");',
         // Whole or not at all: a stop between the file's creation and its write left it empty.
-        'require("node:fs").writeFileSync(`${process.argv[2]}.part`, String(held.pid));',
-        'require("node:fs").renameSync(`${process.argv[2]}.part`, process.argv[2]);',
-        exit === undefined ? "setTimeout(() => {}, 60000);" : `process.exit(${exit});`,
+        "const write = (pid) => { fs.writeFileSync(`${process.argv[2]}.part`, String(pid)); fs.renameSync(`${process.argv[2]}.part`, process.argv[2]); };",
+        "const go = () => {",
+        exit === undefined ? "  setTimeout(() => {}, 60000);" : `  process.exit(${exit});`,
+        "};",
+        ...(stubborn
+          ? [
+              // It says it is there only once it outlives SIGTERM: one that came before would end it as any other.
+              'const held = spawn(process.execPath, ["-e", "process.on(`SIGTERM`, () => {}); process.stdout.write(`up`); setTimeout(() => {}, 60000)"], { stdio: ["ignore", "pipe", "ignore"] });',
+              'held.stdout.once("data", () => { held.stdout.destroy(); write(held.pid); go(); });',
+            ]
+          : [
+              'const held = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "inherit" });',
+              "write(held.pid);",
+              "go();",
+            ]),
         "",
       ].join("\n"),
     );
@@ -309,6 +320,20 @@ describe("runRepoTests", () => {
       // Its SIGKILL comes STOP_GRACE_MS after the SIGTERM, though the step has read on.
       expect(await ended(h.held())).toBe(true);
     }
+  });
+
+  it("sends a group's SIGKILL at once when the worker exits before its grace is over", async () => {
+    const h = await holder("stubborn-worker-exits", { exit: 0, stubborn: true });
+    await execCommand(process.execPath, [h.script, h.pidFile], {
+      cwd: root,
+      env: testEnvironment(process.env),
+      timeoutMs: 60_000,
+    });
+    // What the worker's exit does: the grace's timer would not fire after it.
+    const started = Date.now();
+    killDue();
+    expect(await ended(h.held())).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1500);
   });
 
   it("ends a command, and every process it started, at once when the run stops", async () => {
