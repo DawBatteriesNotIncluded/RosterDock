@@ -38,12 +38,13 @@ export function killTree(child: ChildProcess): void {
  * last handle closes, which is when PowerShell ends, however it ends; starts the command line under cmd.exe,
  * which joins the job, as does everything it starts; waits for it and exits with its code. kernel32's job
  * functions are declared in memory, so nothing is compiled or written to disk. Without a job (a policy that
- * refuses this, a Windows that cannot nest jobs) the command runs all the same. PSModulePath, which PowerShell
- * sets, is taken out again, as is each name in `unset`: the command sees the environment the worker gave it.
- * No cmdlet, only .NET: a cmdlet loads its module, which in the tests' bare environment had PowerShell analyse
- * every module again first (12 s and more where this takes under one).
+ * refuses this, a Windows that cannot nest jobs) the command runs all the same. PowerShell sets PSModulePath and
+ * adds .CPL to PATHEXT (with none given, cmd.exe then finds no program): both go back to what `restore` says,
+ * a value or none, so the command sees the environment the worker gave it. No cmdlet, only .NET: a cmdlet
+ * loads its module, which in the tests' bare environment had PowerShell analyse every module again first (12 s
+ * and more where this takes under one).
  */
-function jobScript(comspec: string, line: string, unset: string[]): string {
+function jobScript(comspec: string, line: string, restore: Record<string, string | undefined>): string {
   const quoted = (s: string) => `'${s.replace(/'/g, "''")}'`;
   return [
     "$ErrorActionPreference = 'Stop'",
@@ -70,8 +71,9 @@ function jobScript(comspec: string, line: string, unset: string[]): string {
     "  $self = [Diagnostics.Process]::GetCurrentProcess().Handle",
     "  if (-not $kernel32::AssignProcessToJobObject($job, $self)) { throw 'not in the job' }",
     "} catch {}",
-    ...["PSModulePath", ...unset].map(
-      (name) => `[Environment]::SetEnvironmentVariable(${quoted(name)}, $null)`,
+    ...Object.entries(restore).map(
+      ([name, value]) =>
+        `[Environment]::SetEnvironmentVariable(${quoted(name)}, ${value === undefined ? "$null" : quoted(value)})`,
     ),
     "$start = [Diagnostics.ProcessStartInfo]::new()",
     `$start.FileName = ${quoted(comspec)}`,
@@ -93,15 +95,16 @@ export function inJob(
   command: string,
   args: string[],
   env: Record<string, string>,
-): { file: string; args: string[]; env: Record<string, string> } | null {
+): { file: string; args: string[] } | null {
   const powershell = path.win32.join(systemRoot(), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   if (!existsSync(powershell)) return null;
   const comspec = process.env.ComSpec || path.win32.join(systemRoot(), "System32", "cmd.exe");
-  // PowerShell does not start without SystemRoot: given it, the command is not.
-  const given = Object.keys(env).some((k) => k.toLowerCase() === "systemroot");
-  const script = jobScript(comspec, [command, ...args].join(" "), given ? [] : ["SystemRoot"]);
+  // Names on Windows are any case.
+  const given = (name: string) =>
+    Object.entries(env).find(([k]) => k.toLowerCase() === name.toLowerCase())?.[1];
+  const restore = { PATHEXT: given("PATHEXT"), PSModulePath: given("PSModulePath") };
+  const script = jobScript(comspec, [command, ...args].join(" "), restore);
   return {
-    env: given ? env : { ...env, SystemRoot: systemRoot() },
     file: powershell,
     args: [
       "-NoLogo",

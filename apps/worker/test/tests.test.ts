@@ -175,6 +175,25 @@ describe("runRepoTests", () => {
     expect(res.output.endsWith("— ✅ 😀 ")).toBe(true);
   });
 
+  it("gives a command the environment it was given, and nothing the job's PowerShell adds on Windows", async () => {
+    await writeFile(
+      path.join(root, "env.js"),
+      [
+        "const { PATHEXT, PSModulePath, GIVEN } = process.env;",
+        "process.stdout.write(JSON.stringify({ PATHEXT: PATHEXT ?? null, PSModulePath: PSModulePath ?? null, GIVEN }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const res = await execCommand("node", ["env.js"], {
+      cwd: root,
+      env: { PATH: process.env.PATH ?? "", GIVEN: "yes" },
+      timeoutMs: 10_000,
+    });
+    expect(res.code, res.output).toBe(0);
+    expect(JSON.parse(res.output)).toEqual({ PATHEXT: null, PSModulePath: null, GIVEN: "yes" });
+  });
+
   it("ends a command past its time limit, with what a Windows shim started under it", async () => {
     // Found on PATH like a package manager: on Windows a .cmd shim, which cmd.exe runs and which starts
     // this Node in turn; elsewhere the program itself. It would hold the step for a minute.
