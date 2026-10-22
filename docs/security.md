@@ -184,12 +184,13 @@ their own, each with its own database and workers.
   and the diff runs no textconv. Before the worker reads a run's changes back, it puts the clone's
   `.git/config` back as the clone wrote it, so a filter the run added never runs; a run that replaced `.git`
   gets no review of its changes.
-- The git token (`worker.gitSecret`) goes into a clone's URL only over https and only to the hosts it is
-  for (`worker.gitSecret.hosts`, `ROSTERDOCK_GIT_TOKEN_HOSTS`; github.com by default), and the clone's
-  remote is set back without it. A clone that fails, or that Stop, the time limit or a shutdown ends
-  part-way, is removed at once, so no `.git/config` with the token in its URL stays on disk. A project
-  whose repository is on any other host is cloned with no token, so whoever sets a project's repository
-  cannot send the fleet's token somewhere else.
+- The git token (`worker.gitSecret`) goes into a clone's URL only over https and only to the hosts it is for
+  (`worker.gitSecret.hosts`, `ROSTERDOCK_GIT_TOKEN_HOSTS`; github.com by default), and the clone's remote is
+  set back without it. A clone that fails, or that Stop, the time limit or a shutdown ends part-way, is
+  removed at once (on Windows, where a git ended by taskkill can hold its files a moment longer, as soon as it
+  lets go, tried for half a minute), so no `.git/config` with the token in its URL stays on disk. A project
+  whose repository is on any other host is cloned with no token, so whoever sets a project's repository cannot
+  send the fleet's token somewhere else.
 - An artifact over 512 KB goes to the object store as bytes the board has already scanned for raw
   secrets, under a key of the company, the run and its hash; the board signs each request itself with a
   key pair it reads by name, and the worker never holds that pair.

@@ -497,6 +497,9 @@ describe("a stalled clone", () => {
       expect(outcome.status).toBe("failed");
       expect(board.completion?.blocker?.code).toBe("timeout");
       expect(board.completion?.error).toMatch(/time limit/);
+      // Gone, token and all: at once where git dies at once, within seconds where taskkill ends it (Windows).
+      for (const until = Date.now() + 15_000; existsSync(path.join(workRoot, "run-1")) && Date.now() < until;)
+        await new Promise((r) => setTimeout(r, 200));
       expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
     } finally {
       await host.close();

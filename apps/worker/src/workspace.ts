@@ -268,7 +268,11 @@ export async function prepareWorkspace(
     return await cloneInto(dir, { ...project, repoUrl: project.repoUrl }, credential, signal);
   } catch (err) {
     // A clone that failed or was stopped part-way leaves nothing: its .git/config holds the URL, token and all.
-    await removeTree(dir).catch(() => {});
+    // On Windows a git just ended by taskkill may hold its files past removeTree's window: the removal goes on
+    // without holding the run's stop, until git lets go.
+    await removeTree(dir).catch(() => {
+      void removeTree(dir, 30_000).catch(() => {});
+    });
     throw err;
   }
 }
