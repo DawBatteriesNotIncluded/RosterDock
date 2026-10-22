@@ -298,6 +298,8 @@ function AddProviderForm(p: {
   features: Features;
   /** Null until loaded. */
   secrets: CompanySecret[] | null;
+  /** They could not be loaded: no key is pasted, and the form says why. */
+  secretsFailed?: boolean;
   /** Every provider, archived ones included. */
   providers: ModelProvider[];
   /** True once saved; false leaves the form as it was, with the reason shown above. */
@@ -487,6 +489,12 @@ function AddProviderForm(p: {
         </Button>
       </div>
       {problem && problem !== "missing" ? <span className="hint">{problem}</span> : null}
+      {p.secretsFailed && f.how === "paste" ? (
+        <span className="hint">
+          This company&apos;s secrets could not be read, so a key cannot be pasted now. Reload the page, or
+          use a saved secret.
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -650,6 +658,7 @@ export function ModelsPanel(p: ModelsPanelProps) {
   const [info, setInfo] = useState<ModelProviders | null>(p.initial ?? null);
   // Null until loaded: a key is not pasted before the form knows which names are taken.
   const [secrets, setSecrets] = useState<CompanySecret[] | null>(p.initialSecrets ?? null);
+  const [secretsFailed, setSecretsFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reload = async () => setInfo(await p.load());
   // Loaded again when a provider, a secret or a price changes, here or anywhere: a change someone else made
@@ -662,7 +671,14 @@ export function ModelsPanel(p: ModelsPanelProps) {
   useEffect(() => {
     void reload().catch((err: unknown) => setError((err as Error).message));
     // A list that cannot be read keeps the one before, never an empty one that would hide what is taken.
-    if (p.canEdit) void p.loadSecrets().then(setSecrets, () => {});
+    if (p.canEdit)
+      void p.loadSecrets().then(
+        (list) => {
+          setSecrets(list);
+          setSecretsFailed(false);
+        },
+        () => setSecretsFailed(true),
+      );
   }, [changedSeq]);
   /** Make a change, then load the providers again; a refusal is shown above, and says false. */
   const change = async (fn: () => Promise<unknown>): Promise<boolean> => {
@@ -722,6 +738,7 @@ export function ModelsPanel(p: ModelsPanelProps) {
           offered={info.offered.kinds}
           features={p.features}
           secrets={secrets}
+          secretsFailed={secretsFailed && secrets === null}
           providers={info.providers}
           onSubmit={async (f, taken) => {
             let sent = false;

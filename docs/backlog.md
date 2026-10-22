@@ -57,4 +57,6 @@ scheduled; delete it when it ships.
   check on reference fields wants 40 or more characters for a bare run. Model providers and company secrets'
   names refuse these with `nameLooksLikeKey` (`packages/shared/src/provider-kinds.ts`); every env var NAME field
   should. Settings > Connections > Secrets should check it before it sends the name, as Settings > Models does:
-  the board refuses one, but the name is in the request's URL, which the request log keeps.
+  the board refuses one, but the name is in the request's URL, which the request log keeps. The key shapes
+  `provider-kinds.ts` adds (Hugging Face, Google) belong in the raw-secret guard (`secrets.ts`) too, for text
+  everywhere.

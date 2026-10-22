@@ -157,7 +157,7 @@ describe("a provider's schema", () => {
     for (const key of [
       azureKey,
       "AKIAABCDEFGHIJKLMNOP",
-      "TOKEN_ABCDEFGHIJKLMNOPQRSTUVWX0123",
+      "TOKEN_aB3dE5fG7hJ9kL1mN3pQ5rS7",
       "DEADBEEFCAFEBABE0",
     ]) {
       expect(nameLooksLikeKey(key), key).toBe(true);
@@ -203,7 +203,30 @@ describe("a provider's schema", () => {
     ])
       expect(labelLooksLikeKey(label), label).toBe(false);
     expect(providerNameRefusal("acme-internationalization")).toBeNull();
+    expect(providerNameRefusal("deepseekr1distillqwen32b")).toBeNull();
+    expect(providerNameRefusal("a3f9c2e1-b4d5-4c6d-8e7f-0123456789ab")).toBe(
+      "a short name; this looks like a key",
+    );
     expect(nameLooksLikeKey("githubPersonalAccessToken")).toBe(false);
+    expect(nameLooksLikeKey("DEEPSEEKR1DISTILLQWEN32B_KEY")).toBe(false);
+    // A model's name in a label is a word.
+    for (const label of [
+      "DeepSeekR1DistillQwen32B on vLLM",
+      "Acme Mixtral8x7BInstructV01",
+      "Entwicklungsumgebungsverwaltung2026",
+    ])
+      expect(labelLooksLikeKey(label), label).toBe(false);
+  });
+
+  it("knows keys with no digits, keys with slashes, and keys by their prefix", () => {
+    // Built here, so the repository holds no string a secret scanner would stop a push for.
+    const hf = ["hf", "AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh"].join("_");
+    expect(nameLooksLikeKey(hf)).toBe(true);
+    expect(labelLooksLikeKey(`Router ${hf}`)).toBe(true);
+    // Mixed case and no digits, flipping as a key's does.
+    expect(nameLooksLikeKey("aBcDeFgHiJkLmNoPqRsTuVwXyZ")).toBe(true);
+    // AWS's documented example secret access key: base64, with slashes.
+    expect(labelLooksLikeKey("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")).toBe(true);
     expect(labelLooksLikeKey("sk-ant-api03-abcdefghijklmnopqrstuvwxyz")).toBe(true);
     const r = parse({
       kind: "openai",

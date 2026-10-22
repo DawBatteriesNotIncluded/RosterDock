@@ -18,21 +18,22 @@ model output on their cluster.
 - **A value set from Settings goes to the store, not the database.** Settings > Connections > Secrets takes a
   name and a value from an owner or admin, and so does the key field of Settings > Models, which sets the
   value under its name before it saves the provider with that name, and never under a name that is already set
-  (`If-None-Match: *`). A new name that looks like a key (a long run of letters and digits, or of hex, such as
-  a 32-character Azure key) is refused; one set before can still be replaced or removed. The value goes
-  write-only into the secret store you turned on (`board.oauth.enabled`; files under compose), under
-  `rosterdock-company-<id>` with one key per name; the row keeps the name, when and by whom; the event carries
-  the name; no route returns a value, and the panel never shows one again. That company's connections and
-  notifications resolve the name there first, then among the names the operator shares, so a value set in
-  Settings wins over a shared one. Without a store the route refuses.
+  (`If-None-Match: *`). A new name that looks like a key is refused: a known key shape, a run of hex (a
+  32-character Azure key), or a long run in mixed case with digits; one set before can still be replaced or
+  removed. Set only if new, a name the operator shares is refused too, so a company's value never hides it by
+  accident. The value goes write-only into the secret store you turned on (`board.oauth.enabled`; files under
+  compose), under `rosterdock-company-<id>` with one key per name; the row keeps the name, when and by whom;
+  the event carries the name; no route returns a value, and the panel never shows one again. That company's
+  connections and notifications resolve the name there first, then among the names the operator shares, so a
+  value set in Settings wins over a shared one. Without a store the route refuses.
 - **A company's model providers carry names too.** A provider (Anthropic, OpenAI, Azure OpenAI, Amazon
   Bedrock, a compatible server) keeps the env var names of its credentials, never a value: one of the
   company's own secrets, or a name the operator shares. A name that is the board's own is refused when a
-  provider is written, and so is a value given where a name goes, whether a known key shape or a long
-  unbroken run such as a 32-character Azure key; a refusal never repeats what was sent. An endpoint a
-  company gives is checked as a connection's URL is (What a company's connections reach). Owners and admins
-  manage providers (`model.manage`). Nothing resolves a provider's names yet: teammates still think with the
-  board's own models.
+  provider is written, and so is a value given where a name goes: a known key shape, a run of hex such as a
+  32-character Azure key, or a long run in mixed case; a label refuses the shapes and the runs of hex. A
+  refusal never repeats what was sent. An endpoint a company gives is checked as a connection's URL is (What a
+  company's connections reach). Owners and admins manage providers (`model.manage`). Nothing resolves a
+  provider's names yet: teammates still think with the board's own models.
 
 - **External writes are propose, approve, execute.** A teammate proposes the exact payload; the board
   stores it with its sha256; a person approves; the executor re-hashes the stored payload and sends those

@@ -350,7 +350,7 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
     publicUrl: config.publicUrl,
     operator,
   });
-  registerSecretRoutes(app, db, secrets);
+  registerSecretRoutes(app, db, secrets, config.sharedEnvNames);
   registerProviderRoutes(app, { db, operator, policy: config.modelProviders, egress });
   // What this board can do beyond the basics, for the web to show the right controls. Names only; what the
   // operator lets connections reach goes to the people who manage connections somewhere. The private

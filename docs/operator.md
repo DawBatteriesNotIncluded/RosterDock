@@ -277,7 +277,9 @@ the company sees them by name.
 - The Models form asks the board first whether a provider would be added
   (`POST /api/companies/:companyId/model-providers/check-new`, which writes nothing), then sets a pasted key
   only under a name not set yet (`PUT /secrets/:name` with `If-None-Match: *`, refused with 409 otherwise),
-  then saves the provider. A key never replaces another one, and a provider the board refuses leaves no key.
+  then saves the provider. A key never replaces another one, nor hides a name you share, and a provider the
+  board refuses at its check leaves no key. One refused after the key is set (someone added the same name a
+  moment before) leaves the key under its name, listed under Settings > Connections > Secrets.
 - `board.modelProviders` (`ROSTERDOCK_MODEL_PROVIDERS`) lists the kinds a company may add: `anthropic`,
   `openai`, `azure_openai`, `bedrock`, `openai_compatible`, and `board`, which lends the board's own models to
   every company. Empty: all of them. `[board]` alone: no company providers. The board does not start on an

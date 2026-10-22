@@ -2,7 +2,8 @@
 // and Settings > Models.
 import type { EventRecord, EventType, ModelProviderInput } from "@rosterdock/shared";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { httpClient } from "../src/api/client.ts";
 import type { ModelProvider, ModelProviders } from "../src/api/types.ts";
 import { TooltipProvider } from "../src/components/ui/tooltip.tsx";
 import { describeEvent } from "../src/lib/format.ts";
@@ -407,5 +408,30 @@ describe("Settings > Models", () => {
     expect(viewer).not.toContain("<input");
     expect(viewer).not.toContain("Add a provider");
     expect(viewer).toContain("Acme Anthropic");
+  });
+});
+
+describe("the key a provider is added with", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is sent only as a new name: If-None-Match: *, the value in the body alone", async () => {
+    const sent: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      sent.push({ url, init });
+      return new Response(JSON.stringify({ name: "MODELS_ACME_KEY", updatedAt: "", updatedBy: daniel }), {
+        status: 200,
+      });
+    });
+    await httpClient.setNewSecret("c-1", "MODELS_ACME_KEY", "pasted-value");
+    await httpClient.setSecret("c-1", "HUBSPOT_MCP_TOKEN", "rotated-value");
+    expect(
+      sent.map((s) => [s.init.method, s.url, (s.init.headers as Record<string, string>)["if-none-match"]]),
+    ).toEqual([
+      ["PUT", "/api/companies/c-1/secrets/MODELS_ACME_KEY", "*"],
+      // Settings > Connections > Secrets sets and replaces, as before.
+      ["PUT", "/api/companies/c-1/secrets/HUBSPOT_MCP_TOKEN", undefined],
+    ]);
+    expect(JSON.parse(String(sent[0]!.init.body))).toEqual({ value: "pasted-value" });
+    expect(sent[0]!.url).not.toContain("pasted-value");
   });
 });

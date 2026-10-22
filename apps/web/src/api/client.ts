@@ -256,13 +256,9 @@ export interface Client {
   features(companyId?: string): Promise<Features>;
   /** Company secrets: names only; the PUT body is the one value the board accepts, write-only. */
   secrets(companyId: string): Promise<CompanySecret[]>;
-  /** With createOnly, a name already set is refused (409) and its value kept. */
-  setSecret(
-    companyId: string,
-    name: string,
-    value: string,
-    opts?: { createOnly?: boolean },
-  ): Promise<CompanySecret>;
+  setSecret(companyId: string, name: string, value: string): Promise<CompanySecret>;
+  /** A value under a new name only: a name already set, or one the operator shares, is refused (409). */
+  setNewSecret(companyId: string, name: string, value: string): Promise<CompanySecret>;
   deleteSecret(companyId: string, name: string): Promise<void>;
   /** Company model providers: what the operator offers, and the company's own, by name. */
   modelProviders(companyId: string): Promise<ModelProviders>;
@@ -389,13 +385,9 @@ export const httpClient: Client = {
   features: (companyId) =>
     request("GET", `/api/features${companyId ? `?companyId=${encodeURIComponent(companyId)}` : ""}`),
   secrets: (id) => request("GET", `${c(id)}/secrets`),
-  setSecret: (id, name, value, opts) =>
-    request(
-      "PUT",
-      `${c(id)}/secrets/${encodeURIComponent(name)}`,
-      { value },
-      opts?.createOnly ? { "if-none-match": "*" } : {},
-    ),
+  setSecret: (id, name, value) => request("PUT", `${c(id)}/secrets/${encodeURIComponent(name)}`, { value }),
+  setNewSecret: (id, name, value) =>
+    request("PUT", `${c(id)}/secrets/${encodeURIComponent(name)}`, { value }, { "if-none-match": "*" }),
   deleteSecret: (id, name) => request("DELETE", `${c(id)}/secrets/${encodeURIComponent(name)}`),
   modelProviders: (id) => request("GET", `${c(id)}/model-providers`),
   createModelProvider: (id, input) => request("POST", `${c(id)}/model-providers`, input),

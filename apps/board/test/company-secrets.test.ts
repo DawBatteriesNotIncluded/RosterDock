@@ -8,8 +8,9 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { companyEnv, sharedEnv } from "../src/secrets/company.js";
+import { companyEnv, setCompanySecret, sharedEnv } from "../src/secrets/company.js";
 import { fileSecretStore } from "../src/secrets/file.js";
+import type { SecretStore } from "../src/secrets/store.js";
 import { fakeMcp } from "./mcp-fake.js";
 import { seedCompany, startTestBoard, type TestBoard } from "./helpers.js";
 
@@ -199,6 +200,39 @@ describe("company secrets", () => {
     });
     const events = (await api.get(`${base}/events?limit=10`)).body as { type: string }[];
     expect(events.filter((e) => e.type === "secret.set")).toHaveLength(2);
+
+    // Set only if new, a name the operator shares is refused: the company's value would hide the shared one
+    // from every connection. Set as a person means to, from Connections, it stays the company's to set.
+    const shared = await board.app.inject({
+      method: "PUT",
+      url: `${base}/secrets/HUBSPOT_MCP_TOKEN`,
+      headers: { authorization: `Bearer ${owner.token}`, "if-none-match": "*" },
+      payload: { value: "x-000000" },
+    });
+    expect(shared.statusCode).toBe(409);
+    expect(shared.json().error).toContain("a name the operator shares");
+
+    // Two keys set at once, through a store slow to read, as a cluster's can be: the store keeps both, as
+    // the rows and the events say. Without the company's lock the second write would drop the first key.
+    const files = fileSecretStore(dir);
+    const slow: SecretStore = {
+      kind: "file",
+      get: async (n) => {
+        const data = await files.get(n);
+        await new Promise((r) => setTimeout(r, 50));
+        return data;
+      },
+      put: (n, d) => files.put(n, d),
+      delete: (n) => files.delete(n),
+    };
+    const actor = { kind: "user" as const, id: owner.userId };
+    await Promise.all([
+      setCompanySecret(board.db, slow, companyId, actor, "MODELS_ONE_KEY", "one-000000"),
+      setCompanySecret(board.db, slow, companyId, actor, "MODELS_TWO_KEY", "two-000000"),
+    ]);
+    expect(
+      JSON.parse(readFileSync(path.join(dir, `rosterdock-company-${companyId}.json`), "utf8")),
+    ).toMatchObject({ MODELS_ONE_KEY: "one-000000", MODELS_TWO_KEY: "two-000000" });
   });
 
   it("companyEnv: the store entry over the shared names, empty values ignored, the shared names alone without a store", async () => {
