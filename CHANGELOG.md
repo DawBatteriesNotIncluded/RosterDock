@@ -75,7 +75,8 @@ Against the images built from the pre-release tree (then called Pharo, not publi
   address fails its check and its calls with "refused: … which this board's operator has not allowed" until
   it is listed, and one whose server answers with a redirect fails and names where it pointed. The board's
   own destinations (git hosts, OIDC, OTLP, the bucket, the API server, the model API, its webhook and SMTP
-  server) are not checked. `docs/operator.md` (Private destinations) says what to list.
+  server) are not checked. Settings shows owners and admins the list and flags a URL that looks private and
+  is not on it. `docs/operator.md` (Private destinations) says what to list.
 
 ### Renamed
 

@@ -221,7 +221,9 @@ board:
   to: list services every company may reach, by names whose DNS you control.
 - A connection that points at an unlisted private address fails its Check, and its calls fail, with
   "refused: … which this board's operator has not allowed"; Activity shows the same. Nothing else about it
-  changes: list the destination, or give the connection a public URL, and press Check.
+  changes: list the destination, or give the connection a public URL, and press Check. Owners and admins
+  adding a connection in Settings see your list, and a URL that looks private and is not on it is flagged
+  before they save it.
 - Your own destinations are not checked: the git hosts, OIDC, OTLP, the bucket, the Kubernetes API, the model
   API, `board.notifySecret` and `board.notifyEmail`. A company that names its own webhook or SMTP server in
   Settings is checked.

@@ -366,7 +366,12 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
       // Whether the board reads the web: the web connection's pages and research sources.
       web: !!web,
       ...(manages
-        ? { sharedEnvNames: config.sharedEnvNames, stdioCommands: config.stdioCommands.map(stdioCommandLine) }
+        ? {
+            sharedEnvNames: config.sharedEnvNames,
+            stdioCommands: config.stdioCommands.map(stdioCommandLine),
+            // The private names, addresses and ranges connections may reach, as the operator wrote them.
+            privateDestinations: config.privateDestinations.entries,
+          }
         : {}),
     };
   });

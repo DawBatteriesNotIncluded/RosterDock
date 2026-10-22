@@ -178,6 +178,14 @@ describe("a company's MCP server over HTTP", () => {
       ok: false,
       error: `refused: 10.10.1.2 is a private address, ${NOT_ALLOWED}`,
     });
+    // The people who manage connections see what the operator lists; a viewer does not.
+    expect((await api.get("/api/features")).body.privateDestinations).toEqual([
+      "mcp.allowed.test",
+      "10.9.0.0/16",
+    ]);
+    const viewer = await board.login("egress-viewer@example.com");
+    await api.post(`${base}/members`, { email: "egress-viewer@example.com", role: "viewer" });
+    expect((await board.api(viewer.token).get("/api/features")).body.privateDestinations).toBeUndefined();
     const intranet = await add("intranet", "https://mcp.intranet.test/mcp");
     expect(
       await callConnectionTool(await loadConnection(board.db, companyId, intranet), deps, "whoami", {}),
