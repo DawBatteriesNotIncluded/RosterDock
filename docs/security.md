@@ -61,10 +61,12 @@ What an owner or admin of one company can reach:
   the same way. A shared name is a credential handed to every company's owners and admins: share one only
   when you would. Per-company credentials belong in each company's secrets (Settings > Connections >
   Secrets, which needs `board.oauth.enabled`).
-- The network as the board pod sees it. An HTTP or OpenAPI connection, its OAuth discovery and a
-  notification webhook are requests from the board pod to an address the company chose, cluster-internal
-  ones included. Narrow `networkPolicy.board.egressTo` to the services companies may use; with
-  `board.oauth.enabled`, ports 443 and 6443 stay open to any address (The board, below).
+- Public addresses, through the board, and the private destinations the operator lists. An HTTP or OpenAPI
+  connection, the OAuth endpoints its server names, and the company's own webhook and SMTP server are
+  requests from the board pod to an address the company chose, so each is checked before it is sent: a
+  loopback, private, link-local (cloud metadata) or other non-public address is refused, a name that
+  resolves to one included, unless `ROSTERDOCK_PRIVATE_DESTINATIONS` lists it (What a company's connections
+  reach, below).
 - The command lines the operator lists for stdio connections (`ROSTERDOCK_STDIO_COMMANDS`, chart
   `board.stdioCommands`; none by default). Such a server runs inside the board pod as the board, so a
   server that reads files or runs commands reaches what the board can: the board process's environment
@@ -284,7 +286,9 @@ their own, each with its own database and workers.
 - Runs as non-root, read-only root filesystem, all capabilities dropped; reads every credential from a
   Secret by name; logs redact the headers that carry tokens; nothing logs a value.
 - The board's egress is wide by design (model API, git host, MCP servers, webhooks); narrow
-  `networkPolicy.board.egressTo` to the destinations you use. With `board.oauth.enabled` the board also
+  `networkPolicy.board.egressTo` to the destinations you use. What a company chooses is also checked by the
+  board itself, public addresses only unless you list a private one (What a company's connections reach,
+  below). With `board.oauth.enabled` the board also
   reaches any address on ports 443 and 6443, for the API server, whatever `egressTo` lists: private
   ranges and the rest of the cluster included.
 - `/metrics` is served on the board's own port and never proxied by the web; keep the board's Service
@@ -306,6 +310,50 @@ their own, each with its own database and workers.
   the connection to another. A source gets five seconds and half a megabyte, only text is kept, secret-shaped
   strings in it are redacted, and what a page says reaches the reviewer as quoted material.
   `ROSTERDOCK_FETCH_SOURCES=0` (chart `board.fetchSources: false`) keeps the board off the web.
+
+## What a company's connections reach
+
+- **What is checked.** Every destination a company chooses: an MCP server over HTTP and an OpenAPI service
+  (their checks, discovery and every call), the OAuth endpoints an MCP server names (its resource metadata,
+  its authorization server's metadata, registration, the code exchange and every refresh), and the
+  company's own webhook and SMTP server from Settings. A style pack's download, from RosterDock's own
+  catalog, goes the same way.
+- **The rule.** http and https only, no credentials in the URL. An address written in the URL is checked as
+  it is; a name is resolved and every address it gets is checked, and one address the board may not reach
+  refuses the name whole. Loopback, private, link-local (where cloud metadata lives), unique-local, shared
+  (carrier-grade NAT) and the other special-purpose ranges are refused, an IPv4 written as IPv6 by its
+  IPv4, as for the web connection (Reading the web, below). The board connects only to the addresses its
+  own lookup admitted, so a name cannot pass the check with one address and send the connection to
+  another; the SMTP connection's socket takes the same lookup. The board sets the Host header and the
+  body's framing itself, so no header a company names (a credential header called Host) reaches another
+  server behind a shared ingress. A refusal reads "refused: ... which this board's operator has not
+  allowed" on the connection's check, in Activity and in the call's result, and names the kind of address
+  a name resolves to, never the address.
+- **Redirects.** An MCP server, an OpenAPI operation, a webhook, OAuth registration and the token requests
+  follow none: the credential and the call go to the URL the company gave, or nowhere, and the error names
+  the host it pointed to (no more, since a path may carry a token). An OpenAPI connection's check takes a
+  redirect as its answer and follows nothing. OAuth discovery and a style pack's download follow three at
+  most, every hop checked again, and a hop that leaves the origin loses the credential headers.
+- **Time.** One deadline per request, looking names up included: an MCP request's is the call's timeout
+  (30 seconds) up to the answer's headers, after which an event stream stays open until the call ends;
+  an OpenAPI operation takes its manifest's timeout, OAuth 15 seconds, a webhook 15, and an SMTP exchange
+  15, connecting and its TLS handshake included. A connection kept between requests closes after four idle
+  seconds.
+- **The operator's list.** `ROSTERDOCK_PRIVATE_DESTINATIONS` (chart `board.privateDestinations`) names the
+  private destinations companies may use: host names (`*.tools.svc.cluster.local` for the names under
+  one), addresses and ranges (`10.20.0.0/16`). A listed name is trusted with whatever it resolves to, so
+  list names whose DNS you control; a listed address or range is reached whatever name led to it. Every
+  company on the board may use what is listed. Unset, nothing private is: the board refuses to start on an
+  entry it cannot read rather than guess. `apps/board/.env.example` lists loopback for development only.
+- **What is not checked.** What the operator configures: the git hosts' APIs, the OIDC provider, the OTLP
+  collector, the object store, the Kubernetes API, the model API, the board's own webhook
+  (`ROSTERDOCK_NOTIFY_WEBHOOK_URL`) and SMTP server (`ROSTERDOCK_NOTIFY_SMTP_URL`). Those are often
+  internal on purpose, and no company can change them. A stdio server (the operator's commands) and the
+  worker's git clones are outside the board's check too (Workers run model output, above, and Reading the
+  web, below).
+- An address is judged by its range alone: where a cluster gives pods or services globally routable IPv6
+  addresses, or translates through a NAT64 prefix of its own, those look public to the board. Narrow
+  `networkPolicy.board.egressTo` too; the check is the board's, the network policy is the cluster's.
 
 ## Reading the web
 
@@ -351,7 +399,8 @@ their own, each with its own database and workers.
   `board.oauth.enabled`, the API server. The reference fetch server refuses private addresses by default but
   checks a name before it connects, not as it connects, so a name that changes its answer between the two
   gets through; a browser's origin lists are not a boundary at all. Run those as a service of their own,
-  with a network policy that reaches public addresses only, and connect over HTTP.
+  with a network policy that reaches public addresses only, list the service in
+  `ROSTERDOCK_PRIVATE_DESTINATIONS`, and connect over HTTP.
 - **The engines' own web tools** bypass the board. Claude Code's WebFetch and WebSearch run only when the
   operator lists them in the worker's tool list (`ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`, chart
   `worker.claudeAllowedTools`), and a department's list only narrows that. Codex keeps its own web search (a
@@ -370,6 +419,10 @@ their own, each with its own database and workers.
 - TLS at the ingress; the cookie is marked Secure and the OIDC redirect uses the public URL.
 - Who may reach the web (the ingress and `networkPolicy.webIngressFrom`), and which email domains may
   sign in.
+- The private destinations you list for companies (`ROSTERDOCK_PRIVATE_DESTINATIONS`): every company on the
+  board may make the board reach each one, so list a service only when every company may use it, and a
+  name only when you control its DNS. The board's own destinations (the git hosts, OIDC, OTLP, the bucket,
+  the API server, the model API, its webhook and SMTP server) are yours to point at what you trust.
 - Rate limiting. The board limits only its sign-in routes (the dev login and the OpenID Connect start and
   callback): `ROSTERDOCK_SIGNIN_RATE_LIMIT` requests a minute from one client address to each, 60 by default
   (chart `board.signInRateLimit`, 0 for none), counted in each board replica's memory. Every other route takes

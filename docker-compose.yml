@@ -60,6 +60,10 @@ services:
       ROSTERDOCK_SHARED_ENV_NAMES: ${ROSTERDOCK_SHARED_ENV_NAMES:-}
       # Needs-you notifications: a webhook URL (a Slack incoming webhook works as is); empty means none.
       ROSTERDOCK_NOTIFY_WEBHOOK_URL: ${ROSTERDOCK_NOTIFY_WEBHOOK_URL:-}
+      # What a company chooses the board should reach (a connection's server, its OAuth, a company's webhook
+      # and SMTP server) must be public unless listed here: names, addresses and ranges, comma-separated. For
+      # a server on this machine, list host.docker.internal; empty means public addresses only.
+      ROSTERDOCK_PRIVATE_DESTINATIONS: ${ROSTERDOCK_PRIVATE_DESTINATIONS:-}
       # Traces: one per run to an OTLP/HTTP collector when set (the /v1/traces path is added).
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
