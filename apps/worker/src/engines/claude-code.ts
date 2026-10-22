@@ -318,7 +318,9 @@ export function createClaudeCodeEngine(opts: ClaudeCodeOptions): EngineAdapter {
     id: "claude_code",
     async run(ctx: EngineContext): Promise<EngineResult> {
       const resolved = resolveClaudeBin(opts.bin);
-      // The MCP config (with the run token) lives outside the workdir so it is never harvested.
+      // The MCP config (with the run token) lives outside the workdir so it is never harvested. Its mode keeps
+      // it the user's own on Unix; Windows ignores the mode, and the file takes the temp directory's
+      // permissions, which in a user's profile are that user's (and the administrators').
       let mcpDir: string | null = null;
       let mcpPath: string | null = null;
       if (ctx.mcp) {

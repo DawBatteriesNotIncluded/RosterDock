@@ -1,6 +1,18 @@
 // Workspace against a local bare repository: no network.
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { applyFilePatch, parseUnifiedDiff, renderNewFileDiff } from "@rosterdock/shared";
@@ -9,13 +21,20 @@ import {
   cleanupWorkspace,
   fitDiff,
   git,
+  GIT_NO_CONFIG,
   gitEnvironment,
   harvestWorkspace,
   prepareWorkspace,
   type Harvest,
   redactGit,
+  removeTree,
+  sameFile,
   withToken,
 } from "../src/workspace.js";
+import { skipWithoutSymlinks } from "./helpers.js";
+
+/** A path as a shell command or a git config value takes it on every platform: with forward slashes. */
+const forShell = (p: string) => p.split(path.sep).join("/");
 
 let root: string;
 let bare: string;
@@ -234,8 +253,29 @@ describe("workspace", () => {
       LANG: "C.UTF-8",
       GIT_TERMINAL_PROMPT: "0",
       GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
+      GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
     });
+  });
+
+  it("runs the git on PATH, never one the run left in its directory", async () => {
+    // Windows looks for a program in the directory it starts in before PATH, unless told not to.
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-own-git",
+      { repoUrl: null, defaultBranch: "main" },
+      null,
+    );
+    if (process.platform === "win32") {
+      // Any program will do as the impostor: a small one every Windows has.
+      const windows = process.env.SystemRoot ?? "C:\\Windows";
+      await copyFile(path.join(windows, "System32", "whoami.exe"), path.join(ws.dir, "git.exe"));
+    } else {
+      await writeFile(path.join(ws.dir, "git"), "#!/bin/sh\necho not git\n", { mode: 0o755 });
+    }
+    const res = await git(["--version"], ws.dir);
+    expect(res.code).toBe(0);
+    expect(res.stdout).toMatch(/^git version /);
+    await cleanupWorkspace(ws);
   });
 
   it("never lets an inherited GIT_DIR, work tree, index or -c config point git at another repository", async () => {
@@ -257,7 +297,9 @@ describe("workspace", () => {
       ws.dir,
       outer,
     );
-    expect(where.stdout.trim().split("\n")).toEqual([
+    // git prints C:/… on Windows; path.resolve gives the platform's own separators.
+    const [gitDir, top, ...rest] = where.stdout.trim().split("\n");
+    expect([path.resolve(gitDir ?? ""), path.resolve(top ?? ""), ...rest]).toEqual([
       path.join(await realpath(ws.dir), ".git"),
       await realpath(ws.dir),
       "false",
@@ -266,7 +308,8 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
-  it("runs nothing the run wrote into .git when it reads the changes back", async () => {
+  it("runs nothing the run wrote into .git when it reads the changes back", async (ctx) => {
+    await skipWithoutSymlinks(ctx, root);
     const ws = await prepareWorkspace(
       path.join(root, "work"),
       "run-gitconfig",
@@ -279,9 +322,9 @@ describe("workspace", () => {
     const evil = path.join(root, "evil-config");
     const evilConfig =
       (await readFile(path.join(ws.dir, ".git", "config"), "utf8")) +
-      `[core]\n\tfsmonitor = "touch '${marker("fsmonitor")}'; false"\n` +
-      `[filter "evil"]\n\tclean = "touch '${marker("filter")}'; cat"\n` +
-      `[diff "evil"]\n\ttextconv = "touch '${marker("textconv")}'; cat"\n`;
+      `[core]\n\tfsmonitor = "touch '${forShell(marker("fsmonitor"))}'; false"\n` +
+      `[filter "evil"]\n\tclean = "touch '${forShell(marker("filter"))}'; cat"\n` +
+      `[diff "evil"]\n\ttextconv = "touch '${forShell(marker("textconv"))}'; cat"\n`;
     await writeFile(evil, evilConfig, "utf8");
     await rm(path.join(ws.dir, ".git", "config"));
     await symlink(evil, path.join(ws.dir, ".git", "config"));
@@ -294,6 +337,33 @@ describe("workspace", () => {
     // The config is the clone's again, a plain file, and what the symlink pointed at is untouched.
     expect((await lstat(path.join(ws.dir, ".git", "config"))).isSymbolicLink()).toBe(false);
     expect(await readFile(evil, "utf8")).toBe(evilConfig);
+    await cleanupWorkspace(ws);
+  });
+
+  it("runs no hook the run left in .git when it reads the changes back", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-hook",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    // git runs post-index-change whenever it writes the index, as the harvest's `git add` does.
+    const marker = path.join(root, "hook-ran");
+    await mkdir(path.join(ws.dir, ".git", "hooks"), { recursive: true });
+    await writeFile(
+      path.join(ws.dir, ".git", "hooks", "post-index-change"),
+      `#!/bin/sh\necho ran > '${forShell(marker)}'\n`,
+      { mode: 0o755 },
+    );
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    // git without the worker's settings runs it, so the hook works here and the check below means something.
+    const plain = spawnSync("git", ["add", "README.md"], { cwd: ws.dir, env: gitEnvironment() });
+    expect(plain.status, plain.stderr.toString()).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+    await rm(marker);
+    const h = await harvestWorkspace(ws, []);
+    expect(h.artifacts.find((a) => a.kind === "diff")?.content).toContain("+changed");
+    expect(existsSync(marker)).toBe(false);
     await cleanupWorkspace(ws);
   });
 
@@ -365,7 +435,8 @@ describe("the harvest never reads through a link", () => {
       .join("\n")
       .includes("hunter2");
 
-  it("refuses declared outputs that are links, inside or outside the workspace, or reached through one", async () => {
+  it("refuses declared outputs that are links, inside or outside the workspace, or reached through one", async (ctx) => {
+    await skipWithoutSymlinks(ctx, root);
     const ws = await prepareWorkspace(
       path.join(root, "work"),
       "run-links",
@@ -407,7 +478,8 @@ describe("the harvest never reads through a link", () => {
     expect(existsSync(path.join(outside, "environ"))).toBe(true);
   });
 
-  it("without declared outputs, refuses the links a run left in a repository; the diff holds only their targets", async () => {
+  it("without declared outputs, refuses the links a run left in a repository; the diff holds only their targets", async (ctx) => {
+    await skipWithoutSymlinks(ctx, root);
     const ws = await prepareWorkspace(
       path.join(root, "work"),
       "run-repo-links",
@@ -427,5 +499,100 @@ describe("the harvest never reads through a link", () => {
     expect(diff).toContain("new file mode 120000");
     expect(leaks(h)).toBe(false);
     await cleanupWorkspace(ws);
+  });
+});
+
+describe("a file's identity", () => {
+  it("tells two files apart by their whole file id, which a number would round together", () => {
+    // Real NTFS ids (sequence 35, records 198867 and 198869): as numbers they are one and the same.
+    const a = (35n << 48n) | 198867n;
+    const b = (35n << 48n) | 198869n;
+    expect(Number(a)).toBe(Number(b));
+    expect(sameFile({ dev: 7n, ino: a }, { dev: 7n, ino: b })).toBe(false);
+    expect(sameFile({ dev: 7n, ino: a }, { dev: 7n, ino: a })).toBe(true);
+    // Another device, or no id at all, is never the same file.
+    expect(sameFile({ dev: 8n, ino: a }, { dev: 7n, ino: a })).toBe(false);
+    expect(sameFile({ dev: 7n, ino: 0n }, { dev: 7n, ino: 0n })).toBe(false);
+  });
+
+  it("finds a file's device by a handle the same as its directory's, as the harvest compares them on Windows", async () => {
+    const dir = await mkdtemp(path.join(root, "dev-"));
+    await writeFile(path.join(dir, "f.md"), "f\n", "utf8");
+    const [file, folder] = await Promise.all([open(path.join(dir, "f.md"), "r"), open(dir, "r")]);
+    try {
+      const [f, d] = await Promise.all([file.stat({ bigint: true }), folder.stat({ bigint: true })]);
+      expect(f.dev).toBe(d.dev);
+      expect(f.ino).not.toBe(0n);
+    } finally {
+      await Promise.all([file.close(), folder.close()]);
+    }
+  });
+});
+
+describe("removing a run's directory", () => {
+  const busy = () => Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+
+  it("tries again while something in it is busy, and gives up within its time", async () => {
+    let calls = 0;
+    const started = Date.now();
+    await expect(
+      removeTree(path.join(root, "never"), 300, async () => {
+        calls++;
+        throw busy();
+      }),
+    ).rejects.toMatchObject({ code: "EBUSY" });
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(calls).toBeGreaterThan(1);
+
+    calls = 0;
+    await removeTree(path.join(root, "later"), 2000, async () => {
+      if (++calls < 3) throw busy();
+    });
+    expect(calls).toBe(3);
+
+    calls = 0;
+    const denied = Object.assign(new Error("no"), { code: "EACCES" });
+    await expect(
+      removeTree(path.join(root, "denied"), 2000, async () => {
+        calls++;
+        throw denied;
+      }),
+    ).rejects.toBe(denied);
+    expect(calls).toBe(1);
+  });
+
+  it("removes a directory a process holds as soon as it lets go, and gives up in time while it does not", async () => {
+    const dir = await mkdtemp(path.join(root, "held-"));
+    await writeFile(path.join(dir, "f.md"), "f\n", "utf8");
+    // A process left running in it, as a run's dev server or a git being stopped would be.
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+      cwd: dir,
+      stdio: "ignore",
+    });
+    await new Promise((resolve) => child.once("spawn", resolve));
+    try {
+      if (process.platform === "win32") {
+        // Windows removes no directory a process holds: Node's rm fails, and removeTree stops trying in time.
+        await expect(rm(dir, { recursive: true, force: true })).rejects.toMatchObject({
+          code: expect.stringMatching(/^(EBUSY|EPERM)$/),
+        });
+        const started = Date.now();
+        await expect(removeTree(dir, 500)).rejects.toMatchObject({
+          code: expect.stringMatching(/^(EBUSY|EPERM)$/),
+        });
+        expect(Date.now() - started).toBeLessThan(3000);
+        expect(existsSync(dir)).toBe(true);
+      } else {
+        // Elsewhere a process's directory goes like any other.
+        await removeTree(dir, 500);
+        expect(existsSync(dir)).toBe(false);
+      }
+    } finally {
+      const gone = new Promise((resolve) => child.once("exit", resolve));
+      child.kill();
+      await gone;
+    }
+    await removeTree(dir);
+    expect(existsSync(dir)).toBe(false);
   });
 });

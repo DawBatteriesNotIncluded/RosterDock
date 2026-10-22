@@ -3,6 +3,7 @@
 // itself, its sign-in and a proxy, the prompt on stdin, stopped at a timeout.
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,32 @@ const PASS_ENV =
 /** What a CLI needs to find its binary, its sign-in and a proxy; none of the board's own settings. */
 export function cliEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([k, v]) => v !== undefined && PASS_ENV.test(k)));
+}
+
+/** The script npm's .cmd shim runs on Windows, for each CLI the board plans with by default. */
+const NPM_SCRIPTS = new Map<string, string[]>([
+  ["claude", ["@anthropic-ai", "claude-code", "cli.js"]],
+  ["codex", ["@openai", "codex", "bin", "codex.js"]],
+]);
+
+/**
+ * On Windows npm installs claude and codex as .cmd shims, which a spawn without a shell cannot start: the
+ * script the shim runs, found beside it on PATH, is run with this Node instead (as the worker runs its
+ * engines). Any other binary, or any other platform, as it is.
+ */
+export function resolveCliBin(
+  bin: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform = process.platform,
+): { bin: string; prefix: string[] } {
+  const script = NPM_SCRIPTS.get(bin);
+  if (!script || platform !== "win32") return { bin, prefix: [] };
+  for (const dir of (env.Path || env.PATH || "").split(path.delimiter)) {
+    if (!dir) continue;
+    const js = path.join(dir, "node_modules", ...script);
+    if (existsSync(js)) return { bin: process.execPath, prefix: [js] };
+  }
+  return { bin, prefix: [] };
 }
 
 export interface CliCall {
@@ -43,7 +70,8 @@ export async function runCli(call: CliCall): Promise<CliResult> {
   try {
     await call.prepare?.(cwd);
     return await new Promise<CliResult>((resolve, reject) => {
-      const child = spawn(call.bin, [...(call.prefixArgs ?? []), ...call.args], {
+      const cli = resolveCliBin(call.bin, call.env);
+      const child = spawn(cli.bin, [...cli.prefix, ...(call.prefixArgs ?? []), ...call.args], {
         cwd,
         env: cliEnv(call.env),
         shell: false,
@@ -71,6 +99,8 @@ export async function runCli(call: CliCall): Promise<CliResult> {
       child.stdin.end(call.stdin);
     });
   } finally {
-    await rm(cwd, { recursive: true, force: true });
+    // A CLI killed at the timeout holds its directory a moment longer on Windows (EBUSY): retry, and never
+    // let the cleanup stand in for the call's own answer or error.
+    await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
   }
 }

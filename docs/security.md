@@ -257,6 +257,22 @@ their own, each with its own database and workers.
   folder included, where git status and git clean never look; the undo empties those folders again, as
   the clone left them. A round that copies or renames a file is refused before it is applied: the
   harvest's diffs never do, and a copy could carry a link the repository holds into such a folder.
+- A worker run natively on Windows (`pnpm dev:worker` there, not in Docker or WSL2) keeps the rules above by
+  other means. git's global config is `/dev/null`, which Git for Windows reads as its NUL device, and git
+  looks for hooks under that device (`\\.\nul`), where no file can be. git there checks a link out as a
+  plain file holding its target, so a rework round whose diff makes or changes a link is refused by the
+  diff. Windows looks for a program in the directory it starts in before PATH; the worker turns that off
+  (`NoDefaultCurrentDirectoryInExePath`), so a `git.exe` or `claude.exe` in a clone never runs in place of
+  the real one. Windows has no `O_NOFOLLOW`: a symbolic link or a junction anywhere on a file's way is
+  refused, and the file is read only when the one opened has the file id of the one checked, compared whole
+  (a file without one is refused), on the workspace's volume as a handle reads it (by path, Node 22.12 to
+  22.16 misread the volume there). A stopped git ends with the helpers it started (`taskkill /t`, where
+  Linux has the process group), and a test past its time limit with everything cmd.exe started for it. File
+  modes do nothing there: the MCP config that carries the run token is private because the temp directory
+  is, as a user's profile is. What does not carry over is the pod: the engine, its shell and the
+  repository's tests run as your Windows user, with your files, your credentials and your other programs
+  within reach, and nothing they leave ends with the run. Run anything but your own repositories in Docker
+  or WSL2.
 
 ## The board
 

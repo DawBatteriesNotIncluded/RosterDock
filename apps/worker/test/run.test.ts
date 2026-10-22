@@ -19,6 +19,7 @@ import { engineEnvironment, executeRun, fitCompletion, RunInterrupted, type RunD
 import { runRootSpanId, traceIdForRun } from "@rosterdock/shared";
 import type { Exec } from "../src/tests.js";
 import { git } from "../src/workspace.js";
+import { skipWithoutSymlinks } from "./helpers.js";
 
 let workRoot: string;
 beforeAll(async () => {
@@ -174,7 +175,8 @@ describe("executeRun", () => {
     expect(board.completion?.summary).toMatch(/Missing declared outputs: missing.md/);
   });
 
-  it("reports a declared output left as a link in the summary, and never reads what it points at", async () => {
+  it("reports a declared output left as a link in the summary, and never reads what it points at", async (ctx) => {
+    await skipWithoutSymlinks(ctx, workRoot);
     const secret = path.join(workRoot, "environ");
     await writeFile(secret, "ROSTERDOCK_WORKER_TOKEN=hunter2\n", "utf8");
     const linking: EngineAdapter = {
