@@ -44,7 +44,8 @@ it("refuses a file the run swaps for a link between the harvest's check and its 
     return openFile(file, flags, mode);
   });
   const h = await harvestWorkspace(ws, ["report.md"]);
-  expect(vi.mocked(open)).toHaveBeenCalledTimes(1);
+  // The swap ran at the file's open (on Windows the workspace's device is read by a handle after it).
+  expect(vi.mocked(open).mock.calls[0]?.[0]).toBe(report);
   expect(h.refusedOutputs).toEqual(["report.md"]);
   expect(h.filesWritten).toEqual([]);
   expect(JSON.stringify(h.artifacts)).not.toContain("hunter2");

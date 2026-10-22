@@ -1,11 +1,12 @@
 // Workspace against a local bare repository: no network.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   copyFile,
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   realpath,
   rm,
@@ -26,6 +27,8 @@ import {
   prepareWorkspace,
   type Harvest,
   redactGit,
+  removeTree,
+  sameFile,
   withToken,
 } from "../src/workspace.js";
 import { skipWithoutSymlinks } from "./helpers.js";
@@ -496,5 +499,100 @@ describe("the harvest never reads through a link", () => {
     expect(diff).toContain("new file mode 120000");
     expect(leaks(h)).toBe(false);
     await cleanupWorkspace(ws);
+  });
+});
+
+describe("a file's identity", () => {
+  it("tells two files apart by their whole file id, which a number would round together", () => {
+    // Real NTFS ids (sequence 35, records 198867 and 198869): as numbers they are one and the same.
+    const a = (35n << 48n) | 198867n;
+    const b = (35n << 48n) | 198869n;
+    expect(Number(a)).toBe(Number(b));
+    expect(sameFile({ dev: 7n, ino: a }, { dev: 7n, ino: b })).toBe(false);
+    expect(sameFile({ dev: 7n, ino: a }, { dev: 7n, ino: a })).toBe(true);
+    // Another device, or no id at all, is never the same file.
+    expect(sameFile({ dev: 8n, ino: a }, { dev: 7n, ino: a })).toBe(false);
+    expect(sameFile({ dev: 7n, ino: 0n }, { dev: 7n, ino: 0n })).toBe(false);
+  });
+
+  it("finds a file's device by a handle the same as its directory's, as the harvest compares them on Windows", async () => {
+    const dir = await mkdtemp(path.join(root, "dev-"));
+    await writeFile(path.join(dir, "f.md"), "f\n", "utf8");
+    const [file, folder] = await Promise.all([open(path.join(dir, "f.md"), "r"), open(dir, "r")]);
+    try {
+      const [f, d] = await Promise.all([file.stat({ bigint: true }), folder.stat({ bigint: true })]);
+      expect(f.dev).toBe(d.dev);
+      expect(f.ino).not.toBe(0n);
+    } finally {
+      await Promise.all([file.close(), folder.close()]);
+    }
+  });
+});
+
+describe("removing a run's directory", () => {
+  const busy = () => Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+
+  it("tries again while something in it is busy, and gives up within its time", async () => {
+    let calls = 0;
+    const started = Date.now();
+    await expect(
+      removeTree(path.join(root, "never"), 300, async () => {
+        calls++;
+        throw busy();
+      }),
+    ).rejects.toMatchObject({ code: "EBUSY" });
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(calls).toBeGreaterThan(1);
+
+    calls = 0;
+    await removeTree(path.join(root, "later"), 2000, async () => {
+      if (++calls < 3) throw busy();
+    });
+    expect(calls).toBe(3);
+
+    calls = 0;
+    const denied = Object.assign(new Error("no"), { code: "EACCES" });
+    await expect(
+      removeTree(path.join(root, "denied"), 2000, async () => {
+        calls++;
+        throw denied;
+      }),
+    ).rejects.toBe(denied);
+    expect(calls).toBe(1);
+  });
+
+  it("removes a directory a process holds as soon as it lets go, and gives up in time while it does not", async () => {
+    const dir = await mkdtemp(path.join(root, "held-"));
+    await writeFile(path.join(dir, "f.md"), "f\n", "utf8");
+    // A process left running in it, as a run's dev server or a git being stopped would be.
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+      cwd: dir,
+      stdio: "ignore",
+    });
+    await new Promise((resolve) => child.once("spawn", resolve));
+    try {
+      if (process.platform === "win32") {
+        // Windows removes no directory a process holds: Node's rm fails, and removeTree stops trying in time.
+        await expect(rm(dir, { recursive: true, force: true })).rejects.toMatchObject({
+          code: expect.stringMatching(/^(EBUSY|EPERM)$/),
+        });
+        const started = Date.now();
+        await expect(removeTree(dir, 500)).rejects.toMatchObject({
+          code: expect.stringMatching(/^(EBUSY|EPERM)$/),
+        });
+        expect(Date.now() - started).toBeLessThan(3000);
+        expect(existsSync(dir)).toBe(true);
+      } else {
+        // Elsewhere a process's directory goes like any other.
+        await removeTree(dir, 500);
+        expect(existsSync(dir)).toBe(false);
+      }
+    } finally {
+      const gone = new Promise((resolve) => child.once("exit", resolve));
+      child.kill();
+      await gone;
+    }
+    await removeTree(dir);
+    expect(existsSync(dir)).toBe(false);
   });
 });

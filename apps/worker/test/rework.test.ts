@@ -361,6 +361,12 @@ describe("a rework run and links", () => {
 
   const roundOf = (diff: string): Rework => ({ round: 1, diffSha256: sha256Hex(diff), baseSha, diff });
 
+  /** Git for Windows' own defaults, which a clone there takes by itself: no symlinks, no executable bit. */
+  async function asOnWindows(dir: string): Promise<void> {
+    for (const key of ["core.symlinks", "core.filemode"])
+      expect((await git(["config", key, "false"], dir, GIT_ENV)).code).toBe(0);
+  }
+
   it("never carries a link over: a round that leaves one is undone, and the clone is as it was", async (ctx) => {
     await skipWithoutSymlinks(ctx, root);
     const diff = await recordRound("links", async (dir) => {
@@ -398,14 +404,63 @@ describe("a rework run and links", () => {
       { repoUrl: baseRepo, defaultBranch: "main" },
       null,
     );
-    // Git for Windows' own default, without the system config the worker never reads.
-    expect((await git(["config", "core.symlinks", "false"], ws.dir, GIT_ENV)).code).toBe(0);
+    // Git for Windows' own defaults, without the system config the worker never reads.
+    await asOnWindows(ws.dir);
     expect(await applyPreviousRound(ws, roundOf(diff), "main")).toEqual({
       round: 1,
       applied: false,
       reason: "report.md is a symbolic link, which a rework run does not carry over",
     });
     expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
+  });
+
+  it("refuses a round that points a committed link elsewhere, where git writes links as plain files", async (ctx) => {
+    await skipWithoutSymlinks(ctx, root);
+    // A repository with a link in it, l -> a.
+    const src = path.join(root, "link-src");
+    await mkdir(src, { recursive: true });
+    await run(["init", "--quiet", "-b", "main"], src);
+    await writeFile(path.join(src, "a"), "a\n", "utf8");
+    await symlink("a", path.join(src, "l"));
+    await run(["add", "."], src);
+    await run(["commit", "--quiet", "-m", "a link"], src);
+    const repo = path.join(root, "link.git");
+    await run(["clone", "--quiet", "--bare", src, repo], root);
+    // Round 1 points it at a secret, recorded as the harvest records it: an index line, no mode line.
+    const record = path.join(root, "record-retarget");
+    await run(["clone", "--quiet", repo, record], root);
+    await rm(path.join(record, "l"));
+    await symlink(secretFile, path.join(record, "l"));
+    await run(["add", "-A"], record);
+    const diff = (
+      await git(["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff"], record, GIT_ENV)
+    ).stdout;
+    expect(diff).toMatch(/^index [0-9a-f]+\.\.[0-9a-f]+ 120000$/m);
+    expect(diff).not.toMatch(/^(?:new file mode|new mode|old mode)/m);
+    const ws = await prepareWorkspace(
+      path.join(root, "work-retarget"),
+      "run-retarget",
+      { repoUrl: repo, defaultBranch: "main" },
+      null,
+    );
+    const l = path.join(ws.dir, "l");
+    if (process.platform === "win32") {
+      // What Git for Windows does by itself: the link checked out as a plain file, no executable bit trusted.
+      expect((await git(["config", "core.filemode"], ws.dir, GIT_ENV)).stdout.trim()).toBe("false");
+    } else {
+      // The same here: Git for Windows' defaults, and the link checked out again under them.
+      await asOnWindows(ws.dir);
+      await rm(l);
+      expect((await git(["checkout", "--", "l"], ws.dir, GIT_ENV)).code).toBe(0);
+    }
+    expect((await lstat(l)).isSymbolicLink()).toBe(false);
+    expect(await applyPreviousRound(ws, roundOf(diff), "main")).toEqual({
+      round: 1,
+      applied: false,
+      reason: "l is a symbolic link, which a rework run does not carry over",
+    });
+    expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
+    expect(await readFile(l, "utf8")).toBe("a");
   });
 
   it("writes nothing through a link: a round that puts a file behind one is refused whole", async (ctx) => {
