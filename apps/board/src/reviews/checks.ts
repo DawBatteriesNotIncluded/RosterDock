@@ -4,10 +4,12 @@
 // evidence is the diff itself, the declared outputs, the repository's tests and
 // the reviewer's scores against the task's weighted criteria.
 
+import { isUtf8 } from "node:buffer";
 import {
   addedText,
   containsRawSecret,
   findRawSecrets,
+  sha256Hex,
   type Criterion,
   type DiffFile,
 } from "@rosterdock/shared";
@@ -33,11 +35,32 @@ export interface CheckResult {
 const ASSIGNED_SECRET_RE =
   /(?:api[_-]?key|secret|password|passwd|token|private[_-]?key)["']?\s*[:=]\s*["'][^"'\s]{8,}["']/i;
 
+/** A secret-shaped string somewhere in the line. */
+function secretShaped(text: string): boolean {
+  return findRawSecrets({ text }).length > 0 || containsRawSecret(text) || ASSIGNED_SECRET_RE.test(text);
+}
+
+/** A file the diff calls binary, with the bytes a pull request would write for it: null where the run sent none. */
+export interface BinaryFile {
+  path: string;
+  bytes: Buffer | null;
+}
+
+/** What the secrets check records of the round's binary files, for the pull request to hold their bytes to. */
+export interface BinaryDetail {
+  /** The sha256 of each binary file's bytes as scanned. */
+  binaries: { path: string; sha256: string }[];
+  /** The binary files the review cannot show: bytes that are not UTF-8 text, or none. */
+  unshown: string[];
+}
+
 /**
- * Secret-shaped strings anywhere in the added lines. Reports lines, never values. `unread`: why the run's diff
- * could not be read (parseUnifiedDiff threw), so nothing of it was scanned, and the check fails.
+ * Secret-shaped strings anywhere in the added lines, and in every binary file's bytes, which the review cannot
+ * show: a file git calls binary (an attribute, a NUL byte) may be text all the same. Reports lines, never
+ * values. A binary file whose bytes are not text fails the check too, so a person approves it. `unread`: why the
+ * run's diff could not be read (parseUnifiedDiff threw), so nothing of it was scanned, and the check fails.
  */
-export function secretsCheck(files: DiffFile[], unread?: string): CheckResult {
+export function secretsCheck(files: DiffFile[], unread?: string, binaries: BinaryFile[] = []): CheckResult {
   if (unread !== undefined)
     return {
       kind: "secrets",
@@ -49,30 +72,44 @@ export function secretsCheck(files: DiffFile[], unread?: string): CheckResult {
   for (const f of files) {
     for (const h of f.hunks) {
       for (const l of h.lines) {
-        if (l.kind !== "add") continue;
-        const shaped =
-          findRawSecrets({ text: l.text }).length > 0 ||
-          containsRawSecret(l.text) ||
-          ASSIGNED_SECRET_RE.test(l.text);
-        if (shaped) lines.push({ path: f.path, line: l.new ?? 0 });
+        if (l.kind === "add" && secretShaped(l.text)) lines.push({ path: f.path, line: l.new ?? 0 });
       }
     }
   }
-  const scanned = addedText(files).length;
+  let scanned = addedText(files).length;
+  const bound: BinaryDetail = { binaries: [], unshown: [] };
+  for (const b of binaries) {
+    if (!b.bytes) {
+      bound.unshown.push(b.path);
+      continue;
+    }
+    bound.binaries.push({ path: b.path, sha256: sha256Hex(b.bytes) });
+    const text = b.bytes.toString("utf8");
+    scanned += text.length;
+    for (const [i, line] of text.split("\n").entries())
+      if (secretShaped(line)) lines.push({ path: b.path, line: i + 1 });
+    if (b.bytes.includes(0) || !isUtf8(b.bytes)) bound.unshown.push(b.path);
+  }
+  const detail = binaries.length ? { scannedChars: scanned, ...bound } : { scannedChars: scanned };
   if (lines.length) {
     return {
       kind: "secrets",
       ok: false,
       title: `${lines.length} secret-shaped ${lines.length === 1 ? "string" : "strings"} in the diff`,
-      detail: { lines: lines.slice(0, 20), scannedChars: scanned },
+      detail: { ...detail, lines: lines.slice(0, 20) },
     };
   }
-  return {
-    kind: "secrets",
-    ok: true,
-    title: "No credential values in the diff",
-    detail: { scannedChars: scanned },
-  };
+  if (bound.unshown.length) {
+    const n = bound.unshown.length;
+    const named = bound.unshown.slice(0, 5).join(", ") + (n > 5 ? ` and ${n - 5} more` : "");
+    return {
+      kind: "secrets",
+      ok: false,
+      title: `${n} binary ${n === 1 ? "file" : "files"} the review cannot show, so a person approves ${n === 1 ? "it" : "them"}: ${named}`,
+      detail,
+    };
+  }
+  return { kind: "secrets", ok: true, title: "No credential values in the diff", detail };
 }
 
 /** Every declared output is in the diff or among the run's artifacts. */

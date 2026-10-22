@@ -140,6 +140,13 @@ install built from that tree changes each of these:
   it does on two names that differ only by spaces or a U+FEFF at an end, and, without a repository, on a file
   named `.git`, which is not delivered. The board kept an artifact's name trimmed of those, so such a file
   replaced the one without them.
+- A file git showed as binary reached the pull request as the bytes the run sent, which neither the review nor
+  the secrets check read: a run could hide a credential in a text file by marking it `-diff` in
+  `.git/info/attributes` or `.gitattributes`, or by putting a NUL byte in it. The secrets check now scans every
+  binary file's bytes and binds their sha256, a pull request writes only those bytes, and a binary file whose
+  bytes are not text needs a person's approval; the worker takes out a `.git/info/attributes` the run wrote.
+  Upgrading: a review open before the upgrade with a binary file fails its pull request on approval, saying so;
+  a person vetoes the approval and requests changes.
 - On Windows, 0.1.0-rc.1 and 0.1.0-rc.2 ran the repository's tests without the job object: Windows
   PowerShell never made it (kernel32's functions were declared without PreserveSig), so what the tests left
   running when they ended by themselves carried on, as without one. The worker now makes it, and its log

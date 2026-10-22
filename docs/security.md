@@ -182,8 +182,9 @@ their own, each with its own database and workers.
   worker's credentials, and reads no system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`
   empty), so a `~/.gitconfig` an earlier run left behind changes nothing. It runs no hook and no fsmonitor,
   and the diff runs no textconv. Before the worker reads a run's changes back, it puts the clone's
-  `.git/config` back as the clone wrote it, so a filter the run added never runs; a run that replaced `.git`
-  gets no review of its changes.
+  `.git/config` back as the clone wrote it, so a filter the run added never runs, and takes out any
+  `.git/info/attributes` the run wrote, so no attribute the review cannot see makes a text file binary; a run
+  that replaced `.git` gets no review of its changes.
 - The git token (`worker.gitSecret`) goes into a clone's URL only over https and only to the hosts it is for
   (`worker.gitSecret.hosts`, `ROSTERDOCK_GIT_TOKEN_HOSTS`; github.com by default), and the clone's remote is
   set back without it. A clone that fails, or that Stop, the time limit or a shutdown ends part-way, is
@@ -259,6 +260,12 @@ their own, each with its own database and workers.
   from the files the review showed, and only while the review's diff, read again with the sha256 it was opened
   with, still reads as them: one an older board read otherwise, or that cannot be read back from the object
   store, fails and says why.
+- A file the diff calls binary has no lines to show, whatever made git call it so (an attribute in the
+  repository's `.gitattributes`, a NUL byte, real binary data). The secrets check scans the bytes the run sent
+  for it, by the same rules, and records their sha256; a pull request writes those bytes and no others. A
+  binary file whose bytes are not UTF-8 text, or that the run sent no bytes for, fails the check, since the
+  review cannot show it: only a person approves it, and the pull request refuses it where a teammate did. A
+  review an older board opened recorded no bytes, so its pull request refuses its binary files.
 - A run delivers files, never links. The worker reads a declared output, a changed file, the handover and
   `blocked.md` only as a regular file inside the run's directory, reached without a symbolic link. A link
   (`report.md -> /proc/self/environ`, a linked directory on the way) or a path out of the directory is never

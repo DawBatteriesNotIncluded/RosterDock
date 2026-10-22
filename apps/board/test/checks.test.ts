@@ -1,4 +1,5 @@
 // Pure review checks over parsed diffs. No database.
+import { createHash } from "node:crypto";
 import { parseUnifiedDiff, renderNewFileDiff } from "@rosterdock/shared";
 import { describe, expect, it } from "vitest";
 import {
@@ -249,6 +250,60 @@ describe("secretsCheck", () => {
     expect(secretsCheck([], "x.md: a line git does not write in a diff")).toMatchObject({
       ok: false,
       detail: { unread: "x.md: a line git does not write in a diff" },
+    });
+  });
+
+  it("scans a binary file's bytes, binds their sha256, and leaves to a person one the review cannot show", () => {
+    const stanza = (p: string) =>
+      `diff --git a/${p} b/${p}\nnew file mode 100644\nBinary files /dev/null and b/${p} differ\n`;
+    const binary = (...paths: string[]) => parseUnifiedDiff(paths.map(stanza).join(""));
+    const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+    // Text git calls binary (an attribute): scanned like an added line, reported by its line, never its value.
+    const text = Buffer.from('{\n  "smtp_password": "not-a-real-value-123"\n}\n');
+    expect(secretsCheck(binary("config.json"), undefined, [{ path: "config.json", bytes: text }])).toEqual({
+      kind: "secrets",
+      ok: false,
+      title: "1 secret-shaped string in the diff",
+      detail: {
+        scannedChars: text.length,
+        binaries: [{ path: "config.json", sha256: sha(text) }],
+        unshown: [],
+        lines: [{ path: "config.json", line: 2 }],
+      },
+    });
+    // Text with a NUL byte: scanned all the same.
+    const nul = Buffer.concat([Buffer.from([0]), Buffer.from('\napi_key = "not-a-real-value-123"\n')]);
+    expect(secretsCheck(binary("data.bin"), undefined, [{ path: "data.bin", bytes: nul }])).toMatchObject({
+      ok: false,
+      detail: { lines: [{ path: "data.bin", line: 2 }], unshown: ["data.bin"] },
+    });
+    // Clean text git calls binary passes; bytes that are not text, or none, are a person's to approve.
+    const clean = Buffer.from("plain words\n");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]);
+    expect(
+      secretsCheck(binary("notes.lock"), undefined, [{ path: "notes.lock", bytes: clean }]),
+    ).toMatchObject({
+      ok: true,
+      title: "No credential values in the diff",
+      detail: { binaries: [{ path: "notes.lock", sha256: sha(clean) }], unshown: [] },
+    });
+    const latin1 = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+    expect(
+      secretsCheck(binary("logo.png", "gone.bin", "cafe.txt"), undefined, [
+        { path: "logo.png", bytes: png },
+        { path: "gone.bin", bytes: null },
+        { path: "cafe.txt", bytes: latin1 },
+      ]),
+    ).toMatchObject({
+      ok: false,
+      title: "3 binary files the review cannot show, so a person approves them: logo.png, gone.bin, cafe.txt",
+      detail: {
+        binaries: [
+          { path: "logo.png", sha256: sha(png) },
+          { path: "cafe.txt", sha256: sha(latin1) },
+        ],
+        unshown: ["logo.png", "gone.bin", "cafe.txt"],
+      },
     });
   });
 });

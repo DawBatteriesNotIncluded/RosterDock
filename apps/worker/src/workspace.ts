@@ -358,6 +358,13 @@ async function restoreGitDir(ws: Workspace): Promise<void> {
     throw new Error(
       "the run replaced the repository's .git directory, so its changes cannot be read back for review",
     );
+  // Attributes the run gave this clone alone (`config.json -diff`) would have the diff call a text file binary,
+  // which the review cannot show: they go. The repository's own .gitattributes is part of its change. An info
+  // that is a link goes itself, never what it points at.
+  const info = path.join(gitDir, "info");
+  const infoSt = await lstat(info).catch(() => null);
+  if (infoSt?.isSymbolicLink()) await rm(info, { force: true });
+  else if (infoSt?.isDirectory()) await rm(path.join(info, "attributes"), { force: true, recursive: true });
   if (ws.gitConfig === undefined) return;
   const config = path.join(gitDir, "config");
   // Removed first: a symlink the run left there must not redirect the write.

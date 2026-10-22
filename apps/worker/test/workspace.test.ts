@@ -494,6 +494,56 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
+  it("shows a text file as text whatever attributes the run gave the clone alone in .git/info", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-info-attributes",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    // `-diff` and `binary` would have git print "Binary files ... differ": the review would show none of it.
+    await mkdir(path.join(ws.dir, ".git", "info"), { recursive: true });
+    await writeFile(
+      path.join(ws.dir, ".git", "info", "attributes"),
+      "README.md -diff\n*.json binary\n",
+      "utf8",
+    );
+    await writeFile(path.join(ws.dir, "README.md"), '# demo\n\napi_key = "not-a-real-value-123"\n', "utf8");
+    await writeFile(
+      path.join(ws.dir, "config.json"),
+      '{ "smtp_password": "not-a-real-value-123" }\n',
+      "utf8",
+    );
+    const h = await harvestWorkspace(ws, []);
+    const files = parseUnifiedDiff(h.artifacts.find((a) => a.kind === "diff")!.content);
+    expect(files.map((f) => [f.path, f.binary])).toEqual([
+      ["README.md", false],
+      ["config.json", false],
+    ]);
+    expect(existsSync(path.join(ws.dir, ".git", "info", "attributes"))).toBe(false);
+    await cleanupWorkspace(ws);
+  });
+
+  it("takes out a .git/info the run made a link, never what it points at", async (ctx) => {
+    await skipWithoutSymlinks(ctx, root);
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-info-link",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    const elsewhere = await mkdtemp(path.join(root, "elsewhere-"));
+    await writeFile(path.join(elsewhere, "attributes"), "README.md -diff\n", "utf8");
+    await rm(path.join(ws.dir, ".git", "info"), { recursive: true, force: true });
+    await symlink(elsewhere, path.join(ws.dir, ".git", "info"), "dir");
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    const h = await harvestWorkspace(ws, []);
+    expect(h.artifacts.find((a) => a.kind === "diff")?.content).toContain("+changed");
+    expect(existsSync(path.join(ws.dir, ".git", "info"))).toBe(false);
+    expect(await readFile(path.join(elsewhere, "attributes"), "utf8")).toBe("README.md -diff\n");
+    await cleanupWorkspace(ws);
+  });
+
   it("runs no hook the run left in .git when it reads the changes back", async () => {
     const ws = await prepareWorkspace(
       path.join(root, "work"),

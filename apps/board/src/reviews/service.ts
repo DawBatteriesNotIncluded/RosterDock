@@ -28,7 +28,7 @@ import { closeChange, parseRepo, type GitHosts } from "../git/hosts.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate, type MutationContext } from "../mutate.js";
 import type { RunQueue } from "../queue.js";
-import { artifactText } from "../storage/artifacts.js";
+import { artifactBytes, artifactText } from "../storage/artifacts.js";
 import { extractSourceUrls, type SourceFetcher } from "./sources.js";
 import type { ObjectStore } from "../storage/s3.js";
 import { STATUS_LABEL, type TaskRow } from "../tasks/service.js";
@@ -40,6 +40,7 @@ import {
   secretsCheck,
   sourcesCheck,
   testsCheck,
+  type BinaryFile,
   type CheckResult,
   type CriterionScore,
 } from "./checks.js";
@@ -542,8 +543,21 @@ export async function openReviewRound(
       ],
     );
   }
+  // A binary file's bytes, as a pull request would write them: the review cannot show them, so the secrets check
+  // scans them and binds their sha256.
+  const binaries: BinaryFile[] = [];
+  for (const f of files) {
+    if (!f.binary || f.status === "deleted") continue;
+    const row = (
+      await ctx.client.query<{ content: string | null; object_key: string | null; encoding: string | null }>(
+        "SELECT content, object_key, encoding FROM artifacts WHERE run_id = $1 AND path = $2",
+        [run.id, f.path],
+      )
+    ).rows[0];
+    binaries.push({ path: f.path, bytes: row ? await artifactBytes(store, row) : null });
+  }
   const checks: CheckResult[] = [
-    secretsCheck(files, unread),
+    secretsCheck(files, unread, binaries),
     outputsCheck(
       task.declared_outputs ?? [],
       artifacts.rows.filter((a) => a.kind !== "diff" && a.kind !== "handover").map((a) => a.path),
