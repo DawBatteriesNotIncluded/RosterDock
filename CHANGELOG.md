@@ -30,9 +30,10 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
 - The Helm chart: board, web and worker against your Postgres and S3-compatible bucket, every credential by
   Secret name, network policies, KEDA scaling and worker pools.
 - Published releases. A `v*` tag runs CI on the tagged commit, then pushes the three images for linux/amd64
-  and linux/arm64 to GHCR, tagged with the version (and `MAJOR.MINOR` and `latest` unless a prerelease),
-  and the chart to `oci://ghcr.io/dawbatteriesnotincluded/charts` at the same version, whose appVersion
-  names those images (`.github/workflows/release.yml`). Run by hand, it is a dry run that pushes nothing.
+  and linux/arm64 to GHCR, each architecture built on a runner of its own (no emulation) with its provenance
+  and SBOM, tagged with the version (and `MAJOR.MINOR` and `latest` unless a prerelease), and the chart to
+  `oci://ghcr.io/dawbatteriesnotincluded/charts` at the same version, whose appVersion names those images
+  (`.github/workflows/release.yml`). Run by hand, it is a dry run that pushes nothing.
 - The web image carries the licence of every package bundled into the UI, each with its text, in
   `third-party-licenses.txt`, which it also serves at `/third-party-licenses.txt`.
 - Web access for teammates, through the board. The web connection (Settings > Connections > Web) reads public
@@ -42,7 +43,8 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
   Playwright, the MCP reference fetch server), and the brief tells each teammate which web tools it has.
 - A worker that runs natively on Windows (`pnpm dev:worker` with Git for Windows), tested there in CI, with
   the worker's git and file rules kept by Windows' own means; Docker or WSL2 stays the place for
-  repositories you would not run yourself (`docs/security.md`).
+  repositories you would not run yourself (`docs/security.md`). A board there plans with Claude Code or Codex
+  as npm installs them.
 
 ### Changed
 
@@ -113,6 +115,10 @@ install built from that tree changes each of these:
 
 ### Fixed
 
+- A process the repository's tests started (a server, a watcher) outlived the test step, and one that kept
+  the output open after a passing script held the step to its time limit, which it then reported as a
+  timeout. The script now leads a process group of its own (a job object on Windows), which the step ends
+  past its time limit, on Stop and when the script ends.
 - Handing Peter a goal could fail with an internal error, and leave it half planned, when Peter's loop started
   the plan's first task while the rest were still being filed: filing a task and starting the task it waits on
   took their locks in opposite orders, and Postgres broke the deadlock by cancelling the filing.

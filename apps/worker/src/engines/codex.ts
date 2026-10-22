@@ -9,7 +9,6 @@
 // config, the run token by env var NAME (never on the command line).
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   asSentence,
@@ -18,6 +17,7 @@ import {
   type RunEventInput,
   type RunUsage,
 } from "@rosterdock/shared";
+import { resolveEngineBin } from "./bin.js";
 import { HEADER, startFailure } from "./claude-code.js";
 import type { EngineAdapter, EngineContext, EngineResult, EngineRefusal } from "./types.js";
 import { clip, tail } from "../text.js";
@@ -96,23 +96,6 @@ export function codexRefusal(allowedTools: string[] | null, department: string |
 
 export const RUN_TOKEN_ENV = "ROSTERDOCK_RUN_TOKEN";
 export const HANDOVER_FILE = "handover-summary.md";
-
-// Windows npm exposes codex only as a .cmd shim, which spawn(shell:false)
-// cannot execute. Resolve the shim's codex.js from PATH and run it with this Node.
-export function resolveCodexBin(
-  bin: string,
-  env: NodeJS.ProcessEnv = process.env,
-  platform = process.platform,
-): { bin: string; prefix: string[] } {
-  if (bin !== "codex" || platform !== "win32") return { bin, prefix: [] };
-  const pathValue = env.Path || env.PATH || "";
-  for (const dir of pathValue.split(path.delimiter)) {
-    if (!dir) continue;
-    const js = path.join(dir, "node_modules", "@openai", "codex", "bin", "codex.js");
-    if (existsSync(js)) return { bin: process.execPath, prefix: [js] };
-  }
-  return { bin, prefix: [] };
-}
 
 export function buildArgs(
   opts: CodexOptions,
@@ -325,7 +308,7 @@ export function createCodexEngine(opts: CodexOptions): EngineAdapter {
           error: `${refusal.what} ${refusal.why} ${refusal.fix}`,
         };
       }
-      const resolved = resolveCodexBin(opts.bin);
+      const resolved = resolveEngineBin(opts.bin);
       const args = [
         ...resolved.prefix,
         ...buildArgs(opts, ctx.model, ctx.mcp, ctx.workdir, ctx.effort, reach),

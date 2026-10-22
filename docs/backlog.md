@@ -3,6 +3,11 @@
 Things noticed while building that are outside the current milestone. Move a line into the plan when it is
 scheduled; delete it when it ships.
 
+- CI builds the images for amd64 only, so a break that only arm64 shows first appears in a release's dry run.
+  Build the three on `ubuntu-24.04-arm` in CI too, unpushed, with a cache scope per image and architecture
+  that the release's arm64 builds can read.
+- ci.yml's test, images and helm jobs have no `timeout-minutes`, and every release runs them first: a hang
+  there holds a release for six hours. Give each one.
 - OpenCode, the plan's third engine, has a row in `engines` (disabled) and no worker adapter. The hire form and
   the teammate editor do not offer it, and the built-in 'Cody 3' template moved to Claude Code. Shipping it
   means an adapter in `apps/worker/src/engines/` tested against recorded OpenCode output, and enabling the row.
@@ -16,8 +21,8 @@ scheduled; delete it when it ships.
   `test` script, an engine's shell) can read the worker's environment, the board's `DATABASE_URL` included
   (`docs/security.md`, Companies on one board). Give the worker a database role of its own that reaches
   only the pg-boss schema (`pgboss`); run the tests as another user, so `/proc` does not show them the
-  worker's environment; give every run a fresh HOME and TMPDIR; and kill the engine's and the tests'
-  process groups when they end, so nothing a run starts outlives it.
+  worker's environment; give every run a fresh HOME and TMPDIR; and kill the engine's process group when it
+  ends, as the test step's is, so nothing a run starts outlives it.
 - With `worker.podMetrics.enabled` or `board.oauth.enabled`, the network policies open ports 443 and 6443 to
   any address, for the API server, in every worker pool too. Take the API server's address instead (the
   `kubernetes` Service's endpoints, or a value the operator sets).

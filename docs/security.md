@@ -121,8 +121,9 @@ the git token (`worker.gitSecret`) and the model keys, and code running as the s
 from its environment (`/proc/1/environ`). The database URL is the board's own and the worker's network
 policy lets the pod reach Postgres, so with it that code reads and writes every company's rows,
 memberships and tokens included. The worker token claims any company's queued run (the queue names them
-all), and with it that run's pack and run token. The worker ends the engine and test processes it
-starts, not what they start in turn: a process a run leaves running carries on beside the next runs the
+all), and with it that run's pack and run token. The worker ends the engine it starts, not what the
+engine starts in turn, and the repository's tests with their whole process group, not a process that
+leaves the group (`setsid`, a daemon): a process a run leaves running carries on beside the next runs the
 pod takes, whichever company they are for, and so does whatever a run leaves in the pod's home and temp
 directories.
 
@@ -234,7 +235,10 @@ their own, each with its own database and workers.
   locale and `CI=1`, and no model key, board token or git token. It still runs as the worker's user in
   the worker's pod, so it reaches what that user reaches, the worker process's own environment under
   `/proc` included, and its output becomes the review's tests check as written. Turn the step off on a
-  fleet that runs repositories you would not run yourself.
+  fleet that runs repositories you would not run yourself. The script leads a process group of its own,
+  which the step ends (SIGTERM, then SIGKILL two seconds later) past its time limit, on Stop and when the
+  script ends by itself, so a server or a watcher it starts does not outlive the step; a process that
+  leaves the group (`setsid`, a daemon) is not reached.
 - The engine reaches no external MCP server. Every tool call goes to the board (`board_tool_call`),
   where the broker decides: run a read, propose a write, or refuse. A tool is a read only when the
   connector's catalog lists it as one, a person classified it so, or its name starts with a reading verb
@@ -258,23 +262,36 @@ their own, each with its own database and workers.
   from the clean clone instead. The worker finds such a link by reading the whole clone, a submodule's
   folder included, where git status and git clean never look; the undo empties those folders again, as
   the clone left them. A round that copies or renames a file is refused before it is applied: the
-  harvest's diffs never do, and a copy could carry a link the repository holds into such a folder.
+  harvest's diffs never do, and a copy could carry a link the repository holds into such a folder. A round
+  that git apply fails to write whole (it checks first, but a write can still fail) is undone the same way.
 - A worker run natively on Windows (`pnpm dev:worker` there, not in Docker or WSL2) keeps the rules above by
   other means. git's global config is `/dev/null`, which Git for Windows reads as its NUL device, and git
-  looks for hooks under that device (`\\.\nul`), where no file can be. git there checks a link out as a
-  plain file holding its target, so a rework round whose diff makes or changes a link is refused by the
-  diff. Windows looks for a program in the directory it starts in before PATH; the worker turns that off
-  (`NoDefaultCurrentDirectoryInExePath`), so a `git.exe` or `claude.exe` in a clone never runs in place of
+  looks for hooks under that device (`\\.\nul`), where no file can be. git there checks a link out as a plain
+  file holding its target, so a rework round is refused by its diff alone: by a link it makes, or a change to
+  one the repository holds, which HEAD's tree names whatever mode the diff spells and in whatever case it
+  names the path. A round that deletes such a link or replaces it with a file carries over, as on Linux, and
+  the harvest records a link the run changed (or staged) as the file it now is, at a path `.gitignore` matches
+  too: git add would keep it a link. A link the run took out of the index itself stays out, with the file it
+  keeps there. Windows looks for a program in the directory it starts in before PATH; the worker turns that
+  off (`NoDefaultCurrentDirectoryInExePath`), so a `git.exe` or `claude.exe` in a clone never runs in place of
   the real one. Windows has no `O_NOFOLLOW`: a symbolic link or a junction anywhere on a file's way is
-  refused, and the file is read only when the one opened has the file id of the one checked, compared whole
-  (a file without one is refused), on the workspace's volume as a handle reads it (by path, Node 22.12 to
-  22.16 misread the volume there). A stopped git ends with the helpers it started (`taskkill /t`, where
-  Linux has the process group), and a test past its time limit with everything cmd.exe started for it. File
-  modes do nothing there: the MCP config that carries the run token is private because the temp directory
-  is, as a user's profile is. What does not carry over is the pod: the engine, its shell and the
-  repository's tests run as your Windows user, with your files, your credentials and your other programs
-  within reach, and nothing they leave ends with the run. Run anything but your own repositories in Docker
-  or WSL2.
+  refused, and the file is read only when the one opened has the file id of the one checked, compared whole,
+  on the workspace's volume as a handle reads it. A file without an id is refused: 0, or the all-ones id ReFS
+  gives a file whose own does not fit in 64 bits, so on a Dev Drive such a file is not delivered. By path,
+  libuv 1.49 and 1.50 (Node 22.12 to 22.16, 23.1 to 23.11 and 24.0 to 24.1) misread the volume on Windows 11
+  24H2 and Server 2025. A stopped git ends with the helpers it started that still run (`taskkill /t`, where
+  Linux has the process group). The repository's tests run in a job object, which ends every process they
+  started, one whose parent has already ended included (not a program started for them by a service, WMI or
+  the task scheduler). Without the job (Windows PowerShell blocked, or in the Constrained Language mode
+  AppLocker and WDAC put it in, and the tests run under cmd.exe as before; or a Windows that cannot nest
+  jobs), taskkill ends what it can still walk to past the time limit or on Stop, and what the tests leave
+  running when they end by themselves carries on. File modes do nothing there: the MCP config that carries the
+  run token is written to the temp directory and is private only while that directory is, as `%TEMP%` in your
+  profile is by default. A `TEMP` outside the profile (`C:\Temp`) takes its folder's permissions, which under
+  a drive's root let other users read it: keep the worker's `TEMP` in its profile. What does not carry over is
+  the pod: the engine, its shell and the repository's tests run as your Windows user, with your files, your
+  credentials and your other programs within reach, and nothing the engine leaves running ends with the run.
+  Run anything but your own repositories in Docker or WSL2.
 
 ## The board
 

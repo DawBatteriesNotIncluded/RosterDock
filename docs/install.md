@@ -51,9 +51,9 @@ kubectl --context kind-rosterdock -n rosterdock port-forward svc/rosterdock-web 
 
 A worker on a Windows machine runs best where it runs in production, in Linux: under Docker Desktop (the
 cluster above, or `docker compose --profile worker up -d worker`) or in WSL2. `pnpm dev:worker` also runs
-natively on Windows with Git for Windows on PATH (CI tests it there), but then a run's engine, its shell
-and the repository's tests run as your Windows user, outside any container: keep that to repositories you
-would run yourself (`docs/security.md`, Workers run model output).
+natively on Windows with Git for Windows on PATH (CI runs the worker's tests there), but then a run's engine,
+its shell and the repository's tests run as your Windows user, outside any container: keep that to
+repositories you would run yourself (`docs/security.md`, Workers run model output).
 
 ## A URL your other devices can open
 

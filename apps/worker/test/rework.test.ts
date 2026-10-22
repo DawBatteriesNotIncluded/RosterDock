@@ -13,7 +13,7 @@ import type { BoardClient, ClaimedRun } from "../src/board-client.js";
 import type { EngineAdapter } from "../src/engines/types.js";
 import { applyPreviousRound, whyNotApplied, type Rework } from "../src/rework.js";
 import { executeRun, type RunDeps } from "../src/run.js";
-import { git, GIT_NO_CONFIG, prepareWorkspace } from "../src/workspace.js";
+import { git, GIT_NO_CONFIG, harvestWorkspace, prepareWorkspace, type Workspace } from "../src/workspace.js";
 import { skipWithoutSymlinks } from "./helpers.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -461,6 +461,342 @@ describe("a rework run and links", () => {
     });
     expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
     expect(await readFile(l, "utf8")).toBe("a");
+  });
+
+  /**
+   * Commits `files`, and `links` as git records a link (mode 120000, the target as its contents): no link is
+   * made on disk, which Windows allows only with Developer Mode.
+   */
+  async function commit(src: string, files: Record<string, string>, links: Record<string, string> = {}) {
+    await writeTree(src, files);
+    // Forced: a file named here is committed though .gitignore matches it, as a repository may hold one.
+    if (Object.keys(files).length) await run(["add", "--force", "--", ...Object.keys(files)], src);
+    for (const [at, target] of Object.entries(links)) {
+      const blob = path.join(root, "link-target");
+      await writeFile(blob, target, "utf8");
+      const sha = await run(["hash-object", "-w", blob], src);
+      await run(["update-index", "--add", "--cacheinfo", `120000,${sha},${at}`], src);
+    }
+    await run(["commit", "--quiet", "-m", "commit"], src);
+  }
+
+  /** A bare repository whose main holds `files` and `links`. */
+  async function linkRepo(name: string, files: Record<string, string>, links: Record<string, string>) {
+    const src = path.join(root, `${name}-src`);
+    await mkdir(src, { recursive: true });
+    await run(["init", "--quiet", "-b", "main"], src);
+    await commit(src, files, links);
+    const repo = path.join(root, `${name}.git`);
+    await run(["clone", "--quiet", "--bare", src, repo], root);
+    return { src, repo };
+  }
+
+  /**
+   * A round as the harvest records it from a clone of `repo` that `change` changes; `staged`: `change` stages
+   * it, in the index only.
+   */
+  async function recordIn(
+    repo: string,
+    name: string,
+    change: (dir: string) => Promise<void>,
+    staged = false,
+  ) {
+    const dir = path.join(root, `record-${name}`);
+    await run(["clone", "--quiet", repo, dir], root);
+    await change(dir);
+    if (!staged) await run(["add", "-A"], dir);
+    return (await git(["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff"], dir, GIT_ENV))
+      .stdout;
+  }
+
+  /** A run's clone of `repo`; `windows`: as Git for Windows makes it, every link a plain file holding its target. */
+  async function cloneFor(repo: string, name: string, windows: boolean, links: string[]): Promise<Workspace> {
+    const ws = await prepareWorkspace(
+      path.join(root, `work-${name}`),
+      `run-${name}`,
+      { repoUrl: repo, defaultBranch: "main" },
+      null,
+    );
+    if (windows && process.platform !== "win32") {
+      await asOnWindows(ws.dir);
+      for (const l of links) {
+        await rm(path.join(ws.dir, l));
+        expect((await git(["checkout", "--", l], ws.dir, GIT_ENV)).code).toBe(0);
+      }
+    }
+    for (const l of links) expect((await lstat(path.join(ws.dir, l))).isSymbolicLink()).toBe(!windows);
+    // The harvest puts .git/config back as the clone left it: here with Windows' defaults.
+    return { ...ws, gitConfig: await readFile(path.join(ws.dir, ".git", "config"), "utf8") };
+  }
+
+  /** Where the clone can hold links, and as Git for Windows makes it; on Windows only the second. */
+  const CLONES = process.platform === "win32" ? [true] : [false, true];
+
+  it("refuses a change to a committed link however its diff spells the mode, where links are plain files too", async () => {
+    const { repo } = await linkRepo("spelled", { a: "a\n" }, { l: "a" });
+    // Round 1 points l at a secret, recorded as the harvest records it, then spelled as git apply also takes it.
+    const honest = await recordIn(
+      repo,
+      "spelled",
+      async (dir) => {
+        const target = path.join(root, "secret-target");
+        await writeFile(target, secretFile, "utf8");
+        const sha = await run(["hash-object", "-w", target], dir);
+        await run(["update-index", "--cacheinfo", `120000,${sha},l`], dir);
+      },
+      true,
+    );
+    const index = /^index (\S+) 120000$/m;
+    expect(honest).toMatch(index);
+    const spellings = {
+      honest,
+      "no mode": honest.replace(index, "index $1"),
+      "no index line": honest.replace(index, "").replace(/^\n/m, ""),
+      "a space after the mode": honest.replace(index, "index $1 120000 "),
+      "the mode with a leading zero": honest.replace(index, "index $1 0120000"),
+      "a file's mode": honest.replace(index, "index $1 100644"),
+    };
+    for (const windows of CLONES)
+      for (const [spelled, diff] of Object.entries(spellings)) {
+        const name = `spelled-${windows ? "win" : "posix"}-${spelled.replace(/ /g, "-")}`;
+        const ws = await cloneFor(repo, name, windows, ["l"]);
+        const start = await applyPreviousRound(ws, roundOf(diff), "main");
+        // Where links are real, git itself may refuse a file's mode on one (l: wrong type).
+        if (windows)
+          expect(start, spelled).toEqual({
+            round: 1,
+            applied: false,
+            reason: "l is a symbolic link, which a rework run does not carry over",
+          });
+        else expect(start.applied, spelled).toBe(false);
+        expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout, spelled).toBe("");
+      }
+  });
+
+  it("refuses an edit to a file the base branch has since made a link, where links are plain files too", async () => {
+    // Round 1 edits x; main then replaces x with a link whose target is x's old text.
+    const { src, repo } = await linkRepo("now-link", { x: "a" }, {});
+    const diff = await recordIn(repo, "now-link", (dir) => writeFile(path.join(dir, "x"), "b", "utf8"));
+    expect(diff).toMatch(/^index \S+ 100644$/m);
+    await run(["rm", "--cached", "--quiet", "x"], src);
+    await commit(src, {}, { x: "a" });
+    await run(["push", "--quiet", repo, "main"], src);
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `now-link-${windows ? "win" : "posix"}`, windows, ["x"]);
+      expect((await applyPreviousRound(ws, roundOf(diff), "main")).applied).toBe(false);
+      expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
+    }
+  });
+
+  it("carries over a round that deletes a committed link or replaces it with a file, wherever it runs", async () => {
+    const { repo } = await linkRepo("link-gone", { a: "a\n" }, { l: "a", m: "a" });
+    // Recorded where links are real: l replaced by a file, m deleted.
+    const diff = await recordIn(repo, "link-gone", async (dir) => {
+      await run(["rm", "--cached", "--quiet", "l", "m"], dir);
+      await rm(path.join(dir, "l"));
+      await rm(path.join(dir, "m"));
+      await writeFile(path.join(dir, "l"), "now a file\n", "utf8");
+    });
+    expect(diff).toContain("deleted file mode 120000");
+    expect(diff).toContain("new file mode 100644");
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `link-gone-${windows ? "win" : "posix"}`, windows, ["l", "m"]);
+      expect(await applyPreviousRound(ws, roundOf(diff), "main")).toEqual({
+        round: 1,
+        applied: true,
+        files: 3,
+      });
+      expect(await readFile(path.join(ws.dir, "l"), "utf8")).toBe("now a file\n");
+      expect(existsSync(path.join(ws.dir, "m"))).toBe(false);
+    }
+  });
+
+  it("records a committed link a run replaced with a file as a file where links are plain files, so it carries over", async () => {
+    const { repo } = await linkRepo("link-to-file", { a: "a\n" }, { l: "a", m: "a", "dir/n": "../a" });
+    const ws = await cloneFor(repo, "link-to-file", true, ["l", "m", "dir/n"]);
+    // A run there writes a file where the links l and dir/n are: plain files holding their targets to it. m it
+    // leaves be.
+    await writeFile(path.join(ws.dir, "l"), "now a file\n", "utf8");
+    await writeFile(path.join(ws.dir, "dir", "n"), "a file too\n", "utf8");
+    const harvest = await harvestWorkspace(ws, []);
+    const diff = harvest.artifacts.find((a) => a.kind === "diff")?.content ?? "";
+    expect(diff).toContain("deleted file mode 120000");
+    expect(diff).toContain("new file mode 100644");
+    expect(diff).not.toMatch(/^index \S+ 120000$/m);
+    expect(parseUnifiedDiff(diff).map((f) => f.path)).toEqual(["dir/n", "dir/n", "l", "l"]);
+    // Sent back, the round carries over, where links are real and where they are not.
+    for (const windows of CLONES) {
+      const again = await cloneFor(repo, `link-to-file-again-${windows ? "win" : "posix"}`, windows, ["l"]);
+      expect(await applyPreviousRound(again, roundOf(diff), "main")).toMatchObject({ applied: true });
+      expect(await readFile(path.join(again.dir, "l"), "utf8")).toBe("now a file\n");
+    }
+  });
+
+  it("records the file a run put in place of a committed link at a path .gitignore matches, wherever it runs", async () => {
+    const { repo } = await linkRepo(
+      "ignored-link",
+      { ".gitignore": ".env\n", ".env.example": "MODE=example\n" },
+      { ".env": ".env.example" },
+    );
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `ignored-link-${windows ? "win" : "posix"}`, windows, [".env"]);
+      await rm(path.join(ws.dir, ".env"));
+      await writeFile(path.join(ws.dir, ".env"), "MODE=dev\n", "utf8");
+      const harvest = await harvestWorkspace(ws, []);
+      const diff = harvest.artifacts.find((a) => a.kind === "diff")?.content ?? "";
+      expect(diff).toContain("deleted file mode 120000");
+      expect(diff).toMatch(/^new file mode 100644$/m);
+      expect(diff).toMatch(/^\+MODE=dev$/m);
+    }
+  });
+
+  it("leaves out a committed link the engine itself untracked, and its ignored local file, wherever it runs", async () => {
+    const { repo } = await linkRepo(
+      "untracked-link",
+      { ".gitignore": ".env\n", ".env.example": "MODE=example\n", a: "a\n" },
+      { ".env": ".env.example", l: "a" },
+    );
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `untracked-link-${windows ? "win" : "posix"}`, windows, [".env", "l"]);
+      // "Stop tracking .env and keep a local one", and l made a file beside it.
+      await run(["rm", "--cached", "--quiet", ".env"], ws.dir);
+      for (const [at, text] of [
+        [".env", "MODE=the-developers-own\n"],
+        ["l", "now a file\n"],
+      ] as const) {
+        await rm(path.join(ws.dir, at));
+        await writeFile(path.join(ws.dir, at), text, "utf8");
+      }
+      const diff = (await harvestWorkspace(ws, [])).artifacts.find((a) => a.kind === "diff")?.content ?? "";
+      expect(diff).not.toContain("the-developers-own");
+      // .env as the engine left it, untracked; l, as on Linux, a link replaced by a file.
+      expect(diff).not.toMatch(/^index \S+ 120000$/m);
+      expect(parseUnifiedDiff(diff).map((f) => f.path)).toEqual([".env", "l", "l"]);
+      expect(diff).toMatch(/^\+now a file$/m);
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "takes a committed link's name as it is, never as a pattern, beside an ignored file",
+    async () => {
+      // Windows allows neither name. As patterns, they would take every tracked file out of the index (kept.log,
+      // which .gitignore matches, would not come back) and force every ignored file in.
+      const { repo } = await linkRepo(
+        "glob-link",
+        { ".gitignore": "secret.env\n*.log\n", a: "a\n", "kept.log": "kept\n" },
+        { "*": "a", ":(glob)*": "a" },
+      );
+      for (const windows of CLONES) {
+        const ws = await cloneFor(repo, `glob-link-${windows ? "win" : "posix"}`, windows, ["*", ":(glob)*"]);
+        await writeFile(path.join(ws.dir, "secret.env"), "TOKEN=not-for-the-review\n", "utf8");
+        for (const at of ["*", ":(glob)*"]) {
+          await rm(path.join(ws.dir, at));
+          await writeFile(path.join(ws.dir, at), "now a file\n", "utf8");
+        }
+        const diff = (await harvestWorkspace(ws, [])).artifacts.find((a) => a.kind === "diff")?.content ?? "";
+        expect(diff).not.toContain("not-for-the-review");
+        expect(parseUnifiedDiff(diff).map((f) => f.path)).toEqual(["*", "*", ":(glob)*", ":(glob)*"]);
+      }
+    },
+  );
+
+  it("records a committed link the engine itself staged as a file, where links are plain files", async () => {
+    const { repo } = await linkRepo("staged-link", { a: "a\n" }, { l: "a" });
+    const ws = await cloneFor(repo, "staged-link", true, ["l"]);
+    await writeFile(path.join(ws.dir, "l"), "now a file\n", "utf8");
+    // git add there keeps the link's type, whatever the file now holds.
+    await run(["add", "l"], ws.dir);
+    const diff = (await harvestWorkspace(ws, [])).artifacts.find((a) => a.kind === "diff")?.content ?? "";
+    expect(diff).toContain("deleted file mode 120000");
+    expect(diff).toContain("new file mode 100644");
+    expect(diff).not.toMatch(/^index \S+ 120000$/m);
+  });
+
+  it("leaves a committed link named as the handover in the index, as the add leaves the handover out", async () => {
+    const { repo } = await linkRepo("handover-link", { a: "a\n" }, { "handover-summary.md": "a" });
+    const ws = await cloneFor(repo, "handover-link", true, ["handover-summary.md"]);
+    await writeFile(path.join(ws.dir, "handover-summary.md"), "The handover.\n", "utf8");
+    const harvest = await harvestWorkspace(ws, []);
+    expect(harvest.handover).toBe("The handover.");
+    expect(harvest.artifacts.find((a) => a.kind === "diff")?.content ?? "").not.toContain(
+      "handover-summary.md",
+    );
+  });
+
+  it("refuses a change to a committed link in a folder, where links are plain files too", async () => {
+    const { repo } = await linkRepo("nested-link", { a: "a\n", "dir/x": "x\n" }, { "dir/l": "../a" });
+    const diff = await recordIn(
+      repo,
+      "nested-link",
+      async (dir) => {
+        const target = path.join(root, "nested-target");
+        await writeFile(target, secretFile, "utf8");
+        const sha = await run(["hash-object", "-w", target], dir);
+        await run(["update-index", "--cacheinfo", `120000,${sha},dir/l`], dir);
+      },
+      true,
+    );
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `nested-link-${windows ? "win" : "posix"}`, windows, ["dir/l"]);
+      expect(await applyPreviousRound(ws, roundOf(diff), "main")).toEqual({
+        round: 1,
+        applied: false,
+        reason: "dir/l is a symbolic link, which a rework run does not carry over",
+      });
+    }
+  });
+
+  it("refuses a change to a committed link named in another case, which a file system that ignores case takes", async () => {
+    const { repo } = await linkRepo("case-link", { a: "a\n" }, { l: "a" });
+    const honest = await recordIn(
+      repo,
+      "case-link",
+      async (dir) => {
+        const target = path.join(root, "case-target");
+        await writeFile(target, secretFile, "utf8");
+        const sha = await run(["hash-object", "-w", target], dir);
+        await run(["update-index", "--cacheinfo", `120000,${sha},l`], dir);
+      },
+      true,
+    );
+    // L for l: on Windows and macOS it is the same file; on Linux git finds no L.
+    const diff = honest
+      .replace(/^diff --git a\/l b\/l$/m, "diff --git a/L b/L")
+      .replace(/^--- a\/l$/m, "--- a/L")
+      .replace(/^\+\+\+ b\/l$/m, "+++ b/L");
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `case-link-${windows ? "win" : "posix"}`, windows, ["l"]);
+      expect((await applyPreviousRound(ws, roundOf(diff), "main")).applied).toBe(false);
+      expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
+    }
+  });
+
+  it("undoes what a round wrote before git apply failed to write the rest, so the clone is the clean one", async () => {
+    // A new link, then a file under README.md, which is a file: git apply writes the link, then fails.
+    const diff = [
+      "diff --git a/evil b/evil",
+      "new file mode 120000",
+      "index 0000000..e0b3f1b",
+      "--- /dev/null",
+      "+++ b/evil",
+      "@@ -0,0 +1 @@",
+      "+/etc/passwd",
+      "\\ No newline at end of file",
+      "diff --git a/README.md/x b/README.md/x",
+      "new file mode 100644",
+      "index 0000000..587be6b",
+      "--- /dev/null",
+      "+++ b/README.md/x",
+      "@@ -0,0 +1 @@",
+      "+x",
+      "",
+    ].join("\n");
+    for (const windows of CLONES) {
+      const ws = await cloneFor(baseRepo, `half-applied-${windows ? "win" : "posix"}`, windows, []);
+      expect((await applyPreviousRound(ws, roundOf(diff), "main")).applied).toBe(false);
+      expect(await lstat(path.join(ws.dir, "evil")).catch(() => null)).toBeNull();
+      expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
+    }
   });
 
   it("writes nothing through a link: a round that puts a file behind one is refused whole", async (ctx) => {

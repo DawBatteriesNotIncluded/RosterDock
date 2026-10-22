@@ -260,17 +260,19 @@ const BUSY = new Set(["EBUSY", "EPERM", "ENOTEMPTY", "EMFILE", "ENFILE"]);
 
 /**
  * Remove a directory and everything in it, trying again while something in it is busy, for `withinMs` at
- * most in all; then throw what the last try threw. Windows removes no file a process still holds, such as a
- * program running from it. Node's own maxRetries retries at every level of the tree, so one file that stays
- * held kept a removal going for minutes. `remove` is for the worker's own tests.
+ * most once a try has failed (the first try takes as long as the tree does, a large node_modules seconds);
+ * then throw what the last try threw. Windows removes no file a process still holds, such as a program
+ * running from it. Node's own maxRetries retries at every level of the tree, so one file that stays held
+ * kept a removal going for minutes. `remove` is for the worker's own tests.
  */
 export async function removeTree(dir: string, withinMs = 2000, remove: typeof rm = rm): Promise<void> {
-  const until = Date.now() + withinMs;
+  let until: number | undefined;
   for (let wait = 50; ; wait = Math.min(wait * 2, 500)) {
     try {
       await remove(dir, { recursive: true, force: true });
       return;
     } catch (err) {
+      until ??= Date.now() + withinMs;
       if (!BUSY.has((err as NodeJS.ErrnoException).code ?? "") || Date.now() + wait > until) throw err;
       await new Promise((resolve) => setTimeout(resolve, wait));
     }
@@ -320,20 +322,22 @@ const READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants
 
 /**
  * Whether the file opened is the file checked: the same device and file id. The id is compared whole (an
- * NTFS id does not fit in a number, and rounded it matches its neighbours) and is never 0, which is no id
- * and would match any file.
+ * NTFS id does not fit in a number, and rounded it matches its neighbours) and is never one that names no
+ * file, which would match any other: 0, or all ones (-1 as Node reads it), which ReFS (a Dev Drive) gives a
+ * file whose id does not fit in 64 bits.
  */
 export function sameFile(
   opened: { dev: bigint; ino: bigint },
   checked: { dev: bigint; ino: bigint },
 ): boolean {
-  return opened.ino !== 0n && opened.ino === checked.ino && opened.dev === checked.dev;
+  return opened.ino !== 0n && opened.ino !== -1n && opened.ino === checked.ino && opened.dev === checked.dev;
 }
 
 /**
  * A directory's device, by a handle on it. On Windows the harvest compares devices this way: with libuv 1.49
- * and 1.50 (Node 22.12 to 22.16), where Windows has GetFileInformationByName (11 24H2, Server 2025), a stat
- * by path reads the device from the wrong field (0 on NTFS), and a stat by handle is right on every version.
+ * and 1.50 (Node 22.12 to 22.16, 23.1 to 23.11, 24.0 to 24.1), where Windows has GetFileInformationByName
+ * (11 24H2, Server 2025), a stat by path reads the device from the wrong field (0 on NTFS), and a stat by
+ * handle is right on every version.
  */
 async function deviceOf(dir: string): Promise<bigint> {
   const handle = await open(dir, constants.O_RDONLY);
@@ -429,6 +433,49 @@ async function readArtifact(
     : { content: buf.toString("utf8"), encoding: "utf8" };
 }
 
+/**
+ * Where git checks a link out as a plain file holding its target (core.symlinks false, as Git for Windows has
+ * it), git add keeps the link's type for that file, whatever the run wrote in it (or staged itself), and the
+ * diff would show the link pointing at the file's new contents. The run wrote a file there: each committed
+ * link (HEAD's) still in the index as one, whose file is now a regular one with other contents, leaves the
+ * index and comes back as that file, forced, since the add after this skips a path .gitignore matches. The
+ * diff then shows the link replaced by the file, as on Linux, where this changes nothing. A link the run took
+ * out of the index itself stays out: forced back, an ignored file it keeps locally would land in the diff.
+ * Nothing is forced when the removal fails, and a failed add puts HEAD's entries back.
+ */
+async function unstageLinksMadeFiles(ws: Workspace): Promise<void> {
+  const [tree, index, changed] = await Promise.all([
+    git(["ls-tree", "-r", "-z", "--full-tree", "HEAD"], ws.dir),
+    git(["ls-files", "--stage", "-z"], ws.dir),
+    git(
+      ["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "HEAD", "--"],
+      ws.dir,
+    ),
+  ]);
+  if (tree.code !== 0 || index.code !== 0 || changed.code !== 0) return;
+  const links = (out: string, entry: RegExp) =>
+    new Set(out.split("\0").flatMap((e) => entry.exec(e)?.[1] ?? []));
+  // ls-tree: mode, type, object, path; ls-files --stage: mode, object, stage, path.
+  const committed = links(tree.stdout, /^120000 blob [0-9a-f]+\t(.+)$/s);
+  const staged = links(index.stdout, /^120000 [0-9a-f]+ \d\t(.+)$/s);
+  const differs = new Set(changed.stdout.split("\0"));
+  const files: string[] = [];
+  for (const link of committed) {
+    // The handover and the blocked note stay out of the add, so out of this too.
+    if (link === HANDOVER_FILE || link === BLOCKED_FILE || !staged.has(link) || !differs.has(link)) continue;
+    if ((await lstat(path.join(ws.dir, link)).catch(() => null))?.isFile()) files.push(link);
+  }
+  if (!files.length) return;
+  const literal = ["--literal-pathspecs"];
+  const out = await git(
+    [...literal, "rm", "--cached", "--quiet", "--ignore-unmatch", "--", ...files],
+    ws.dir,
+  );
+  if (out.code !== 0) return;
+  const back = await git([...literal, "add", "--force", "--", ...files], ws.dir);
+  if (back.code !== 0) await git([...literal, "reset", "--quiet", "--", ...files], ws.dir);
+}
+
 /** Declared outputs (or, if none were declared, new and changed files), the handover, blocked note and diff. */
 export async function harvestWorkspace(
   ws: Workspace,
@@ -492,6 +539,7 @@ export async function harvestWorkspace(
   if (ws.repo) {
     const head = await git(["rev-parse", "HEAD"], ws.dir);
     if (head.code === 0) out.baseSha = head.stdout.trim() || null;
+    await unstageLinksMadeFiles(ws);
     await git(["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`], ws.dir);
     const diff = await git(
       ["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv"],
