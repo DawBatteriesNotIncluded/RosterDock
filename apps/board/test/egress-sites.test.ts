@@ -434,6 +434,7 @@ describe("OAuth for a company's connection", () => {
       ["https://gw.example.test/", true],
       ["https://gw.example.test/servers/cc", false],
       ["https://gw.example.test/servers/c/mcp/more", false],
+      ["https://gw.example.test/servers/c/mcp/", false],
       ["https://gw.example.test:8443/servers/c", false],
       ["not a url", false],
     ] as const)

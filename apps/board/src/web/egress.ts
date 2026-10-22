@@ -77,6 +77,21 @@ export interface ReachOptions {
    * the start of a longer answer reads it with readCapped and gives one byte more here.
    */
   maxBytes: number;
+  /**
+   * What every answer this fetch gets may read together, decoded (readBudget): a server that answers again
+   * and again (an event stream the SDK resumes) reads no more in all than this, each answer under maxBytes.
+   */
+  budget?: ReadBudget;
+}
+
+/** Bytes several answers share: what is left, and what there was. */
+export interface ReadBudget {
+  left: number;
+  readonly total: number;
+}
+
+export function readBudget(bytes: number): ReadBudget {
+  return { left: bytes, total: bytes };
 }
 
 export const MAX_HOPS = 3;
@@ -170,7 +185,7 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
         const location = REDIRECTS.has(res.status) ? res.headers.get("location") : null;
         if (location === null || opts.redirect === "manual") {
           if (opts.stream) clearTimeout(timer);
-          return capped(res, opts.maxBytes, url.host);
+          return capped(res, opts.maxBytes, url.host, opts.budget);
         }
         await res.body?.cancel().catch(() => {});
         let next: URL;
@@ -232,28 +247,35 @@ function sizePhrase(bytes: number): string {
  * The answer with its body cut at `max` bytes: what fits is handed on, then the body ends with an error and
  * nothing more is read from the server.
  */
-function capped(res: Response, max: number, host: string): Response {
+function capped(res: Response, max: number, host: string, budget?: ReadBudget): Response {
   if (!res.body) return res;
   const reader = res.body.getReader();
   let total = 0;
-  let over = false;
-  const tooBig = () => new Error(`${host} answered more than ${sizePhrase(max)}; ${READ_NO_FURTHER}`);
+  let over: Error | null = null;
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (over) return controller.error(tooBig());
+      if (over) return controller.error(over);
       const { done, value } = await reader.read();
       if (done) return controller.close();
-      if (total + value.byteLength <= max) {
+      const left = budget ? budget.left : Infinity;
+      if (total + value.byteLength <= max && value.byteLength <= left) {
         total += value.byteLength;
+        if (budget) budget.left -= value.byteLength;
         return controller.enqueue(value);
       }
       // What still fits goes on; the next read is the error.
-      over = true;
-      const room = max - total;
-      total = max;
+      const room = Math.min(max - total, left);
+      over =
+        max - total <= left
+          ? new Error(`${host} answered more than ${sizePhrase(max)}; ${READ_NO_FURTHER}`)
+          : new Error(
+              `${host} answered more than ${sizePhrase(budget!.total)} in all for one call; ${READ_NO_FURTHER}`,
+            );
+      total += Math.max(0, room);
+      if (budget) budget.left = Math.max(0, budget.left - Math.max(0, room));
       await reader.cancel().catch(() => {});
       if (room > 0) controller.enqueue(value.subarray(0, room));
-      else controller.error(tooBig());
+      else controller.error(over);
     },
     cancel(reason) {
       return reader.cancel(reason);

@@ -64,7 +64,7 @@ export function resourceAllowed(resource: string, mcpUrl: string): boolean {
   } catch {
     return false;
   }
-  if (declared.origin !== at.origin) return false;
+  if (declared.origin !== at.origin || at.pathname.length < declared.pathname.length) return false;
   const slash = (p: string) => (p.endsWith("/") ? p : `${p}/`);
   return slash(at.pathname).startsWith(slash(declared.pathname));
 }

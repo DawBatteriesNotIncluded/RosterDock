@@ -26,13 +26,15 @@ import { stdioRefusal } from "../operator.js";
 import { notSetForCompany } from "../secrets/company.js";
 import type { SecretStore } from "../secrets/store.js";
 import { isExpiring, refreshTokens, resourceAllowed, type TokenAuth } from "./oauth.js";
-import { defaultEgress, egressFetch, READ_NO_FURTHER, type Egress } from "../web/egress.js";
+import { defaultEgress, egressFetch, READ_NO_FURTHER, readBudget, type Egress } from "../web/egress.js";
 import type { WebReader } from "../web/transport.js";
 
 export const MCP_CALL_TIMEOUT_MS = 30_000;
 export const MCP_RESULT_MAX_CHARS = 200_000;
 /** The most of one answer the board reads from an MCP server, decoded: a tools/list, a result, an event stream. */
 export const MCP_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
+/** The most every answer of one call reads together, decoded: a stream the SDK resumes again and again included. */
+export const MCP_CALL_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface McpTarget {
   transport: "http" | "stdio";
@@ -265,6 +267,7 @@ function buildTransport(target: McpTarget, deps: McpClientDeps, secret: string |
         timeoutMs: deps.timeoutMs ?? MCP_CALL_TIMEOUT_MS,
         stream: true,
         maxBytes: MCP_ANSWER_MAX_BYTES,
+        budget: readBudget(MCP_CALL_MAX_BYTES),
       }),
       requestInit: secret ? { headers: { authorization: `Bearer ${secret}` } } : {},
     });

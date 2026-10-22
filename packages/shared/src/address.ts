@@ -146,6 +146,8 @@ export interface PrivateDestinations {
   companies?: Record<string, PrivateDestinations>;
   /** Set once the list is narrowed to a company (forCompany): whose list it is now. */
   narrowedTo?: string;
+  /** Once narrowed: the ranges the operator gave other companies alone, which no name leads this one into. */
+  reserved?: Range[];
 }
 
 export const NO_PRIVATE_DESTINATIONS: PrivateDestinations = { names: [], ranges: [], entries: [] };
@@ -252,7 +254,19 @@ export function forCompany(allow: PrivateDestinations, companyId: string): Priva
     ranges: [...allow.ranges, ...(own?.ranges ?? [])],
     entries: [...allow.entries, ...(own?.entries.filter((e) => !allow.entries.includes(e)) ?? [])],
     narrowedTo: id,
+    reserved: reservedFor(allow, id),
   };
+}
+
+/**
+ * The ranges the operator gave companies other than this one (every company's, for a list nobody narrowed):
+ * a name listed for every company that resolves into one of them is not this company's way in.
+ */
+export function reservedFor(allow: PrivateDestinations, companyId?: string): Range[] {
+  if (allow.reserved) return allow.reserved;
+  return Object.entries(allow.companies ?? {})
+    .filter(([id]) => id !== companyId)
+    .flatMap(([, own]) => own.ranges);
 }
 
 /** Whether the operator lists this name, itself or under a `*.` entry. */

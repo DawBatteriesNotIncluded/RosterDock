@@ -376,7 +376,7 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
           [p.actor.id, companyId],
         )
       ).rowCount;
-    // What the company was given: an entry an entry every company has already covers is not shown as its own.
+    // What the company was given: an entry every company has already covers is not shown as its own.
     const own = managesCompany
       ? (config.privateDestinations.companies?.[companyId!]?.entries ?? []).filter(
           (e) => !coveringEntry(e, config.privateDestinations),

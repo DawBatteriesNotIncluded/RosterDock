@@ -481,7 +481,18 @@ describe("the pinned transport for a company's destinations", () => {
         } else if (req.url === "/mcp") mcpServer(req.method!, body, res);
         else if (req.url === "/mcp-huge") mcpServer(req.method!, body, res, "tools/list");
         else if (req.url === "/mcp-huge-init") mcpServer(req.method!, body, res, "initialize");
-        else {
+        else if (req.url === "/mcp-resume") {
+          // Never an answer: a priming event, 7 MB of progress, then the end of the stream, every time, so
+          // the SDK resumes it again and again. No answer reaches the 8 MB cap.
+          res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
+          res.write(`id: ${seen.length}\nretry: 0\ndata: \n\n`);
+          const note = {
+            jsonrpc: "2.0",
+            method: "notifications/message",
+            params: { level: "info", data: "x".repeat(7 * 1024 * 1024) },
+          };
+          res.end(`event: message\ndata: ${JSON.stringify(note)}\n\n`);
+        } else {
           res.writeHead(404);
           res.end();
         }
@@ -641,6 +652,28 @@ describe("the pinned transport for a company's destinations", () => {
     ).toBe(200);
   });
 
+  it("keeps a range given to one company from another, even through a name listed for every company", async () => {
+    const a = "4f1aee73-e65e-4c8d-83f7-aa1169379d7f";
+    const b = "0b6c1f0e-27f4-4a8e-9a43-3d5c4c6c1d2e";
+    const get = (e: Egress) =>
+      egressFetch(e, { redirect: "error", timeoutMs: 5000, maxBytes: MB })(
+        `http://ollama.acme.cluster.test:${port}/echo`,
+        { method: "POST", body: "{}" },
+      );
+    const board = boardEgress(parsePrivateDestinations(`*.cluster.test,${a}=127.0.0.0/8`), toServer);
+    expect((await get(companyEgress(board, a))).status).toBe(200);
+    const refused =
+      "refused: ollama.acme.cluster.test resolves to an address this board's operator gave another company alone";
+    await expect(get(companyEgress(board, b))).rejects.toThrow(refused);
+    await expect(get(board)).rejects.toThrow(refused);
+    // Where every company may reach the range too, the name is every company's way in.
+    const shared = boardEgress(
+      parsePrivateDestinations(`*.cluster.test,127.0.0.0/8,${a}=127.0.0.0/8`),
+      toServer,
+    );
+    expect((await get(companyEgress(shared, b))).status).toBe(200);
+  });
+
   it("ends an MCP call whose event stream passes the cap with the cut, not its timeout", async () => {
     const started = Date.now();
     await expect(
@@ -666,6 +699,22 @@ describe("the pinned transport for a company's destinations", () => {
     expect(seen.filter((s) => s.endsWith("/mcp-huge-init"))).toEqual([
       `POST mcp.cluster.test:${port} /mcp-huge-init`,
     ]);
+  });
+
+  it("reads no more than 16 MB in all for one MCP call, however often the SDK resumes a stream", async () => {
+    seen.length = 0;
+    const started = Date.now();
+    await expect(
+      discoverTools(
+        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-resume` },
+        { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
+      ),
+    ).rejects.toThrow(
+      `mcp.cluster.test:${port} answered more than 16 MB in all for one call; the board read no further`,
+    );
+    expect(Date.now() - started).toBeLessThan(10_000);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(seen.filter((s) => s.endsWith("/mcp-resume")).length).toBeLessThanOrEqual(3);
   });
 
   it("carries MCP's streamable HTTP, its answers as event streams, to a listed name and to no other", async () => {
@@ -720,10 +769,10 @@ function mcpServer(method: string, raw: string, res: http.ServerResponse, huge?:
         ? fixture("tools-list.json").result
         : {};
   res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
-  // An answer past the board's 8 MB cap, on a stream the SDK could resume at once (an id, retry: 0).
+  // An answer past the board's 8 MB cap, on a stream the SDK would resume at once: a priming event (an id,
+  // retry: 0) comes first, whole.
   const sent = huge === msg.method ? { ...result, padding: "x".repeat(9 * 1024 * 1024) } : result;
-  res.write(
-    `${huge === msg.method ? "id: 1\nretry: 0\n" : ""}event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: sent })}\n\n`,
-  );
+  if (huge === msg.method) res.write("id: 1\nretry: 0\ndata: \n\n");
+  res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: sent })}\n\n`);
   if (msg.method !== "tools/list") res.end();
 }

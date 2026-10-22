@@ -78,7 +78,8 @@ Against the images built from the pre-release tree (then called Pharo, not publi
   matters (`docs/security.md`). An MCP server that redirects to another server, and an OpenAPI operation or a
   webhook that answers with any redirect, fails and names the server it pointed to. An MCP server's
   redirect within its own server is followed when the call arrives as sent (307, 308); a 301 or 302, as an
-  http-to-https rule sends, would turn the call into a GET, so it fails and names the address to use. An answer is read only up to its call site's cap,
+  http-to-https rule sends, would turn the call into a GET, so it fails and says what to change (over https,
+  or with or without the trailing slash). An answer is read only up to its call site's cap,
   decoded. OAuth endpoints must be https (http only to a listed destination), and the resource an MCP server
   declares must be on its own origin, at or above its MCP URL's path. The board's own destinations (git hosts, OIDC, OTLP, the bucket, the
   API server, the model API, its webhook and SMTP server) are not checked. An entry may be one company's

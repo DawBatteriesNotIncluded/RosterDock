@@ -133,28 +133,36 @@ describe("the OpenAPI runtime", () => {
     expect(created.body.tools.map((t: { name: string }) => t.name)).toEqual(["list_contacts"]);
   });
 
-  it("scrubs the credential from an answer cut at its cap, the part of it before the cut included", async () => {
+  it("scrubs the credential from an answer, cut or escaped, and a cut answer says nothing of a guess at it", async () => {
     const secret = env.CRM_API_TOKEN!;
-    // An answer that echoes the request's header, cut 9 characters into the credential.
-    const head = '{"echo":"Authorization: Bearer ';
-    const echo = (async () =>
-      new Response(`${head}${secret}","more":"${"x".repeat(200)}"}`, {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })) as typeof fetch;
-    const manifest = {
-      ...buildOpenApiManifest(spec, { allow: ["listContacts"] }).manifest!,
-      maxResponseBytes: head.length + 9,
-    };
-    const cut = await callOpenApiOperation(
-      { url: "https://crm.example.test/v1", authEnvName: "CRM_API_TOKEN" },
-      manifest,
-      { egress: testEgress(echo), env },
-      "list_contacts",
-      {},
-    );
-    expect(cut).toEqual({ ok: true, result: { truncated: true, text: `${head}[redacted]` } });
-    expect(JSON.stringify(cut)).not.toContain(secret.slice(0, 4));
+    const manifest = buildOpenApiManifest(spec, { allow: ["listContacts"] }).manifest!;
+    const target = { url: "https://crm.example.test/v1", authEnvName: "CRM_API_TOKEN" };
+    const answering = (body: string) =>
+      (async () =>
+        new Response(body, { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const call = async (body: string, maxResponseBytes: number, values: NodeJS.ProcessEnv = env) =>
+      callOpenApiOperation(
+        target,
+        { ...manifest, maxResponseBytes },
+        { egress: testEgress(answering(body)), env: values },
+        "list_contacts",
+        {},
+      );
+    // An answer that echoes the request's header, cut 9 characters into the credential: the end is dropped.
+    const head = `{"echo":"${"p".repeat(400)} Authorization: Bearer `;
+    const cut = await call(`${head}${secret}","more":"${"x".repeat(200)}"}`, head.length + 9);
+    expect(cut).toMatchObject({ ok: true, result: { truncated: true } });
+    const text = (cut as { result: { text: string } }).result.text;
+    expect(text.length).toBe(head.length + 9 - 255);
+    expect(text).not.toContain(secret.slice(0, 4));
+    // A teammate that pads its guess at the credential to the cut learns nothing: right or wrong, the same text.
+    const guess = (g: string) =>
+      call(`{"echo":"${"p".repeat(400)}${g}","more":"${"x".repeat(300)}"}`, 410 + g.length);
+    expect(await guess(secret.slice(0, 6))).toEqual(await guess("zzzzzz"));
+    // As JSON escapes it, slash and all: scrubbed in the text and in what is parsed.
+    const slashed = { CRM_API_TOKEN: "ab/cd/ef/gh/ij" };
+    const escaped = await call('{"auth":"ab\\/cd\\/ef\\/gh\\/ij","n":1}', 4096, slashed);
+    expect(escaped).toEqual({ ok: true, result: { auth: "[redacted]", n: 1 } });
   });
 
   it("calls an operation with path and query parameters, the credential by name, and redacts the answer", async () => {

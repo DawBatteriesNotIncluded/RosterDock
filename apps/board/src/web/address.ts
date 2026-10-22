@@ -6,10 +6,12 @@
 // too (egress.ts).
 
 import {
+  addressListed,
   nameListed,
   NOT_ALLOWED,
   refuseAddress,
   refuseDestination,
+  reservedFor,
   type PrivateDestinations,
 } from "@rosterdock/shared";
 
@@ -67,7 +69,17 @@ export async function reachableAddresses(
   allow: PrivateDestinations,
 ): Promise<string[]> {
   const addresses = await resolved(resolve, host);
-  if (nameListed(host, allow)) return addresses;
+  if (nameListed(host, allow)) {
+    // A listed name is trusted with its addresses, except one in a range the operator gave another company
+    // alone, unless this company may reach that address itself.
+    const reserved = { names: [], ranges: reservedFor(allow), entries: [] };
+    for (const a of addresses)
+      if (addressListed(a, reserved) && !addressListed(a, allow))
+        throw new RefusedAddress(
+          `refused: ${host} resolves to an address this board's operator gave another company alone`,
+        );
+    return addresses;
+  }
   // The kind of address, not the address: a company learns nothing of the network behind the board.
   for (const a of addresses) {
     const why = refuseDestination(a, allow);

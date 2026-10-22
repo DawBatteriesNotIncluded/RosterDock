@@ -1,5 +1,6 @@
 // Flat config. Type-aware rules are off to keep lint fast; turning them on per
 // package, and linting deploy/scripts, is in docs/backlog.md.
+import { builtinModules } from "node:module";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
@@ -55,6 +56,10 @@ export default tseslint.config(
               message:
                 "Only events, text, web and address are kept browser-safe; take types only from the rest.",
             },
+            {
+              group: ["**/packages/shared/**"],
+              message: "Import the shared package by its name, @rosterdock/shared/<entry>.",
+            },
           ],
         },
       ],
@@ -75,7 +80,15 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ["node:*", "./*", "../*", "zod"],
+              group: [
+                "node:*",
+                ...builtinModules,
+                "./*",
+                "../*",
+                "zod",
+                "@rosterdock/shared",
+                "@rosterdock/shared/*",
+              ],
               allowTypeImports: true,
               message: "This module runs in the browser too: import types only, or nothing that needs node.",
             },
@@ -84,9 +97,18 @@ export default tseslint.config(
       ],
       "no-restricted-globals": [
         "error",
-        { name: "Buffer", message: "This module runs in the browser too." },
-        { name: "process", message: "This module runs in the browser too." },
-        { name: "require", message: "This module runs in the browser too." },
+        ...["Buffer", "process", "require", "setImmediate", "__dirname", "__filename"].map((name) => ({
+          name,
+          message: "This module runs in the browser too.",
+        })),
+      ],
+      "no-restricted-properties": [
+        "error",
+        ...["Buffer", "process", "require", "setImmediate"].map((property) => ({
+          object: "globalThis",
+          property,
+          message: "This module runs in the browser too.",
+        })),
       ],
     },
   },

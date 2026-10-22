@@ -240,17 +240,44 @@ function deepRedact(value: unknown, depth = 0): unknown {
   return value;
 }
 
-function scrub(text: string, secret: string | null): string {
-  return secret && secret.length >= 6 ? text.split(secret).join("[redacted]") : text;
+/** The credential as it may appear in an answer: as it is, and as JSON escapes it (a slash too, as PHP does). */
+function secretForms(secret: string): string[] {
+  const json = JSON.stringify(secret).slice(1, -1);
+  return [...new Set([secret, json, json.replaceAll("/", "\\/")])].filter((f) => f.length >= 6);
 }
 
-/** The same, for text cut at a cap: the start of the credential, where the cut fell inside it, goes too. */
+function scrub(text: string, secret: string | null): string {
+  if (!secret || secret.length < 6) return text;
+  let out = text;
+  for (const form of secretForms(secret)) out = out.split(form).join("[redacted]");
+  return out;
+}
+
+/** How much of a cut answer's end is dropped: enough for any credential to have begun there, at least 255. */
+function cutTail(secret: string | null): number {
+  return Math.max(255, ...(secret ? secretForms(secret).map((f) => f.length - 1) : []));
+}
+
+/**
+ * Text cut at a cap: the credential scrubbed, and a fixed length of the end dropped whatever it holds, so a
+ * credential the cut fell inside leaves nothing, and what a teammate reads never depends on how much of the
+ * credential a guess of its matched.
+ */
 function scrubCut(text: string, secret: string | null): string {
   const whole = scrub(text, secret);
-  if (!secret || secret.length < 6) return whole;
-  for (let n = Math.min(secret.length - 1, whole.length); n >= 2; n--)
-    if (whole.endsWith(secret.slice(0, n))) return `${whole.slice(0, -n)}[redacted]`;
-  return whole;
+  return whole.slice(0, Math.max(0, whole.length - cutTail(secret)));
+}
+
+/** The credential out of every string in a parsed answer, where JSON escapes no longer hide it. */
+function deepScrub(value: unknown, secret: string | null, depth = 0): unknown {
+  if (!secret || secret.length < 6 || depth > 12) return value;
+  if (typeof value === "string") return value.split(secret).join("[redacted]");
+  if (Array.isArray(value)) return value.map((v) => deepScrub(v, secret, depth + 1));
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, deepScrub(v, secret, depth + 1)]),
+    );
+  return value;
 }
 
 function buildUrl(
@@ -409,7 +436,7 @@ export async function callOpenApiOperation(
   let result: unknown = text;
   if (!truncated) {
     try {
-      result = deepRedact(JSON.parse(text));
+      result = deepScrub(deepRedact(JSON.parse(text)), secret);
     } catch {
       // A non-JSON answer stays as capped, scrubbed text.
     }
