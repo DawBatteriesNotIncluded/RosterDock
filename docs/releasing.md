@@ -40,7 +40,11 @@ is built again, a merge finds the other half's digest in the run (kept 30 days, 
 re-run), a merge run twice pushes the same image, and the chart waits for every image. An image that fails
 leaves the others to merge and push whole; its own merge fails until both of its halves are built. Re-run
 all jobs instead builds everything again and moves the version's tags to the new images. A build step
-that hangs ends after 10 minutes. If CI fails on the tag, nothing was pushed, but the tag stays:
+that hangs ends after 10 minutes. Re-run soon: each half takes its base images (`node:22-alpine`,
+`nginx:1.30-alpine`) as they are when it builds, so a half re-run days later can sit on newer ones than the
+half already pushed. And never re-run a release's run once a newer version is out: every merge also pushes
+`MAJOR.MINOR` and `latest`, which would move back to the older images. Cut the next version instead. If
+CI fails on the tag, nothing was pushed, but the tag stays:
 the `release tags` ruleset forbids moving or deleting a `v*` tag. Fix on `main` and tag again under the next
 version, so a failed `v0.2.0-rc.1` is followed by `v0.2.0-rc.2` and a failed `v0.2.0` by `v0.2.1`. That is
 why a version starts with a dry run and a prerelease tag.
@@ -51,9 +55,11 @@ included, and the chart is packaged and linted; nothing logs in or pushes. The m
 nothing pushed to merge, so a change to the release's merge is first run by a tag: one more reason that tag
 is a prerelease.
 
-**Untagged versions on GHCR.** Each release leaves two untagged versions per image besides its tagged one:
-the per-architecture halves the merge read, which nothing needs once it has run. Never prune untagged
-versions wholesale: the images and attestations a tag points to are untagged versions too.
+**Untagged versions on GHCR.** Each release leaves six untagged versions per image besides its tagged
+index: for each architecture, its image, its attestation and the index the build pushed by digest. The
+tagged index needs the images and attestations for good, and a merge re-run reads the per-architecture
+indexes for as long as the run can be re-run (30 days). Prune none of them; after those 30 days only the
+two per-architecture indexes may go.
 
 **The arm64 runner** (`ubuntu-24.04-arm`) is free for a public repository. A private copy needs an arm64
 runner of its own, or its arm64 builds wait in the queue until GitHub gives up on them.
