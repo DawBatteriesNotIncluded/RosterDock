@@ -44,19 +44,23 @@ function lineWise(re: RegExp): RegExp {
  * The lines (1-based, ascending) of a text that hold a secret-shaped string: each line findRawSecrets or
  * containsRawSecret would flag alone, or that one of `also` matches. Each pattern runs over the whole text once
  * and lines are counted from where it matched, so a long text costs its length times the patterns, never a
- * scan per line. A match that runs on past its line's end counts at its first line. At most `max` lines.
+ * scan per line. A match that runs on past its line's end counts at its first line (a key on the next line may
+ * be reported there). At most `max` lines.
  */
 export function secretLines(text: string, also: RegExp[] = [], max = 1000): number[] {
   const found = new Set<number>();
   for (const re of [...LINE_SECRET_RES, ...also.map(lineWise)]) {
     let line = 1;
-    let counted = 0;
+    // The next line break not yet counted: it only moves forward, so many matches on one long line cost no more
+    // than the line.
+    let nl = text.indexOf("\n");
     for (const m of text.matchAll(re)) {
       // Where the match starts with the line break before it (`(?:^|\s)`), at the line after.
       const at = m.index + /^[\r\n]*/.exec(m[0])![0].length;
-      for (let nl = text.indexOf("\n", counted); nl !== -1 && nl < at; nl = text.indexOf("\n", nl + 1))
+      while (nl !== -1 && nl < at) {
         line++;
-      counted = at;
+        nl = text.indexOf("\n", nl + 1);
+      }
       found.add(line);
       if (found.size >= max) break;
     }

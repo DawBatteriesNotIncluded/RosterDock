@@ -791,16 +791,19 @@ export async function harvestWorkspace(
   // shows: it is not delivered, and a run that would complete fails, naming it. One the repository holds
   // unchanged is its own.
   if (ws.repo && declaredOutputs.length) {
-    const inDiff = new Set(diffNames);
-    const outside = out.filesWritten.filter((f) => !inDiff.has(path.posix.normalize(f)));
-    const tracked = new Set(
-      outside.length
-        ? decodeNames(
-            (await gitBytes(["--literal-pathspecs", "ls-files", "-z", "--", ...outside], ws.dir)).stdout,
-          ).names
-        : [],
+    // Where the file system ignores case (macOS, Windows), a declared Report.md is the report.md the run wrote.
+    const fold = (p: string) =>
+      process.platform === "darwin" || process.platform === "win32" ? p.toLowerCase() : p;
+    const named = (f: string) => fold(path.posix.normalize(f));
+    const inDiff = new Set(diffNames.map(fold));
+    // The handover and the blocked note are never part of the diff: the board takes them apart.
+    const outside = out.filesWritten.filter(
+      (f) => f !== HANDOVER_FILE && f !== BLOCKED_FILE && !inDiff.has(named(f)),
     );
-    const unseen = outside.filter((f) => !tracked.has(path.posix.normalize(f)));
+    const tracked = new Set(
+      outside.length ? decodeNames((await gitBytes(["ls-files", "-z"], ws.dir)).stdout).names.map(fold) : [],
+    );
+    const unseen = outside.filter((f) => !tracked.has(named(f)));
     if (unseen.length) {
       out.artifacts = out.artifacts.filter((a) => a.kind === "handover" || !unseen.includes(a.path));
       out.filesWritten = out.filesWritten.filter((f) => !unseen.includes(f));

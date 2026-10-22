@@ -1347,31 +1347,56 @@ describe("reviews", () => {
 
     // Where approving opens no pull request (no repository), a teammate approves a binary deliverable as before.
     const plain = await addProject(api, base, "Charts");
-    const chartTask = (
-      await api.post(`${base}/tasks`, {
-        projectId: plain.id,
-        title: "Chart",
-        assignee: { kind: "teammate", id: cody.id },
-      })
-    ).body;
-    const chartRun = (await api.post(`${base}/tasks/${chartTask.id}/runs`, {})).body;
-    const asChartRun = board.api((await claim(chartRun.id)).token);
-    await asChartRun.post(`/api/worker/runs/${chartRun.id}/artifacts`, {
-      path: "chart.png",
-      kind: "file",
-      content: png.toString("base64"),
-      encoding: "base64",
-    });
-    await asChartRun.post(`/api/worker/runs/${chartRun.id}/artifacts`, {
-      path: "changes.diff",
-      kind: "diff",
-      content: renderBinaryFileDiff("chart.png"),
-    });
-    await asChartRun.post(`/api/worker/runs/${chartRun.id}/complete`, {
-      status: "completed",
-      summary: "Done.",
-    });
-    const chartReview = (await api.get(`${base}/tasks/${chartTask.id}/review`)).body;
+    const openChart = async (title: string) => {
+      const chartTask = (
+        await api.post(`${base}/tasks`, {
+          projectId: plain.id,
+          title,
+          assignee: { kind: "teammate", id: cody.id },
+        })
+      ).body;
+      const chartRun = (await api.post(`${base}/tasks/${chartTask.id}/runs`, {})).body;
+      const asChartRun = board.api((await claim(chartRun.id)).token);
+      await asChartRun.post(`/api/worker/runs/${chartRun.id}/artifacts`, {
+        path: "chart.png",
+        kind: "file",
+        content: png.toString("base64"),
+        encoding: "base64",
+      });
+      await asChartRun.post(`/api/worker/runs/${chartRun.id}/artifacts`, {
+        path: "changes.diff",
+        kind: "diff",
+        content: renderBinaryFileDiff("chart.png"),
+      });
+      await asChartRun.post(`/api/worker/runs/${chartRun.id}/complete`, {
+        status: "completed",
+        summary: "Done.",
+      });
+      return { chartTask, chartReview: (await api.get(`${base}/tasks/${chartTask.id}/review`)).body };
+    };
+    // A secrets check that failed only on files past what it scans in a run goes to people too, pull request
+    // or not: the reviewer is told so first, never to send the work back.
+    const unread = await openChart("Charts past the scan");
+    await board.db.query(
+      `UPDATE review_checks SET ok = false, title = 'past the scan',
+         detail = detail || '{"unscanned": ["chart.png"]}'::jsonb WHERE review_id = $1 AND kind = 'secrets'`,
+      [unread.chartReview.id],
+    );
+    const unreadClaim = await reviewerClaim(unread.chartTask.id);
+    expect(unreadClaim.pack).toContain(
+      "The secrets check did not read every binary file, past what it scans in a run: chart.png. Only a person approves this review",
+    );
+    expect(unreadClaim.pack).not.toContain("Send the work back with board_request_changes");
+    const unreadRefused = await board
+      .api(unreadClaim.token)
+      .post(`${base}/reviews/${unread.chartReview.id}/approve`, {});
+    expect(unreadRefused.status).toBe(409);
+    expect(unreadRefused.body.error).toBe(
+      `#${unread.chartTask.number} has binary files the secrets check did not read (chart.png): a person decides it now, and has been asked`,
+    );
+    expect((await api.get(`${base}/reviews/${unread.chartReview.id}`)).body.reviewer).toBeNull();
+
+    const { chartTask, chartReview } = await openChart("Chart");
     const asVerifier4 = board.api(await reviewerToken(chartTask.id));
     const chartApproved = await asVerifier4.post(`${base}/reviews/${chartReview.id}/approve`, {});
     expect(chartApproved.status).toBe(200);

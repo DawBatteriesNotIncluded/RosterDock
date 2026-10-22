@@ -120,6 +120,8 @@ export interface RunSpec {
     checks: { kind: string; ok: boolean | null; title: string }[];
     /** The binary files the run sent bytes for: the review shows none of them. */
     binaryFiles?: string[];
+    /** The binary files the secrets check failed on alone, past what it scans in a run: a person's. */
+    unscannedFiles?: string[];
     /** Research: what the cited sources answered, for the reviewer to check claims against. */
     sources?: {
       url: string;
@@ -348,10 +350,23 @@ export function renderRunPack(spec: RunSpec): string {
     push("");
     push("Checks so far:");
     for (const c of r.checks) push(`- ${c.ok === null ? "…" : c.ok ? "ok" : "FAIL"} ${c.title}`);
-    if (r.checks.some((c) => c.ok === false && (BLOCKING_CHECKS as readonly string[]).includes(c.kind)))
+    const unscanned = r.unscannedFiles ?? [];
+    if (
+      r.checks.some(
+        (c) =>
+          c.ok === false &&
+          (BLOCKING_CHECKS as readonly string[]).includes(c.kind) &&
+          !(c.kind === "secrets" && unscanned.length),
+      )
+    )
       push(
         "",
         "A failed credential scan or a failed test run blocks your approval: board_approve is refused. Send the work back with board_request_changes, saying what must change; a person may still approve over it.",
+      );
+    if (unscanned.length)
+      push(
+        "",
+        `The secrets check did not read every binary file, past what it scans in a run: ${unscanned.slice(0, 5).join(", ")}${unscanned.length > 5 ? ` and ${unscanned.length - 5} more` : ""}. Only a person approves this review: your board_approve hands it to a person, who is asked. Review the rest and say what you found.`,
       );
     if (r.binaryFiles?.length)
       push(

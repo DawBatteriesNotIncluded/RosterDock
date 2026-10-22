@@ -42,6 +42,7 @@ import {
   openReviewRound,
   reviewForTask,
   scanRunBinaries,
+  unscannedOnly,
   type OpenedReview,
 } from "../reviews/service.js";
 import {
@@ -722,6 +723,7 @@ export async function buildRunSpec(
         (checks.find((c) => c.kind === "secrets")?.detail as { binaries?: { path: string }[] } | undefined)
           ?.binaries ?? []
       ).map((b) => b.path),
+      unscannedFiles: unscannedOnly(checks.find((c) => c.kind === "secrets")),
       sources:
         (checks.find((c) => c.kind === "sources")?.detail as { sources?: FetchedSource[] } | undefined)
           ?.sources ?? [],

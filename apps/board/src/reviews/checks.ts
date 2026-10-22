@@ -62,7 +62,7 @@ export interface ScannedBinary {
 /**
  * Scan the bytes a pull request would write for a file the diff calls binary, as text: a file git calls binary
  * (an attribute, a NUL byte) may be text all the same. As UTF-8, and where a NUL byte says it may be UTF-16, as
- * UTF-16 in both byte orders too. Each pattern runs over each reading once (secretLines). `scan` false: only
+ * UTF-16 in both byte orders and without its NUL bytes too. Each pattern runs over each reading once (secretLines). `scan` false: only
  * the sha256, where the run's binary files are past what the board scans.
  */
 export function scanBinary(path: string, bytes: Buffer | null, scan = true): ScannedBinary {
@@ -72,7 +72,12 @@ export function scanBinary(path: string, bytes: Buffer | null, scan = true): Sca
   const readings = [bytes.toString("utf8")];
   if (bytes.includes(0)) {
     const even = bytes.subarray(0, bytes.length - (bytes.length % 2));
-    readings.push(even.toString("utf16le"), Buffer.from(even).swap16().toString("utf16le"));
+    readings.push(
+      even.toString("utf16le"),
+      Buffer.from(even).swap16().toString("utf16le"),
+      // And without its NUL bytes, for UTF-32 or a NUL inside a key: each reading can only add lines.
+      Buffer.from(bytes.toString("latin1").replace(/\0/g, ""), "latin1").toString("utf8"),
+    );
   }
   const lines = new Set<number>();
   let chars = 0;

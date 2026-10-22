@@ -542,6 +542,12 @@ describe("workspace", () => {
     expect((await harvestWorkspace(ws, ["notes.md", ".git/description"])).unreadable).toMatch(
       /leaves out of the diff, which the review would not show: "\.git\/description"/,
     );
+    // Not the handover, which the board takes apart, nor a name in another case where the file system
+    // ignores it (on Linux, Readme.md is missing instead).
+    await writeFile(path.join(ws.dir, "handover-summary.md"), "Done.\n", "utf8");
+    expect(
+      (await harvestWorkspace(ws, ["notes.md", "handover-summary.md", "Readme.md"])).unreadable,
+    ).toBeNull();
     await cleanupWorkspace(ws);
   });
 

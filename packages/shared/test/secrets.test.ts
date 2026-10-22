@@ -242,6 +242,8 @@ describe("secretLines", () => {
     const started = Date.now();
     expect(secretLines("\n".repeat(8 * 1024 * 1024))).toEqual([]);
     expect(secretLines("sk-ant-api03-FAKE0123456789abcdef\n".repeat(200_000))).toHaveLength(1000);
+    // Keys all on one line: each is a match, and the line is walked once, not once a match.
+    expect(secretLines("sk-abcdefghijklmnopqrstuvwx ".repeat(300_000))).toEqual([1]);
     expect(Date.now() - started).toBeLessThan(5000);
   });
 });

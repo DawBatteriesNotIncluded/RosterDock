@@ -890,6 +890,17 @@ function changeTitle(task: { number: number; title: string }): string {
   return `Task ${task.number}: ${task.title}`;
 }
 
+/** The binary files a failed secrets check failed on alone, past what it scans in a run; none otherwise. */
+export function unscannedOnly(
+  check: { ok: boolean | null; detail: Record<string, unknown> } | undefined,
+): string[] {
+  const detail = (check?.detail ?? {}) as { unscanned?: unknown; lines?: unknown };
+  if (check?.ok !== false || (Array.isArray(detail.lines) && detail.lines.length)) return [];
+  return Array.isArray(detail.unscanned)
+    ? detail.unscanned.filter((p): p is string => typeof p === "string")
+    : [];
+}
+
 /**
  * Where approving the review opens a pull request: build work on a project whose repository is on a host the
  * board opens changes on, from a run that recorded a base sha. Null where it opens none.
@@ -1015,7 +1026,10 @@ export async function approveReview(
     const overrode = checks
       .filter((c) => c.ok === false && BLOCKING_CHECKS.includes(c.kind))
       .map((c) => ({ kind: c.kind, title: c.title }));
-    if (overrode.length && actor.kind === "teammate")
+    // A secrets check that failed only on binary files past what it scans in a run: no change fixes that, so
+    // the review goes to people, as for a binary file (below).
+    const unscanned = unscannedOnly(checks.find((c) => c.kind === "secrets"));
+    if (overrode.some((c) => !(c.kind === "secrets" && unscanned.length)) && actor.kind === "teammate")
       throw new HttpError(
         409,
         `#${task.number} has a failed check a teammate cannot approve over (${overrode.map((c) => c.title).join("; ")}): request changes, or leave the decision to a person`,
@@ -1028,10 +1042,11 @@ export async function approveReview(
     ).binaries?.map((b) => b.path);
     const binaries = target && withBytes?.length ? withBytes : [];
     const who = await describeActor(ctx.client, companyId, actor);
-    if (binaries.length && actor.kind === "teammate") {
+    const forPerson = [...new Set([...binaries, ...unscanned])];
+    if (forPerson.length && actor.kind === "teammate") {
       // The teammate's approval is refused, and the review goes to people, who are told: no teammate reviews it
       // from here, so it reads "Needs your review" until a person decides.
-      const named = `${binaries.slice(0, 5).join(", ")}${binaries.length > 5 ? ` and ${binaries.length - 5} more` : ""}`;
+      const named = `${forPerson.slice(0, 5).join(", ")}${forPerson.length > 5 ? ` and ${forPerson.length - 5} more` : ""}`;
       await ctx.client.query(
         "UPDATE reviews SET reviewer_kind = NULL, reviewer_id = NULL, updated_at = now() WHERE id = $1",
         [review.id],
@@ -1044,14 +1059,16 @@ export async function approveReview(
           number: task.number,
           title: task.title,
           round: review.round,
-          files: binaries,
+          files: forPerson,
           teammateName: who?.name ?? null,
         },
       );
       return {
         id: review.id,
         pullRequestId: null,
-        refused: `#${task.number} would put binary files the review cannot show into a pull request (${named}): a person decides it now, and has been asked`,
+        refused: binaries.length
+          ? `#${task.number} would put binary files the review cannot show into a pull request (${named}): a person decides it now, and has been asked`
+          : `#${task.number} has binary files the secrets check did not read (${named}): a person decides it now, and has been asked`,
       };
     }
     const updated = (

@@ -285,6 +285,15 @@ describe("secretsCheck", () => {
       expect(scanBinary("key.txt", le).lines, `LE ${before}`).toEqual([1]);
       expect(scanBinary("key.txt", Buffer.from(le).swap16()).lines, `BE ${before}`).toEqual([1]);
     }
+    // UTF-32 in either byte order, and a NUL byte inside the key itself.
+    const key = "token: ghp_0123456789abcdefghijklmnopqrstuvwxyz\n";
+    const utf32le = Buffer.concat([...key].map((c) => Buffer.from([c.charCodeAt(0), 0, 0, 0])));
+    const utf32be = Buffer.concat([...key].map((c) => Buffer.from([0, 0, 0, c.charCodeAt(0)])));
+    expect(scanBinary("key.bin", utf32le).lines).toEqual([1]);
+    expect(scanBinary("key.bin", utf32be).lines).toEqual([1]);
+    expect(
+      scanBinary("key.bin", Buffer.from("token: ghp_0123456789\0abcdefghijklmnopqrstuvwxyz\n")).lines,
+    ).toEqual([1]);
     // Bytes past what the board scans in a run are only hashed, and the check leaves them to a person.
     expect(secretsCheck(binary("big.bin"), undefined, [scanBinary("big.bin", text, false)])).toMatchObject({
       ok: false,

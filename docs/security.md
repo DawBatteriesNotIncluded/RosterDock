@@ -266,7 +266,7 @@ their own, each with its own database and workers.
   it all the same, by the same rules, as UTF-8 and, where a NUL byte says it may be UTF-16, as UTF-16 in both
   byte orders, and records their sha256; a pull request writes those bytes and no others. The scan runs before
   the transaction that opens the review, a file at a time, over 64 MB of a run's binary files at most: past
-  that a file is only hashed, and the check fails so a person approves it. The scan reads text only: a
+  that a file is only hashed, the check fails, and a teammate's approval hands the review to people, as below. The scan reads text only: a
   compressed or encoded file's content is not read, so for binary files the person who approves is the
   control. A binary file goes into a pull request only where a person approved: a teammate's approval that
   would open one with a binary file in it is refused, and the review goes to people, who are told (a needs-you

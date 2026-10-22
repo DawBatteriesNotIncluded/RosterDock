@@ -687,6 +687,16 @@ describe("repository tests", () => {
     expect(heardBefore![0]).toMatch(/^[0-9a-f]{40}$/);
   });
 
+  it("carries on against a board from before it recorded a clone's commit", async () => {
+    const bare = await repoWithTests("older-board");
+    const board = fakeBoard(PACK(), ["notes.md"], { repoUrl: bare });
+    board.cloned = async () => {
+      throw new BoardError(404, "Route POST:/api/worker/runs/run-1/cloned not found");
+    };
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board));
+    expect(board.completion?.status).toBe("completed");
+  });
+
   it("fails a run whose changes git could not read back for review, and keeps a blocked run blocked", async () => {
     for (const blocked of [false, true]) {
       const bare = await repoWithTests(`locked-${blocked}`);
