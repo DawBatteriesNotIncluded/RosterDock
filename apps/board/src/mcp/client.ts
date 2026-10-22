@@ -449,19 +449,24 @@ export async function callMcpTool(
         .join("\n");
       if (res.isError)
         return { ok: false, error: clean.head(text, MCP_RESULT_MAX_CHARS) || `${name} returned an error` };
-      // Text that is JSON is read as a value, so a number in it is looked at as a number; structured content
-      // is one already. Only a text within the budget is parsed: one past it is cut as text, so what the
-      // server sent never sets what the board holds. Levels past 12 are "[depth]", as the broker keeps them,
-      // and what is past the budget is left out, the result saying so.
+      // Text that is JSON is read as a value once scrubbed, so a number in it is looked at as a number and a
+      // secret-looking key's value goes at the broker; structured content is one already. Only a text within
+      // the budget is parsed: one past it, or one scrubbing broke, is kept as text, cut, its numbers looked
+      // at all the same. Levels past 12 are "[depth]", as the broker keeps them, and what is past the budget
+      // is left out, the result saying so.
+      const body = text.replace(/^\uFEFF/, "");
       const parsed =
         res.structuredContent != null
-          ? { value: res.structuredContent, numbers: [] }
-          : text.length <= MCP_RESULT_MAX_CHARS + clean.tail && /^\s*[[{]/.test(text)
-            ? clean.json(text)
+          ? { value: res.structuredContent }
+          : body.length <= MCP_RESULT_MAX_CHARS + clean.tail && /^\s*[[{]/.test(body)
+            ? clean.json(body)
             : undefined;
       if (parsed === undefined)
-        return { ok: true, result: text.trim() ? clean.head(text, MCP_RESULT_MAX_CHARS) : null };
-      const { value, cut } = clean.bounded(parsed.value, MCP_RESULT_MAX_CHARS, parsed.numbers);
+        return {
+          ok: true,
+          result: body.trim() ? clean.digits(clean.head(body, MCP_RESULT_MAX_CHARS)) : null,
+        };
+      const { value, cut } = clean.bounded(parsed.value, MCP_RESULT_MAX_CHARS);
       return { ok: true, result: cut ? { truncated: true, value } : value };
     });
   } catch (err) {

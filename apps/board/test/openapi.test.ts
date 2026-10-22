@@ -256,10 +256,16 @@ describe("the OpenAPI runtime", () => {
       result: { echo: "Bearer [redacted]", n: 1 },
     });
     // A credential of digits inside one number and equal to another without its leading zeros: scrubbing the
-    // text breaks the JSON, so the answer as it came is parsed and both numbers go.
+    // text breaks the JSON, so it is kept as the scrubbed text, and the other number goes from that too.
     expect(await call('{"id":90012345678,"pin":12345678,"n":7}', "0012345678")).toEqual({
       ok: true,
-      result: { id: "[redacted]", pin: "[redacted]", n: 7 },
+      result: '{"id":9[redacted],"pin":[redacted],"n":7}',
+    });
+    // A credential that is itself JSON, written in as it is: what scrubbing leaves is no longer JSON, and the
+    // answer as it came is never parsed, so no piece of it comes back as a value.
+    expect(await call('{"echo":{"key":"k-123456"},"n":1}', '{"key":"k-123456"}')).toEqual({
+      ok: true,
+      result: '{"echo":[redacted],"n":1}',
     });
   });
 

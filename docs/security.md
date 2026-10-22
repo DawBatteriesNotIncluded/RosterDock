@@ -409,32 +409,36 @@ their own, each with its own database and workers.
   words from the server's body) has the credential replaced by `[redacted]` as written, and as JSON
   escapes any of its characters (`\uXXXX` in either case, `\/` and the other short escapes), read up to
   eight levels deep, so JSON a string carries (a request log, echoed headers, a log entry that carries
-  those again) is scrubbed too. A number goes too when its digits hold a credential, or when its value is
-  a credential of digits (leading zeros dropped, or rounded past fifteen digits). Other encodings are not
-  read: percent-encoding in a URL, HTML entities, a body in UTF-16 or Latin-1, an echo split across two of
-  an MCP answer's text items. What is kept is bounded before it is scrubbed: an OpenAPI answer is cut at
-  its manifest's cap, an MCP answer's text at 200,000 characters and an error at 2,000, and an MCP answer's
-  structured content, or its text when that is JSON within that budget, is read as a value and walked,
-  levels past twelve written `[depth]`, as far as 200,000 characters of it go; what is past that is left out
-  (a key it would cut with its entry), and the result says it was cut. JSON text is scrubbed before it is
-  parsed, so a credential a server wrote into it unescaped goes even when JSON would read its own
-  backslashes away (each credential is also searched for as JSON reads it); when scrubbing breaks the JSON
-  (a credential of digits inside a number), the text as it came is parsed, and a number whose digits held
-  a credential goes. An answer at its 8 MB cap
-  nested millions of levels deep can still take some hundreds of MB while the MCP SDK parses it, before
-  any of this applies. A text cut where a
-  teammate's words may be echoed drops its last 256 characters, or sixteen times the credential's length
-  if that is more, and any escape the cut broke, so the text is the same whatever a guess at the credential
-  matched, and a credential cut in two shows no part of itself when JSON nests it at most four levels deep,
-  each level doubling the backslashes of the one inside it (an encoder that writes every character of an
-  escape as `\uXXXX` again needs more than that). A tool's name and description, which no teammate writes,
-  are cut at 2,000 characters and lose their end from wherever a credential may begin that the cut fell
-  inside, at any level read. In an answer that is JSON (an OpenAPI answer whole or line by line, a byte
-  order mark first dropped, or an MCP answer, cut or not), the values of keys that look secret
-  (`authorization`, `token`, `password` and the like) are redacted too; a cut OpenAPI answer and other
-  text keep theirs. An OpenAPI refusal repeats the
-  status alone, never the server's reason phrase or body. A credential shorter than 6 characters is never
-  scrubbed, since that would blank ordinary text: give such a service a longer one.
+  those again) is scrubbed too. Each credential is also searched for as JSON reads its own escapes, for a
+  server that writes it into JSON unescaped. A number goes when its digits hold a credential, or when its
+  value is a credential of digits (leading zeros dropped, or rounded past fifteen digits), in an answer
+  read as a value and in one kept as text. A credential shorter than 6 characters is never scrubbed, since
+  that would blank ordinary text: give such a service a longer one. An OpenAPI refusal repeats the status
+  alone, never the server's reason phrase or body.
+  - What is kept is bounded before it is scrubbed: an OpenAPI answer is cut at its manifest's cap, an MCP
+    answer's text at 200,000 characters and an error at 2,000. An MCP answer's structured content, or its
+    text when that is JSON within the same budget, is read as a value and walked, levels past twelve
+    written `[depth]`, as far as 200,000 characters of it go; what is past that is left out (a key the
+    budget would cut, with its entry), and the result says it was cut.
+  - JSON text is scrubbed and then parsed. When scrubbing breaks it (a credential that is itself JSON, or
+    quoted, or digits inside a number), it is kept as the scrubbed text, never parsed as it came.
+  - In an answer read as a value (an OpenAPI answer whole or line by line, a byte order mark first dropped;
+    MCP structured content; MCP JSON text within the budget), the values of keys that look secret
+    (`authorization`, `token`, `password` and the like) are redacted too. A cut answer, JSON text past the
+    budget or broken by scrubbing, and other text keep theirs.
+  - A text cut where a teammate's words may be echoed (an answer, an error) drops its last 256 characters,
+    or sixteen times the credential's length if that is more, and any escape the cut broke, so the text is
+    the same whatever a guess at the credential matched. A tool's name and description, which no teammate
+    writes, are cut at 2,000 characters and lose their end from wherever a credential may begin that the
+    cut fell inside, at any level read.
+  - Known limits: other encodings are not read (percent-encoding in a URL, HTML entities, a body in UTF-16
+    or Latin-1, an echo split across two of an MCP answer's text items); a credential nested deeper than
+    eight levels is not found; a credential cut in two by a teammate-echo cut shows no part of itself only
+    when JSON nests it at most four levels deep, each level doubling the backslashes of the one inside it
+    (an encoder that writes every character of an escape as `\uXXXX` again needs more than the cut drops);
+    the forms JSON reads a credential's own escapes into are searched for only up to the credentials' own
+    length again; and an MCP answer at its 8 MB cap nested millions of levels deep can still take some
+    hundreds of MB while the MCP SDK parses it, before any of this applies.
 - **Time.** One deadline per request, looking names up included: an MCP request's is the call's timeout
   (30 seconds) up to the answer's headers, after which an event stream stays open until the call ends;
   an OpenAPI operation takes its manifest's timeout, OAuth 15 seconds, a webhook 15, and an SMTP exchange

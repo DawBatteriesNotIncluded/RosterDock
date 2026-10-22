@@ -394,27 +394,41 @@ export async function callOpenApiOperation(
     .toString("utf8")
     .replace(/^\uFEFF/, "");
   const clean = scrubber([secret]);
-  return { ok: true, result: truncated ? { truncated: true, text: clean.cut(raw) } : readAnswer(raw, clean) };
+  return {
+    ok: true,
+    result: truncated ? { truncated: true, text: clean.digits(clean.cut(raw)) } : readAnswer(raw, clean),
+  };
 }
 
 /** A parsed value with secret-looking keys redacted and the credential out of every string. */
-function cleaned(read: { value: unknown; numbers: number[] }, clean: Scrubber): unknown {
-  return clean.value(deepRedact(read.value), read.numbers);
+function cleaned(value: unknown, clean: Scrubber): unknown {
+  return clean.value(deepRedact(value));
+}
+
+/** The value a JSON text holds, or undefined when it holds none. */
+function parsed(text: string): { value: unknown } | undefined {
+  try {
+    return { value: JSON.parse(text) as unknown };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
- * A whole answer as the teammate reads it, read as JSON so a number in it is looked at as a number
- * (`Scrubber.json`): JSON cleaned; newline-delimited JSON (a log, an export) cleaned line by line and written
- * back as lines; anything else the scrubbed text.
+ * A whole answer as the teammate reads it, scrubbed once and then read as JSON, so a credential written into
+ * it unescaped goes as text does and a number in it is looked at as a number: JSON cleaned; newline-delimited
+ * JSON (a log, an export) cleaned line by line and written back as lines; anything else, scrubbing having
+ * broken the JSON or not, the scrubbed text with its numbers looked at too.
  */
 function readAnswer(raw: string, clean: Scrubber): unknown {
-  const whole = clean.json(raw);
-  if (whole) return cleaned(whole, clean);
-  const lines = raw.split("\n");
+  const scrubbed = clean.text(raw);
+  const whole = parsed(scrubbed);
+  if (whole) return cleaned(whole.value, clean);
+  const lines = scrubbed.split("\n");
   if (lines.filter((l) => l.trim()).length >= 2) {
-    const read = lines.map((l) => (l.trim() ? clean.json(l) : null));
+    const read = lines.map((l) => (l.trim() ? parsed(l) : null));
     if (read.every((r) => r !== undefined))
-      return read.map((r, i) => (r ? JSON.stringify(cleaned(r, clean)) : lines[i])).join("\n");
+      return read.map((r, i) => (r ? JSON.stringify(cleaned(r.value, clean)) : lines[i])).join("\n");
   }
-  return clean.text(raw);
+  return clean.digits(scrubbed);
 }

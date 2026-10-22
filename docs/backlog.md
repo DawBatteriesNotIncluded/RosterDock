@@ -47,7 +47,8 @@ scheduled; delete it when it ships.
   600 MB while the MCP SDK parses and checks it, before the board's own depth cut applies. Count the nesting
   in the answer's stream (`egressFetch`) and refuse past a few thousand levels before the SDK reads it.
 - The scrub builds its automaton for every MCP and OpenAPI call (`apps/board/src/mcp/scrub.ts`): 50
-  credentials of 8 KB take about 25 ms and 8 MB while the call lasts. If that ever matters under concurrency,
+  credentials of 8 KB take about 20 ms and 8 MB while the call lasts, and up to about 40 ms and 12 MB when
+  they hold escapes JSON reads into further forms (capped at the credentials' length again). If that ever matters under concurrency,
   keep one per connection's credentials in an LRU bounded by bytes (credential length and arrays together),
   keyed by a hash over length-prefixed credentials, never the values.
 - Company model providers (`docs/plan.html`, Company model providers), after its slices:

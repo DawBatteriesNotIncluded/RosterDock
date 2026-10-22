@@ -447,7 +447,7 @@ describe("a company's MCP server over HTTP", () => {
       "digits",
       {},
     );
-    expect(pin).toEqual({ ok: true, result: { id: "[redacted]", pin: "[redacted]", n: 7 } });
+    expect(pin).toEqual({ ok: true, result: '{"id":9[redacted],"pin":[redacted],"n":7}' });
     // A credential holding escapes of its own, written into JSON as it is: JSON reads them away, so the text is
     // scrubbed before it is parsed.
     const interpolated = await callMcpTool(

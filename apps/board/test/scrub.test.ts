@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { automataBuilt, scrubbedChars, scrubber, scrubSteps, scrubText } from "../src/mcp/scrub.js";
+import { automataBuilt, scrubbedChars, scrubber, scrubText } from "../src/mcp/scrub.js";
 
 const secret = "AbC+dEf+GhI/jKl=";
 
@@ -167,13 +167,23 @@ describe("scrubbing a credential", () => {
     expect(scrubber([odd]).value({ echo: 'Bearer tok\n"en-12345' })).toEqual({ echo: "Bearer [redacted]" });
     expect(scrubber([odd]).json('{"echo":"Bearer tok\\n\\"en-12345"}')).toEqual({
       value: { echo: "Bearer [redacted]" },
-      numbers: [],
     });
-    // A number past what a double keeps, whose digits hold a credential: its token in the text says so.
-    const digits = scrubber(["123456789012345678901234"]);
-    const read = digits.json('{"id":91234567890123456789012345,"n":7}')!;
-    expect(read.numbers).toEqual([91234567890123456789012345]);
-    expect(digits.value(read.value, read.numbers)).toEqual({ id: "[redacted]", n: 7 });
+    // Even when it is a whole string, shorter than the credential as written.
+    expect(scrubber([odd]).value({ echo: 'tok\n"en-12345' })).toEqual({ echo: "[redacted]" });
+    // Scrubbing that breaks the JSON leaves it to be kept as text: the answer as it came is never parsed, so
+    // a credential that spans JSON (an object, a quoted string) comes back as no value of its pieces.
+    const blob = scrubber(['{"key":"k-123456"}', '"quoted-123"']);
+    expect(blob.json('{"echo":{"key":"k-123456"},"also":"quoted-123"}')).toBeUndefined();
+    expect(blob.text('{"echo":{"key":"k-123456"},"also":"quoted-123"}')).toBe(
+      '{"echo":[redacted],"also":[redacted]}',
+    );
+    // As text, a number whose value is a credential of digits goes too: past a double's precision, or with
+    // its leading zeros gone.
+    const digits = scrubber(["123456789012345678901234", "0012345678"]);
+    const text = '{"id":91234567890123456789012345,"pin":12345678,"n":7}';
+    expect(digits.json(text)).toBeUndefined();
+    expect(digits.digits(digits.text(text))).toBe('{"id":9[redacted]5,"pin":[redacted],"n":7}');
+    expect(scrubber(["12345678901234567890"]).digits("[12345678901234567000, 1]")).toBe("[[redacted], 1]");
     expect(digits.json("not json")).toBeUndefined();
   });
 
@@ -208,11 +218,12 @@ describe("scrubbing a credential", () => {
       cut: true,
     });
     expect(clean.bounded({ abc: 1 }, 4)).toEqual({ value: {}, cut: true });
-    // An object far wider than the budget: what is past it is never read.
-    const wide = Object.fromEntries(Array.from({ length: 100_000 }, (_, i) => [`k${i}`, "v".repeat(20)]));
+    // An object far wider than the budget, each value longer than all of it: the first value is cut, and
+    // nothing past it is read.
+    const wide = Object.fromEntries(Array.from({ length: 100_000 }, (_, i) => [`k${i}`, "v".repeat(2000)]));
     const before = scrubbedChars();
     expect(clean.bounded(wide, 1000).cut).toBe(true);
-    expect(scrubbedChars() - before).toBeLessThan(1000);
+    expect(scrubbedChars() - before).toBeLessThan(1000 + clean.tail);
   });
 
   it("does work linear in what it reads: one automaton for every credential, one pass a level", () => {
@@ -244,17 +255,36 @@ describe("scrubbing a credential", () => {
     let out = "";
     expect(work(() => (out = scrubber([secret]).text(echo))).chars).toBeLessThanOrEqual(9 * echo.length);
     expect(out).not.toContain("AbC");
-    // The search follows a failure link at most once for each character it reads: a credential that matches
-    // all but its last character at every place costs no more.
-    const [steps, chars] = [scrubSteps(), scrubbedChars()];
-    scrubber([`${"a".repeat(2048)}b${"a".repeat(2047)}`, "aaaaaaaaab"]).text("a".repeat(1_000_000));
-    expect(scrubSteps() - steps).toBeLessThanOrEqual(2 * (scrubbedChars() - chars));
-    // Fifty credentials of 8 KB: one automaton, built in a few tens of milliseconds here.
+    // A credential that nearly matches at every place costs about what one that never does: a search that
+    // compared it afresh at each place (indexOf took about 170 times as long here) fails this.
+    const best = (f: () => unknown) => {
+      let fastest = Infinity;
+      for (let i = 0; i < 5; i++) {
+        const started = performance.now();
+        f();
+        fastest = Math.min(fastest, performance.now() - started);
+      }
+      return fastest;
+    };
+    const as = "a".repeat(1_000_000);
+    const benign = best(() => scrubber([`${"z".repeat(2048)}y${"z".repeat(2047)}`]).text(as));
+    const near = best(() => scrubber([`${"a".repeat(2048)}b${"a".repeat(2047)}`]).text(as));
+    expect(near).toBeLessThan(10 * benign + 20);
+    // Fifty credentials of 8 KB: one automaton, built in a few tens of milliseconds here. Each a run of
+    // backslashes, JSON reads them into forms that keep decoding; those are searched for too, but all of them
+    // together are no more than the credentials again.
     const big = Array.from(
       { length: 50 },
       (_, i) => `${String.fromCharCode(65 + (i % 26))}${i}-${"q".repeat(8190)}`,
     );
     expect(work(() => scrubber(big)).builds).toBe(1);
+    const runs = Array.from(
+      { length: 50 },
+      (_, i) => `${"\\".repeat(4096)}${String.fromCharCode(65 + (i % 26))}${i}${"x".repeat(4090)}`,
+    );
+    const given = runs.reduce((n, c) => n + c.length, 0);
+    const automaton = (scrubber(runs) as unknown as { automaton: { nodes: number } }).automaton;
+    expect(automaton.nodes).toBeLessThanOrEqual(2 * given + 1);
   });
 
   it("stays within its memory: an 8 MB echo of the credential near escapes, in a worker held to 64 MB", async () => {

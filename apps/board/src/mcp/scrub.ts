@@ -96,16 +96,10 @@ function brokenEscapes(s: string): number {
 // tests hold the work to, where a wall clock on a shared runner would not tell.
 let searched = 0;
 let built = 0;
-let stepped = 0;
 
 /** How many characters scrubbers have searched in this process, every level counted. */
 export function scrubbedChars(): number {
   return searched;
-}
-
-/** How many failure links scrubbers have followed in this process: never more than the characters searched. */
-export function scrubSteps(): number {
-  return stepped;
 }
 
 /** How many automata scrubbers have built in this process: one for each scrubber with credentials. */
@@ -263,7 +257,6 @@ class Automaton {
       while (to < 0) {
         node = this.fail[node]!;
         to = this.step(node, c);
-        stepped++;
       }
       node = to;
       const len = this.longest[node]!;
@@ -298,21 +291,25 @@ export interface Scrubber {
    * The credentials out of a parsed value: every string, every key, every number that holds one. Levels past
    * SCRUB_MAX_NESTING are written "[depth]" and never read.
    */
-  value(value: unknown, numbers?: readonly number[]): unknown;
+  value(value: unknown): unknown;
   /**
    * As `value`, within a budget of characters: strings and keys count their length, anything else a few.
    * What comes past it is left out (an array or an object ends early, a string is cut as `head` cuts), and
    * `cut` says so.
    */
-  bounded(value: unknown, budget: number, numbers?: readonly number[]): { value: unknown; cut: boolean };
+  bounded(value: unknown, budget: number): { value: unknown; cut: boolean };
   /**
-   * The value a JSON text holds, read so that nothing a credential left in the text is lost: the text is
-   * scrubbed and then parsed, so a credential the server wrote into it unescaped (whose own backslashes JSON
-   * would read away) goes as text does. When scrubbing broke the JSON (a credential of digits inside a
-   * number), the text as it was is parsed, and `numbers` are the values of the number tokens in it that held
-   * a credential, for `value` or `bounded` to redact. Undefined when the text is not JSON.
+   * The value a JSON text holds once it is scrubbed: a credential the server wrote into it unescaped (whose
+   * own backslashes JSON would read away) goes as text does. Undefined when the scrubbed text is not JSON,
+   * scrubbing having broken it or not: such a text is the caller's to keep as text, through `digits`.
    */
-  json(text: string): { value: unknown; numbers: number[] } | undefined;
+  json(text: string): { value: unknown } | undefined;
+  /**
+   * A scrubbed text a teammate reads as text, its number tokens whose value is a credential of digits (with
+   * its leading zeros gone, or rounded past fifteen digits) redacted as well: what `value` does for a number,
+   * for a text that is not read as a value.
+   */
+  digits(text: string): string;
   /**
    * What a cut drops: room for the longest credential escaped as ESCAPED_CHAR_MAX allows, 256 at least, so a
    * credential the cut fell inside leaves nothing of itself.
@@ -343,16 +340,17 @@ function assemble(t: string, marks: Int32Array | null, end: number): string {
 class Scrubbing implements Scrubber {
   readonly tail: number;
   private readonly shortest: number;
-  private readonly numeric: number[];
+  private readonly numeric: Set<number>;
 
   readonly automaton: Automaton | null;
 
-  constructor(needles: readonly string[], automaton: Automaton | null) {
+  /** `given`: the credentials; `needles`: everything the automaton searches for, their decoded forms too. */
+  constructor(given: readonly string[], needles: readonly string[], automaton: Automaton | null) {
     this.automaton = automaton;
     this.shortest = needles.length ? Math.min(...needles.map((n) => n.length)) : Infinity;
-    this.tail = Math.max(256, Math.max(0, ...needles.map((n) => n.length)) * ESCAPED_CHAR_MAX);
+    this.tail = Math.max(256, Math.max(0, ...given.map((n) => n.length)) * ESCAPED_CHAR_MAX);
     // A credential of digits may come back as a JSON number: 007 as 7, twenty digits rounded.
-    this.numeric = needles.filter((n) => /^\d+$/.test(n)).map(Number);
+    this.numeric = new Set(given.filter((n) => /^\d+$/.test(n)).map(Number));
   }
 
   /**
@@ -408,40 +406,31 @@ class Scrubbing implements Scrubber {
     return assemble(kept, marks, safe);
   }
 
-  value(v: unknown, numbers: readonly number[] = []): unknown {
-    return this.automaton ? this.walk(v, 0, null, numbers) : v;
+  value(v: unknown): unknown {
+    return this.automaton ? this.walk(v, 0, null) : v;
   }
 
-  bounded(v: unknown, budget: number, numbers: readonly number[] = []): { value: unknown; cut: boolean } {
+  bounded(v: unknown, budget: number): { value: unknown; cut: boolean } {
     const left = { chars: budget, cut: false };
-    return { value: this.walk(v, 0, left, numbers), cut: left.cut };
+    return { value: this.walk(v, 0, left), cut: left.cut };
   }
 
-  json(t: string): { value: unknown; numbers: number[] } | undefined {
+  json(t: string): { value: unknown } | undefined {
     try {
-      return { value: JSON.parse(this.text(t)) as unknown, numbers: [] };
-    } catch {
-      // not JSON, or scrubbing broke it
-    }
-    let value: unknown;
-    try {
-      value = JSON.parse(t) as unknown;
+      return { value: JSON.parse(this.text(t)) as unknown };
     } catch {
       return undefined;
     }
-    // A number token whose digits hold a credential, past what a double keeps of them as well.
-    const numbers: number[] = [];
-    for (const m of t.matchAll(/-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g))
-      if (this.text(m[0]) !== m[0]) numbers.push(Number(m[0]));
-    return { value, numbers };
   }
 
-  private walk(
-    v: unknown,
-    depth: number,
-    left: { chars: number; cut: boolean } | null,
-    numbers: readonly number[],
-  ): unknown {
+  digits(t: string): string {
+    if (!this.numeric.size) return t;
+    return t.replace(/-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g, (m) =>
+      this.numeric.has(Number(m)) ? REDACTED : m,
+    );
+  }
+
+  private walk(v: unknown, depth: number, left: { chars: number; cut: boolean } | null): unknown {
     const spend = (n: number) => {
       if (left) left.chars -= n;
     };
@@ -461,7 +450,7 @@ class Scrubbing implements Scrubber {
     }
     if (typeof v === "number" || typeof v === "bigint") {
       spend(8);
-      if (typeof v === "number" && (this.numeric.includes(v) || numbers.includes(v))) return REDACTED;
+      if (typeof v === "number" && this.numeric.has(v)) return REDACTED;
       const written = String(v);
       return this.text(written) === written ? v : REDACTED;
     }
@@ -473,7 +462,7 @@ class Scrubbing implements Scrubber {
           break;
         }
         spend(1);
-        out.push(this.walk(x, depth + 1, left, numbers));
+        out.push(this.walk(x, depth + 1, left));
       }
       return out;
     }
@@ -481,18 +470,14 @@ class Scrubbing implements Scrubber {
       const out: Record<string, unknown> = {};
       for (const k in v) {
         if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
-        if (left && left.chars <= 0) {
-          left.cut = true;
-          break;
-        }
-        // A key the budget would cut, or that uses it up, leaves its entry out: a cut key could lose the
+        // A key the budget would cut, or that uses it up (or none left), leaves its entry out: a cut key could lose the
         // name that marks its value secret, and a value under it with no budget left would pass whole.
         if (left && k.length + 1 >= left.chars) {
           left.cut = true;
           break;
         }
         spend(k.length + 1);
-        out[this.text(k)] = this.walk((v as Record<string, unknown>)[k], depth + 1, left, numbers);
+        out[this.text(k)] = this.walk((v as Record<string, unknown>)[k], depth + 1, left);
       }
       return out;
     }
@@ -508,8 +493,11 @@ class Scrubbing implements Scrubber {
 export function scrubber(secrets: readonly (string | null | undefined)[]): Scrubber {
   const given = [...new Set(secrets.filter((s): s is string => !!s && s.length >= SCRUB_MIN_CHARS))];
   // A credential that holds escapes of its own (`\n`, `\"`) and that a server writes into JSON as it is
-  // reads, once parsed, as what JSON makes of them: that is searched for too, level by level.
+  // reads, once parsed, as what JSON makes of them: that is searched for too, level by level, each form new
+  // to the search, and all of them together no more than the credentials themselves again, so the automaton
+  // built for each call is at most twice their size.
   const needles = new Set(given);
+  let room = given.reduce((n, c) => n + c.length, 0);
   for (const credential of given) {
     let read = credential;
     for (let i = 0; i < SCRUB_MAX_DEPTH && read.includes("\\"); i++) {
@@ -518,10 +506,14 @@ export function scrubber(secrets: readonly (string | null | undefined)[]): Scrub
       } catch {
         break;
       }
-      if (read.length >= SCRUB_MIN_CHARS) needles.add(read);
+      if (read.length < SCRUB_MIN_CHARS || needles.has(read)) continue;
+      if (read.length > room) break;
+      needles.add(read);
+      room -= read.length;
     }
   }
-  return new Scrubbing(given, given.length ? new Automaton([...needles]) : null);
+  const all = [...needles];
+  return new Scrubbing(given, all, given.length ? new Automaton(all) : null);
 }
 
 /** One text, once: scrubber(secrets).text(text). */
