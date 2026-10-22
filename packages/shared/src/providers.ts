@@ -94,6 +94,9 @@ export function parseModelProviders(raw: string | undefined): ModelProvidersPoli
   return { kinds, board };
 }
 
+/** A Bedrock OpenAI model Runtime takes: a cross-Region inference profile id, or an inference profile's ARN. */
+const BEDROCK_OPENAI_ID_RE = /^(?:(?:global|[a-z]{2,4})\.openai\.|arn:aws[a-z-]*:bedrock:)/;
+
 /** A provider's name: short, lowercase, unique in the company. */
 const providerName = z
   .string()
@@ -144,7 +147,8 @@ export function compatibleEndpoint(raw: string): string | null {
   if (url.username || url.password || url.search || url.hash || !url.hostname) return null;
   // A key in the path would be kept, sent in events and shown: refused like one anywhere else.
   if (containsRawSecret(url.pathname)) return null;
-  return url.toString().replace(/\/+$/, "");
+  // Built from its parts, so an empty "?" or "#" left at the end is gone: a path added later stays a path.
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
 }
 
 /**
@@ -153,11 +157,36 @@ export function compatibleEndpoint(raw: string): string | null {
  * key's tail longer), or one of the shapes the raw-secret guard knows.
  */
 export function nameLooksLikeKey(name: string): boolean {
-  return (
-    looksLikeRawSecret(name) ||
-    /^[0-9a-f]{16,}$/i.test(name) ||
-    name.split("_").some((word) => word.length >= 20)
-  );
+  if (looksLikeRawSecret(name) || KEY_SHAPES.some((re) => re.test(name))) return true;
+  return name.split("_").some((word) => hexRun(word) || word.split(/[^A-Za-z0-9]+/).some(randomRun));
+}
+
+/**
+ * Keys whose shape says what they are, besides the ones the raw-secret guard knows: Hugging Face's user and
+ * organisation tokens, and Google's API keys (which Gemini's OpenAI-compatible endpoint takes).
+ */
+const KEY_SHAPES: readonly RegExp[] = [
+  /\bhf_[A-Za-z0-9]{30,}/,
+  /\bapi_org_[A-Za-z0-9]{30,}/,
+  /\bAIza[0-9A-Za-z_-]{35}/,
+];
+
+/** A run of hex, dashes aside: an Azure key is 32 characters, and a key written as a UUID is one too. */
+function hexRun(text: string): boolean {
+  return /^[0-9a-f]{16,}$/i.test(text.replace(/-/g, ""));
+}
+
+/**
+ * Whether a run of letters and digits in a name is random, as a key is: long, in both cases, and with digits
+ * or with its case flipping as often as a key's does. A word, or an identifier in one case
+ * (ACMEPRODUCTIONOPENAI, githubPersonalAccessToken), is not.
+ */
+function randomRun(run: string): boolean {
+  if (run.length < 20 || !/[A-Z]/.test(run) || !/[a-z]/.test(run)) return false;
+  if (/[0-9]/.test(run)) return true;
+  let flips = 0;
+  for (let i = 1; i < run.length; i++) if (run[i]! < "a" !== run[i - 1]! < "a") flips++;
+  return flips / (run.length - 1) >= 1 / 3;
 }
 
 /** A credential's env var NAME, never the value: a pasted key is refused without being said back. */
@@ -269,13 +298,14 @@ export const ModelProviderSchema = z
           message: `${PROVIDER_KIND_LABELS[p.kind]} serves ${KIND_FAMILIES[p.kind].map((f) => FAMILY_LABELS[f]).join(" and ")} models here, not ${FAMILY_LABELS[m.family]} ones`,
         });
       // Bedrock serves OpenAI's models at two endpoints: bare openai.* ids are Mantle's, which the board
-      // does not reach yet; Runtime takes cross-Region inference profiles (global.openai.…, us.openai.…).
-      if (p.kind === "bedrock" && m.family === "openai" && m.id.startsWith("openai."))
+      // does not reach yet; Runtime takes cross-Region inference profiles (global.openai.…, us.openai.…), or
+      // a profile's ARN.
+      if (p.kind === "bedrock" && m.family === "openai" && !BEDROCK_OPENAI_ID_RE.test(m.id))
         ctx.addIssue({
           code: "custom",
           path: ["models", i, "id"],
           message:
-            "a bare openai.* id is Bedrock's Mantle endpoint, which this board does not reach yet; use a cross-Region inference profile id (global.openai.… or us.openai.…)",
+            "a Bedrock OpenAI model is a cross-Region inference profile id (global.openai.… or us.openai.…) or its ARN; a bare openai.* id is Bedrock's Mantle endpoint, which this board does not reach yet",
         });
     });
     if (p.kind === "openai_compatible" && p.authHeader && !p.credentials.apiKey)
