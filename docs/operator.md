@@ -232,7 +232,23 @@ networkPolicy:
   `169-254-169-254.<namespace>.pod.cluster.local` with that address (CoreDNS's `pods insecure`, the default on
   kubeadm, kind and EKS), and an ExternalName service is a CNAME to anywhere, so the wildcard would hand
   every company the cloud's metadata service. List each service, or a namespace only you create services in.
-- Every company on the board may use what you list: list services every company may reach.
+- Every company on the board may use what you list, unless you give an entry to one company: write it
+  `<company id>=<entry>` (in the chart, `{ company: "<id>", destination: "<entry>" }`), and only that company
+  reaches it, on connections of its own (its own lookup and kept connections, so no other company gets there
+  through a reused connection or a name that changes its answer). Its owners and admins find the id under
+  Settings > Connections, where they see your entries for every company and their own, marked; no other
+  company sees them. The board warns at start about an id that names no company, whose entries allow
+  nothing. A stdio command you list with free arguments (a final `*`) runs inside the board pod, where no
+  list applies: one that fetches or proxies lets any company's admins point it at that destination too.
+
+  ```yaml
+  board:
+    privateDestinations:
+      - "10.20.0.0/16" # every company
+      - company: "4f1aee73-e65e-4c8d-83f7-aa1169379d7f"
+        destination: "ollama.acme.svc.cluster.local" # Acme alone
+  ```
+
 - A connection that points at an unlisted private address fails its Check, and its calls fail, with
   "refused: … which this board's operator has not allowed"; Activity shows the same. Nothing else about it
   changes: list the destination, or give the connection a public URL, and press Check. Owners and admins see
@@ -293,7 +309,7 @@ setting with no value of its own from `board.extraEnv`. The ones an operator cha
 | `ROSTERDOCK_DEV_LOGIN`                       | Off in production.                                                                                                                                                                                                                                                                                                                                                     |
 | `ROSTERDOCK_SECRET_STORE`                    | A secret store the board may write to: the tokens a connection's OAuth flow obtains, and the values people set under Settings > Connections > Secrets (`rosterdock-company-<id>`, one key per name; resolved for that company before the shared names). `kubernetes` (the chart sets it with `board.oauth.enabled`) or `file:<dir>`. Unset: only shared names resolve. |
 | `ROSTERDOCK_SHARED_ENV_NAMES`                | Env var names on the board every company may name besides its own secrets (chart `board.sharedEnvNames`), comma-separated; nothing else on the board reaches a company. Any company's admins can send a shared value anywhere, so share only what every company may hold; the board will not start with one of its own names (`docs/security.md`). Empty: none.        |
-| `ROSTERDOCK_PRIVATE_DESTINATIONS`            | The private destinations a company may make the board reach (chart `board.privateDestinations`), comma-separated: host names (`*.` for the names under one), addresses and ranges. Unset: public addresses only. The board does not start on an entry it cannot read (Private destinations, above).                                                                    |
+| `ROSTERDOCK_PRIVATE_DESTINATIONS`            | The private destinations a company may make the board reach (chart `board.privateDestinations`), comma-separated: host names (`*.` for the names under one), addresses and ranges, each for every company or, as `<company id>=<entry>`, for one. Unset: public addresses only. The board does not start on an entry it cannot read (Private destinations, above).     |
 | `ROSTERDOCK_STDIO_COMMANDS`                  | The command lines a stdio connection may run inside the board (chart `board.stdioCommands`), comma-separated: the command and its arguments, matched exactly; a final `*` lets a company add arguments. The server runs as the board and reads what it can, so list only what every company's admins may run (`docs/security.md`). Empty: none runs.                   |
 | `ROSTERDOCK_COMPANY_CREATORS`                | Who may create a company (chart `board.companyCreators`): emails and `@domain`s, comma-separated, or `*` for anyone who signs in. Unset: the first person to create one on an empty board owns it and nobody creates another (with the dev login on, anyone may). Everyone else joins a company when an owner invites their email.                                     |
 | `ROSTERDOCK_OIDC_*`, `ROSTERDOCK_PUBLIC_URL` | Sign-in (`docs/install.md`).                                                                                                                                                                                                                                                                                                                                           |

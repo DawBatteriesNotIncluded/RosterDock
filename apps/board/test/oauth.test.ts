@@ -74,6 +74,7 @@ describe("OAuth on a connection", () => {
       sharedEnvNames: ["HUBSPOT_OAUTH_CLIENT_SECRET"],
       stdioCommands: [],
       privateDestinations: [],
+      companyPrivateDestinations: [],
     });
 
     const start = await api.post(`${base}/connections/${created.body.id}/oauth/start`, {});

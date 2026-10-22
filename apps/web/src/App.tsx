@@ -68,13 +68,13 @@ export function App() {
     if (!me) return;
     let alive = true;
     client
-      .features()
+      .features(companyId ?? undefined)
       .then((f) => alive && setFeatures(f))
       .catch(() => undefined);
     return () => {
       alive = false;
     };
-  }, [client, me]);
+  }, [client, me, companyId]);
   // An OAuth authorisation comes back to the root with ?oauth=<connection> or ?oauth_error=<code>.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);

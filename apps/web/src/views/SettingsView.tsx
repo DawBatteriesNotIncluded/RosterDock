@@ -1091,7 +1091,12 @@ export function SettingsView(p: SettingsViewProps) {
                       on the board holds a value.
                     </span>
                   </div>
-                  <ConnectionsPanel {...p.connections} connections={p.data.connections} canEdit={p.canEdit} />
+                  <ConnectionsPanel
+                    {...p.connections}
+                    connections={p.data.connections}
+                    canEdit={p.canEdit}
+                    companyId={p.data.company.id}
+                  />
                   <ClientPoliciesPanel
                     data={p.data}
                     canEdit={p.canEdit}

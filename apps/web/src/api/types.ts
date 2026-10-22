@@ -293,6 +293,8 @@ export interface Features {
   stdioCommands?: string[];
   /** The private names (`*.` for the names under one), addresses and ranges a connection may reach; everything else must be public. Only for people who manage connections. */
   privateDestinations?: string[];
+  /** Of those, the ones the operator gave the company asked about alone. Only for its owners and admins. */
+  companyPrivateDestinations?: string[];
   /** Whether the board reads the web (the web connection's pages, research sources); false: its operator keeps it off. */
   web?: boolean;
 }

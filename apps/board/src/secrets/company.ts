@@ -11,6 +11,7 @@ import type { ActorRef } from "@rosterdock/shared";
 import type { Db } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
 import { mutate } from "../mutate.js";
+import { companyEgress, type Egress } from "../web/egress.js";
 import type { SecretStore } from "./store.js";
 
 export function companySecretName(companyId: string): string {
@@ -46,16 +47,18 @@ export async function companyEnv(
 
 /**
  * The same deps, with `env` scoped to the company: `deps.env` is what the board shares (never its whole
- * environment), under the company's own secrets; and `poolScope` the company, so a stdio child started for
- * one company never serves another. What every call on a connection goes through.
+ * environment), under the company's own secrets; `poolScope` the company, so a stdio child started for one
+ * company never serves another; and `egress` the company's, with the private destinations the operator
+ * gave it alone (web/egress.ts companyEgress). What every call on a connection goes through.
  */
 export async function withCompanyEnv<
-  T extends { env?: NodeJS.ProcessEnv; secrets?: SecretStore | null; poolScope?: string },
+  T extends { env?: NodeJS.ProcessEnv; secrets?: SecretStore | null; poolScope?: string; egress?: Egress },
 >(deps: T, companyId: string): Promise<T> {
   return {
     ...deps,
     env: await companyEnv(deps.env ?? {}, deps.secrets, companyId),
     poolScope: companyId,
+    ...(deps.egress ? { egress: companyEgress(deps.egress, companyId) } : {}),
   };
 }
 

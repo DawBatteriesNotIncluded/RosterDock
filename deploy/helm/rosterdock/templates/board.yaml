@@ -96,9 +96,28 @@ spec:
               value: {{ join "," . | quote }}
             {{- end }}
             {{- with .Values.board.privateDestinations }}
+            {{- $entries := list }}
+            {{- range . }}
+            {{- if kindIs "map" . }}
+            {{- $company := toString (required "a board.privateDestinations entry with a destination names its company" .company) }}
+            {{- $destinations := required "a board.privateDestinations entry with a company names its destination" .destination }}
+            {{- if regexMatch "[,=]" $company }}
+            {{- fail (printf "board.privateDestinations: company %q holds a comma or =; give its id alone" $company) }}
+            {{- end }}
+            {{- range (kindIs "slice" $destinations | ternary $destinations (list $destinations)) }}
+            {{- if regexMatch "[,=]" (toString .) }}
+            {{- fail (printf "board.privateDestinations: destination %q holds a comma or =; give one per entry, or a list" (toString .)) }}
+            {{- end }}
+            {{- $entries = append $entries (printf "%s=%s" $company (toString .)) }}
+            {{- end }}
+            {{- else }}
+            {{- $entries = append $entries (toString .) }}
+            {{- end }}
+            {{- end }}
             # The private destinations a company may make the board reach; everything else it chooses is public.
+            # An entry <company id>=<destination> is that company's alone.
             - name: ROSTERDOCK_PRIVATE_DESTINATIONS
-              value: {{ join "," . | quote }}
+              value: {{ join "," $entries | quote }}
             {{- end }}
             {{- if .Values.board.oauth.enabled }}
             - name: ROSTERDOCK_SECRET_STORE

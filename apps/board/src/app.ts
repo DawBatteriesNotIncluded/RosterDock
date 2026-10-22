@@ -54,6 +54,7 @@ import { plannerRouter, probePlanners, type PlannerStatus } from "./peter/planne
 import { anthropicModel, tracedModel, type PeterModel } from "./peter/model.js";
 import { startReaper } from "./runs/reaper.js";
 import { sourceFetcher, type SourceFetcher } from "./reviews/sources.js";
+import { isUuid } from "./validate.js";
 import { boardEgress, type Egress } from "./web/egress.js";
 import { boardWebReader, type Resolve, type WebReader } from "./web/transport.js";
 import { s3Store, type ObjectStore } from "./storage/s3.js";
@@ -182,8 +183,9 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
   // What a company chose the board should reach: public addresses, and the private ones the operator lists.
   // Each call site keeps its own transport in tests; the check above it is the same everywhere.
   const egress = boardEgress(config.privateDestinations, opts.egressResolve);
+  // An injected transport stays itself for every company: only the list is narrowed (companyEgress).
   const reach = (transport: typeof fetch | undefined): Egress =>
-    transport ? { ...egress, fetch: transport } : egress;
+    transport ? { fetch: transport, resolve: egress.resolve, allow: egress.allow } : egress;
   // Artifacts over the inline limit live here, when the config names a bucket.
   const store: ObjectStore | null = config.storage
     ? s3Store(config.storage, opts.storageFetch ? { fetch: opts.storageFetch } : {})
@@ -349,7 +351,9 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
   });
   registerSecretRoutes(app, db, secrets);
   // What this board can do beyond the basics, for the web to show the right controls. Names only; what the
-  // operator lets connections reach goes to the people who manage connections somewhere.
+  // operator lets connections reach goes to the people who manage connections somewhere. The private
+  // destinations the operator gave one company alone go to that company's owners and admins only, when the
+  // web asks for the company (?companyId=).
   app.get("/api/features", { config: {} }, async (req) => {
     const p = req.principal;
     const manages =
@@ -360,6 +364,23 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
           [p.actor.id],
         )
       ).rowCount;
+    const asked = (req.query as { companyId?: unknown }).companyId;
+    const companyId = isUuid(asked) ? asked.toLowerCase() : null;
+    const managesCompany =
+      manages &&
+      companyId !== null &&
+      !!(
+        await db.query(
+          "SELECT 1 FROM memberships WHERE user_id = $1 AND company_id = $2 AND role IN ('owner', 'admin')",
+          [p.actor.id, companyId],
+        )
+      ).rowCount;
+    // What the company has alone: an entry every company has too is not shown as its own.
+    const own = managesCompany
+      ? (config.privateDestinations.companies?.[companyId!]?.entries ?? []).filter(
+          (e) => !config.privateDestinations.entries.includes(e),
+        )
+      : [];
     return {
       oauth: !!secrets,
       objectStore: !!store,
@@ -369,8 +390,10 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
         ? {
             sharedEnvNames: config.sharedEnvNames,
             stdioCommands: config.stdioCommands.map(stdioCommandLine),
-            // The private names, addresses and ranges connections may reach, as the operator wrote them.
-            privateDestinations: config.privateDestinations.entries,
+            // The private names, addresses and ranges connections may reach, as the operator wrote them:
+            // every company's, then the company's own, which companyPrivateDestinations repeats.
+            privateDestinations: [...config.privateDestinations.entries, ...own],
+            companyPrivateDestinations: own,
           }
         : {}),
     };

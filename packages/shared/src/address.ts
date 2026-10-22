@@ -130,13 +130,22 @@ export function refuseAddress(address: string): string | null {
 // MCP server inside the cluster, a model on the host. A listed name is trusted with whatever it resolves to;
 // a listed address or range is reached whatever name led to it.
 
-/** What the operator lets a company's connections reach though it is not public (ROSTERDOCK_PRIVATE_DESTINATIONS). */
+/**
+ * What the operator lets a company's connections reach though it is not public (ROSTERDOCK_PRIVATE_DESTINATIONS).
+ * The names, ranges and entries are every company's; `companies` holds what one company alone may reach, by its
+ * id, and counts only once a list is narrowed to that company (forCompany), so a list nobody narrowed never
+ * gives one company another's destination.
+ */
 export interface PrivateDestinations {
   /** Lower case. `*.example.internal` stands for every name under example.internal, not for the name itself. */
   names: string[];
   ranges: Range[];
   /** As the operator wrote them, for a person to read. */
   entries: string[];
+  /** One company's own entries, by the company's id. */
+  companies?: Record<string, PrivateDestinations>;
+  /** Set once the list is narrowed to a company (forCompany): whose list it is now. */
+  narrowedTo?: string;
 }
 
 export const NO_PRIVATE_DESTINATIONS: PrivateDestinations = { names: [], ranges: [], entries: [] };
@@ -173,10 +182,20 @@ export function isAddress(text: string): boolean {
  * starting, so a typo never quietly allows nothing or everything.
  */
 export function parsePrivateDestinations(raw: string | undefined): PrivateDestinations {
-  const out: PrivateDestinations = { names: [], ranges: [], entries: [] };
+  const all: PrivateDestinations = { names: [], ranges: [], entries: [] };
   for (const item of (raw ?? "").split(",")) {
-    const entry = item.trim().toLowerCase();
-    if (!entry) continue;
+    const written = item.trim().toLowerCase();
+    if (!written) continue;
+    // `<company id>=<entry>`: that company's alone.
+    const eq = written.indexOf("=");
+    const company = eq >= 0 ? written.slice(0, eq).trim() : null;
+    if (company !== null && !COMPANY_ID_RE.test(company))
+      throw new Error(
+        `ROSTERDOCK_PRIVATE_DESTINATIONS: "${written}" names a company by "${company}", which is not a company id`,
+      );
+    const entry = company === null ? written : written.slice(eq + 1).trim();
+    const out =
+      company === null ? all : ((all.companies ??= {})[company] ??= { names: [], ranges: [], entries: [] });
     const [addr, bitsText, extra] = entry.replace(/^\[|\](?=\/|$)/g, "").split("/");
     const bytes = entry.includes("%") ? null : addressBytes(addr!);
     const name = addr!.replace(/\.$/, "");
@@ -187,12 +206,12 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
       const given = bitsText === undefined ? max + over : /^\d{1,3}$/.test(bitsText) ? Number(bitsText) : NaN;
       if (!(given >= 0 && given <= max + over))
         throw new Error(
-          `ROSTERDOCK_PRIVATE_DESTINATIONS: ${entry} has no prefix length from /${over} to /${max + over}`,
+          `ROSTERDOCK_PRIVATE_DESTINATIONS: ${written} has no prefix length from /${over} to /${max + over}`,
         );
       // ::ffff:0:0/96 or 64:ff9b::/96 reads as every IPv4 address, cloud metadata and loopback included.
       if (over && given <= over)
         throw new Error(
-          `ROSTERDOCK_PRIVATE_DESTINATIONS: ${entry} is every IPv4 address there is; list the IPv4 ranges you mean`,
+          `ROSTERDOCK_PRIVATE_DESTINATIONS: ${written} is every IPv4 address there is; list the IPv4 ranges you mean`,
         );
       const bits = given - over;
       // The range's own address with its host bits cleared: 10.1.2.3/8 is 10.0.0.0/8.
@@ -203,12 +222,35 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
     } else {
       // A zone (%eth0) names an interface, not a destination.
       throw new Error(
-        `ROSTERDOCK_PRIVATE_DESTINATIONS: "${entry}" is not a host name, an address or an address range (10.0.0.0/8)`,
+        `ROSTERDOCK_PRIVATE_DESTINATIONS: "${written}" is not a host name, an address or an address range (10.0.0.0/8)`,
       );
     }
     out.entries.push(entry);
   }
-  return out;
+  return all;
+}
+
+/** A company's id, as the board writes one. */
+const COMPANY_ID_RE = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/;
+
+/**
+ * The list as one company has it: what every company may reach, and what the operator gave that company
+ * alone. A list already narrowed is that company's only; narrowing it to another throws, since it carries
+ * the first company's entries.
+ */
+export function forCompany(allow: PrivateDestinations, companyId: string): PrivateDestinations {
+  const id = companyId.toLowerCase();
+  if (allow.narrowedTo !== undefined) {
+    if (allow.narrowedTo === id) return allow;
+    throw new Error("a list of private destinations narrowed to one company was narrowed to another");
+  }
+  const own = allow.companies?.[id];
+  return {
+    names: [...allow.names, ...(own?.names ?? [])],
+    ranges: [...allow.ranges, ...(own?.ranges ?? [])],
+    entries: [...allow.entries, ...(own?.entries.filter((e) => !allow.entries.includes(e)) ?? [])],
+    narrowedTo: id,
+  };
 }
 
 /** Whether the operator lists this name, itself or under a `*.` entry. */
