@@ -6,7 +6,6 @@ import { blockerFor } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
 import type { MutationContext } from "../mutate.js";
-import type { ModelPrice } from "./cost.js";
 
 /** goal: a goal's token cap, which nobody sets by hand. */
 export type BudgetScopeKind = "company" | "department" | "project" | "teammate" | "goal";
@@ -205,27 +204,4 @@ export async function alertOnBudgets(
   addedTokens: number,
 ): Promise<void> {
   for (const c of await budgetCrossings(ctx.client, scopes, addedTokens)) await emitBudgetAlert(ctx, c);
-}
-
-export async function priceFor(db: Queryable, companyId: string, model: string): Promise<ModelPrice | null> {
-  const res = await db.query<{
-    model: string;
-    currency: string;
-    input_per_million: number | null;
-    output_per_million: number | null;
-    cache_read_per_million: number | null;
-    cache_write_per_million: number | null;
-    seat_price_month: number | null;
-  }>("SELECT * FROM model_prices WHERE company_id = $1 AND model = $2", [companyId, model]);
-  const r = res.rows[0];
-  if (!r) return null;
-  return {
-    model: r.model,
-    currency: r.currency,
-    inputPerMillion: r.input_per_million,
-    outputPerMillion: r.output_per_million,
-    cacheReadPerMillion: r.cache_read_per_million,
-    cacheWritePerMillion: r.cache_write_per_million,
-    seatPriceMonth: r.seat_price_month,
-  };
 }

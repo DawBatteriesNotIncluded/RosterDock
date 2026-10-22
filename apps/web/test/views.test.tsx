@@ -1987,7 +1987,15 @@ describe("pure helpers", () => {
     expect(html).toContain("Monthly report");
     // A stub teammate's runs read as the stub engine, never as the model the teammate names.
     const stubTokens = { input: 1200, output: 300, cacheRead: 0, cacheWrite: 0, total: 1500 };
-    const stub = { model: "stub", tokens: stubTokens, costMinorUnits: null, runs: 1, calls: 0 };
+    const stub = {
+      model: "stub",
+      providerId: null,
+      provider: "This board's own models",
+      tokens: stubTokens,
+      costMinorUnits: null,
+      runs: 1,
+      calls: 0,
+    };
     const withStub = render(
       <CostsView
         data={fixture}
@@ -2053,6 +2061,10 @@ describe("pure helpers", () => {
         remove: asyncNoop,
         initial: { offered: { kinds: [], board: true }, providers: [] },
         initialSecrets: [],
+        loadPrices: async () => priceFixture,
+        savePrice: async () => priceFixture[0]!,
+        fillListPrices: async () => ({ added: [], unknown: [] }),
+        initialPrices: priceFixture,
       },
       connections: {
         loadCatalog: async () => [],

@@ -547,16 +547,23 @@ export type BudgetWindow = (typeof BUDGET_WINDOWS)[number];
 export type BudgetScopeKind = (typeof BUDGET_SCOPES)[number];
 
 /** Prices in minor units (pence, cents) per million tokens; seat price per month. */
-export const ModelPriceInputSchema = z.object({
-  model: modelId,
-  currency: z.string().trim().length(3).toUpperCase().default("GBP"),
-  inputPerMillion: z.number().int().nonnegative().nullable().optional(),
-  outputPerMillion: z.number().int().nonnegative().nullable().optional(),
-  cacheReadPerMillion: z.number().int().nonnegative().nullable().optional(),
-  cacheWritePerMillion: z.number().int().nonnegative().nullable().optional(),
-  seatPriceMonth: z.number().int().nonnegative().nullable().optional(),
-});
-export type ModelPriceInput = z.infer<typeof ModelPriceInputSchema>;
+export const ModelPriceInputSchema = z
+  .object({
+    /** As the engine or the provider takes it; a Claude id on the board's own models is put Claude Code's way. */
+    model: z.string().trim().min(1).max(120),
+    /** The company provider whose price this is; null or absent: the board's own models. */
+    providerId: uuid.nullable().optional(),
+    currency: z.string().trim().length(3).toUpperCase().default("GBP"),
+    inputPerMillion: z.number().int().nonnegative().nullable().optional(),
+    outputPerMillion: z.number().int().nonnegative().nullable().optional(),
+    cacheReadPerMillion: z.number().int().nonnegative().nullable().optional(),
+    cacheWritePerMillion: z.number().int().nonnegative().nullable().optional(),
+    seatPriceMonth: z.number().int().nonnegative().nullable().optional(),
+  })
+  .transform((v) => (v.providerId ? v : { ...v, model: modelId.parse(v.model) }));
+export type ModelPriceInput = z.input<typeof ModelPriceInputSchema>;
+/** Fill list prices for the models the company uses on the board's own models, or for one provider's models. */
+export const ListPricesInputSchema = z.object({ providerId: uuid.nullable().optional() });
 
 // --- Reviews (M3) -------------------------------------------------------------
 

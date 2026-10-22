@@ -3,9 +3,10 @@
 // one. A key pasted here goes write-only into the company's secrets (PUT /secrets/:name) before the provider
 // is saved with that name; it is the only value this page ever takes, and it is never shown again.
 import { Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type {
   ModelFamily,
+  ModelPriceInput,
   ModelProviderInput,
   ProviderKind,
   ProviderModel,
@@ -31,11 +32,14 @@ import type {
   CompanySecret,
   CredentialState,
   Features,
+  ListPricesResult,
+  ModelPrice,
   ModelProvider,
   ModelProviders,
 } from "../api/types.ts";
 import { Button, Field, Pill, Tip } from "../components/ui.tsx";
-import { actorInfo, relativeTime } from "../lib/format.ts";
+import { actorInfo, relativeTime, toMinor } from "../lib/format.ts";
+import { money } from "./CostsView.tsx";
 
 export interface ModelsPanelProps {
   data: Pick<CompanyData, "teammates" | "members" | "events">;
@@ -53,6 +57,12 @@ export interface ModelsPanelProps {
   remove(id: string): Promise<void>;
   initial?: ModelProviders;
   initialSecrets?: CompanySecret[];
+  /** The company's prices: a provider's are the ones with its id. */
+  loadPrices(): Promise<ModelPrice[]>;
+  savePrice(input: ModelPriceInput): Promise<ModelPrice>;
+  /** List prices for one provider's Claude models: Anthropic's at the list, Bedrock's as estimates. */
+  fillListPrices(providerId: string): Promise<ListPricesResult>;
+  initialPrices?: ModelPrice[];
 }
 
 /** A provider's short name from what people call it: acme-azure from "Acme Azure (prod)". */
@@ -132,6 +142,45 @@ export function checkLine(p: Pick<ModelProvider, "lastCheck">, now: number = Dat
   return c.ok
     ? `Checked ${relativeTime(c.at, now)}: key works, ${c.listed} model${c.listed === 1 ? "" : "s"}`
     : `Checked ${relativeTime(c.at, now)}: ${c.detail ?? "no answer"}`;
+}
+
+/** A price per million tokens, in and out, in a line. */
+function perMillion(p: Pick<ModelPrice, "inputPerMillion" | "outputPerMillion" | "currency">): string {
+  return `${money(p.inputPerMillion, p.currency)} in · ${money(p.outputPerMillion, p.currency)} out per million`;
+}
+
+/**
+ * What a model through a provider costs, in a line, in the order the board prices it: the provider's own price;
+ * else this board's own price for the model; else, for an Anthropic provider, Anthropic's list price (when the
+ * company's prices are in its currency, USD); else none yet.
+ */
+export function modelPriceLine(
+  provider: Pick<ModelProvider, "id" | "kind">,
+  model: string,
+  prices: readonly ModelPrice[],
+): string {
+  const own = prices.find((x) => x.providerId === provider.id && x.model === model);
+  if (own) return `${perMillion(own)}${own.estimate ? " · an estimate: check your AWS price" : ""}`;
+  const board = prices.find((x) => x.providerId === null && x.model === model);
+  if (board) return `${perMillion(board)}, this board's own price for the model`;
+  if (provider.kind === "anthropic") return "Anthropic's list price, while your prices are in USD";
+  return "No price yet";
+}
+
+/** What filling list prices did, in a sentence or two. */
+export function listFillLine(kind: ProviderKind, r: ListPricesResult): string {
+  const parts = [
+    r.added.length
+      ? kind === "bedrock"
+        ? `Priced ${r.added.join(", ")} at Anthropic's list price, as estimates: check your AWS price.`
+        : `Priced ${r.added.join(", ")} at Anthropic's list price.`
+      : "Every Claude model here with a list price already has a price.",
+  ];
+  if (r.unknown.length)
+    parts.push(
+      `No list price for ${r.unknown.join(", ")}: set ${r.unknown.length === 1 ? "it" : "them"} by hand.`,
+    );
+  return parts.join(" ");
 }
 
 /** What the form asks for under each kind, for a person who has not done this before. */
@@ -558,13 +607,86 @@ function AddModelForm(p: {
   );
 }
 
+/** One model's price on a provider: per million tokens, in the company's one currency. */
+function PriceEditor(p: {
+  model: string;
+  currency: string;
+  /** The company has no price yet, so this one sets its currency. */
+  firstPrice: boolean;
+  initial: ModelPrice | undefined;
+  onSave(input: Omit<ModelPriceInput, "model" | "providerId">): Promise<boolean>;
+}) {
+  const major = (minor: number | null | undefined) => (minor == null ? "" : (minor / 100).toFixed(2));
+  const [currency, setCurrency] = useState(p.currency);
+  const [input, setInput] = useState(major(p.initial?.inputPerMillion));
+  const [output, setOutput] = useState(major(p.initial?.outputPerMillion));
+  const [cacheRead, setCacheRead] = useState(major(p.initial?.cacheReadPerMillion));
+  const [cacheWrite, setCacheWrite] = useState(major(p.initial?.cacheWritePerMillion));
+  const [busy, setBusy] = useState(false);
+  const field = (label: string, value: string, set: (v: string) => void) => (
+    <Field label={label}>
+      <input
+        aria-label={`${label} for ${p.model}`}
+        className="mono"
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => set(e.target.value)}
+        style={{ width: 90 }}
+      />
+    </Field>
+  );
+  return (
+    <div className="flex flex-wrap items-end gap-2">
+      {p.firstPrice ? (
+        <Field label="Currency">
+          <input
+            aria-label="Currency"
+            className="mono"
+            value={currency}
+            maxLength={3}
+            onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+            style={{ width: 60 }}
+          />
+        </Field>
+      ) : null}
+      {field(`Input (${currency})`, input, setInput)}
+      {field(`Output (${currency})`, output, setOutput)}
+      {field("Cache read", cacheRead, setCacheRead)}
+      {field("Cache write", cacheWrite, setCacheWrite)}
+      <Button
+        size="sm"
+        disabled={busy || currency.length !== 3 || (toMinor(input) === null && toMinor(output) === null)}
+        onClick={async () => {
+          setBusy(true);
+          await p.onSave({
+            currency,
+            inputPerMillion: toMinor(input),
+            outputPerMillion: toMinor(output),
+            cacheReadPerMillion: toMinor(cacheRead),
+            cacheWritePerMillion: toMinor(cacheWrite),
+          });
+          setBusy(false);
+        }}
+      >
+        Save price
+      </Button>
+    </div>
+  );
+}
+
 function ProviderCard(p: {
   provider: ModelProvider;
   canEdit: boolean;
   data: ModelsPanelProps["data"];
+  prices: ModelPrice[];
   onUpdate(input: UpdateModelProviderInput): Promise<boolean>;
   onRemove(): Promise<boolean>;
+  onSavePrice(input: ModelPriceInput): Promise<boolean>;
+  onFillList(): Promise<ListPricesResult | null>;
 }) {
+  const [pricing, setPricing] = useState<string | null>(null);
+  const [filled, setFilled] = useState<string | null>(null);
+  const currency = p.prices[0]?.currency ?? "GBP";
   const v = p.provider;
   const role = credentialRole(v.kind);
   const keyName = v.credentials[role];
@@ -615,33 +737,86 @@ function ProviderCard(p: {
         <table className="text-[13px]" style={{ borderCollapse: "collapse" }}>
           <tbody>
             {v.models.map((m) => (
-              <tr key={m.id} style={{ borderTop: "1px solid var(--border)" }}>
-                <td className="mono py-1 pr-3">{m.id}</td>
-                <td className="py-1 pr-3">{m.label ?? ""}</td>
-                <td className="hint py-1 pr-3">{familyName(m.family)}</td>
-                <td className="hint py-1 pr-3">{engineLine(v.kind, m.family)}</td>
-                <td className="py-1 text-right">
-                  {p.canEdit && !v.archivedAt ? (
-                    <Tip text="Take it off the list">
-                      <Button
-                        size="sm"
-                        aria-label={`Take ${m.id} off the list`}
-                        onClick={() =>
-                          void p.onUpdate({ models: given(v.models.filter((x) => x.id !== m.id)) })
-                        }
-                      >
-                        <Trash2 size={14} />
-                      </Button>
-                    </Tip>
-                  ) : null}
-                </td>
-              </tr>
+              <Fragment key={m.id}>
+                <tr style={{ borderTop: "1px solid var(--border)" }}>
+                  <td className="mono py-1 pr-3">{m.id}</td>
+                  <td className="py-1 pr-3">{m.label ?? ""}</td>
+                  <td className="hint py-1 pr-3">{familyName(m.family)}</td>
+                  <td className="hint py-1 pr-3">{engineLine(v.kind, m.family)}</td>
+                  <td className="hint py-1 pr-3">
+                    {modelPriceLine(v, m.id, p.prices)}
+                    {p.canEdit && !v.archivedAt ? (
+                      <>
+                        {" "}
+                        <Button
+                          size="sm"
+                          aria-label={`Set the price of ${m.id}`}
+                          onClick={() => setPricing(pricing === m.id ? null : m.id)}
+                        >
+                          {pricing === m.id ? "Close" : "Set price"}
+                        </Button>
+                      </>
+                    ) : null}
+                  </td>
+                  <td className="py-1 text-right">
+                    {p.canEdit && !v.archivedAt ? (
+                      <Tip text="Take it off the list">
+                        <Button
+                          size="sm"
+                          aria-label={`Take ${m.id} off the list`}
+                          onClick={() =>
+                            void p.onUpdate({ models: given(v.models.filter((x) => x.id !== m.id)) })
+                          }
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      </Tip>
+                    ) : null}
+                  </td>
+                </tr>
+                {pricing === m.id ? (
+                  <tr>
+                    <td colSpan={6} className="pb-2">
+                      <PriceEditor
+                        model={m.id}
+                        currency={currency}
+                        firstPrice={!p.prices.length}
+                        initial={p.prices.find((x) => x.providerId === v.id && x.model === m.id)}
+                        onSave={async (price) => {
+                          if (await p.onSavePrice({ ...price, model: m.id, providerId: v.id }))
+                            setPricing(null);
+                          return true;
+                        }}
+                      />
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
             ))}
           </tbody>
         </table>
       ) : (
         <span className="hint">No models listed yet.</span>
       )}
+      {p.canEdit && !v.archivedAt && (v.kind === "anthropic" || v.kind === "bedrock") ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            onClick={async () => {
+              const r = await p.onFillList();
+              if (r) setFilled(listFillLine(v.kind, r));
+            }}
+          >
+            Fill list prices
+          </Button>
+          <span className="hint">
+            {filled ??
+              (v.kind === "bedrock"
+                ? "Anthropic's list prices for the Claude models here, as estimates: AWS sets its own."
+                : "Anthropic's list prices, in USD, for the models here without one.")}
+          </span>
+        </div>
+      ) : null}
       {p.canEdit && !v.archivedAt ? (
         <AddModelForm
           kind={v.kind}
@@ -660,7 +835,11 @@ export function ModelsPanel(p: ModelsPanelProps) {
   const [secrets, setSecrets] = useState<CompanySecret[] | null>(p.initialSecrets ?? null);
   const [secretsFailed, setSecretsFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const reload = async () => setInfo(await p.load());
+  const [prices, setPrices] = useState<ModelPrice[]>(p.initialPrices ?? []);
+  const reload = async () => {
+    setInfo(await p.load());
+    setPrices(await p.loadPrices().catch(() => prices));
+  };
   // Loaded again when a provider, a secret or a price changes, here or anywhere: a change someone else made
   // is what the next change builds on.
   const changedSeq =
@@ -729,8 +908,15 @@ export function ModelsPanel(p: ModelsPanelProps) {
           provider={v}
           canEdit={p.canEdit}
           data={p.data}
+          prices={prices}
           onUpdate={(input) => change(() => p.update(v.id, input))}
           onRemove={() => change(() => p.remove(v.id))}
+          onSavePrice={(input) => change(() => p.savePrice(input))}
+          onFillList={async () => {
+            let r: ListPricesResult | null = null;
+            await change(async () => (r = await p.fillListPrices(v.id)));
+            return r;
+          }}
         />
       ))}
       {p.canEdit && info.offered.kinds.length ? (
@@ -759,8 +945,11 @@ export function ModelsPanel(p: ModelsPanelProps) {
               provider={v}
               canEdit={p.canEdit}
               data={p.data}
+              prices={prices}
               onUpdate={(input) => change(() => p.update(v.id, input))}
               onRemove={() => change(() => p.remove(v.id))}
+              onSavePrice={(input) => change(() => p.savePrice(input))}
+              onFillList={async () => null}
             />
           ))}
         </>

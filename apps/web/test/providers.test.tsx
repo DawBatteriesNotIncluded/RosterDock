@@ -4,7 +4,7 @@ import type { EventRecord, EventType, ModelProviderInput } from "@rosterdock/sha
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { httpClient } from "../src/api/client.ts";
-import type { ModelProvider, ModelProviders } from "../src/api/types.ts";
+import type { ModelPrice, ModelProvider, ModelProviders } from "../src/api/types.ts";
 import { TooltipProvider } from "../src/components/ui/tooltip.tsx";
 import { describeEvent } from "../src/lib/format.ts";
 import {
@@ -17,6 +17,8 @@ import {
   formName,
   formProblem,
   formRequest,
+  listFillLine,
+  modelPriceLine,
   providerSlug,
   submitForm,
   suggestedSecretName,
@@ -117,6 +119,24 @@ const providers: ModelProviders = {
     }),
   ],
 };
+const price = (over: Partial<ModelPrice>): ModelPrice => ({
+  id: "pr",
+  model: "claude-opus-5-5",
+  providerId: "p1",
+  estimate: false,
+  currency: "USD",
+  inputPerMillion: 400,
+  outputPerMillion: 2000,
+  cacheReadPerMillion: 40,
+  cacheWritePerMillion: 500,
+  seatPriceMonth: null,
+  updatedAt: "2026-10-22T10:00:00.000Z",
+  ...over,
+});
+const prices: ModelPrice[] = [
+  price({ id: "pr1" }),
+  price({ id: "pr2", model: "qwen3-coder", providerId: null, inputPerMillion: 10, outputPerMillion: 20 }),
+];
 const panel = (over: Partial<ModelsPanelProps> = {}) =>
   renderToString(
     <TooltipProvider>
@@ -133,6 +153,10 @@ const panel = (over: Partial<ModelsPanelProps> = {}) =>
         remove={async () => undefined}
         initial={providers}
         initialSecrets={[]}
+        loadPrices={async () => prices}
+        savePrice={async () => prices[0]!}
+        fillListPrices={async () => ({ added: [], unknown: [] })}
+        initialPrices={prices}
         {...over}
       />
     </TooltipProvider>,
@@ -352,6 +376,33 @@ describe("Settings > Models", () => {
     expect(formName(form({ name: null, label: "Acme Azure" }))).toBe("acme-azure");
   });
 
+  it("says what each model costs through its provider, in the order the board prices it", () => {
+    const anthropic = { id: "p1", kind: "anthropic" as const };
+    const local = { id: "p2", kind: "openai_compatible" as const };
+    expect(modelPriceLine(anthropic, "claude-opus-5-5", prices)).toBe(
+      "US$4.00 in · US$20.00 out per million",
+    );
+    // None of its own: the board's own price for the model, then Anthropic's list for an Anthropic provider.
+    expect(modelPriceLine(local, "qwen3-coder", prices)).toBe(
+      "US$0.10 in · US$0.20 out per million, this board's own price for the model",
+    );
+    expect(modelPriceLine(anthropic, "claude-sonnet-5-5", prices)).toBe(
+      "Anthropic's list price, while your prices are in USD",
+    );
+    expect(modelPriceLine(local, "llama", prices)).toBe("No price yet");
+    expect(
+      modelPriceLine({ id: "p3", kind: "bedrock" }, "us.anthropic.x", [
+        price({ providerId: "p3", model: "us.anthropic.x", estimate: true }),
+      ]),
+    ).toBe("US$4.00 in · US$20.00 out per million · an estimate: check your AWS price");
+    expect(listFillLine("bedrock", { added: ["us.anthropic.x"], unknown: ["us.anthropic.y"] })).toBe(
+      "Priced us.anthropic.x at Anthropic's list price, as estimates: check your AWS price. No list price for us.anthropic.y: set it by hand.",
+    );
+    expect(listFillLine("anthropic", { added: [], unknown: [] })).toBe(
+      "Every Claude model here with a list price already has a price.",
+    );
+  });
+
   it("shows each provider by name, its key's source, its models and what the operator turned off", () => {
     const html = panel();
     expect(html).toContain("Acme Anthropic");
@@ -374,6 +425,11 @@ describe("Settings > Models", () => {
     // Bedrock is not offered here: the form says so in words, and offers no Bedrock choice.
     expect(html).toContain("Turned off by your operator: Amazon Bedrock.");
     expect(html).not.toMatch(/<button[^>]*>Amazon Bedrock<\/button>/);
+    // Prices on each model row; list prices only where Anthropic's list applies; no price editor open.
+    expect(html).toContain("US$4.00 in · US$20.00 out per million");
+    expect(html.match(/>Fill list prices</g)).toHaveLength(1);
+    expect(html.match(/>Set price</g)).toHaveLength(2);
+    expect(html).not.toContain("Save price");
     // Tokens only, so both themes hold.
     expect(html).not.toMatch(/#[0-9a-f]{6}\b/i);
   });

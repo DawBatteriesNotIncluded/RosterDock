@@ -658,6 +658,15 @@ export function describeEvent(
   }
 }
 
+/** "3.00" → 300 minor units; blank → null. */
+export function toMinor(major: string): number | null {
+  const t = major.trim();
+  if (!t) return null;
+  const n = Number(t);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100);
+}
+
 /** A size in bytes as people read it: 812 B, 34 KB, 1.2 MB. */
 export function byteSize(n: number): string {
   if (n < 1024) return `${n} B`;

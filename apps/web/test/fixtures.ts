@@ -593,6 +593,18 @@ export const monthlyFixture: MonthlyReport = {
   byModel: [
     {
       model: "claude-sonnet-5",
+      providerId: null,
+      provider: "This board\'s own models",
+      tokens: { input: 1_500_000, output: 60_000, cacheRead: 100_000, cacheWrite: 0, total: 1_660_000 },
+      costMinorUnits: 41_250,
+      runs: 9,
+      calls: 0,
+    },
+  ],
+  byProvider: [
+    {
+      id: null,
+      name: "This board's own models",
       tokens: { input: 1_500_000, output: 60_000, cacheRead: 100_000, cacheWrite: 0, total: 1_660_000 },
       costMinorUnits: 41_250,
       runs: 9,
@@ -705,6 +717,8 @@ export const costFixture: CostReport = {
   byModel: [
     {
       model: "claude-sonnet-5",
+      providerId: null,
+      provider: "This board\'s own models",
       teammates: 4,
       tokens: tokens(1_000_000, 70_000, 330_000),
       costMinorUnits: 34_750,
@@ -713,10 +727,23 @@ export const costFixture: CostReport = {
     },
     {
       model: "claude-opus-5",
+      providerId: null,
+      provider: "This board\'s own models",
       teammates: 1,
       tokens: tokens(200_000, 20_000, 70_000),
       costMinorUnits: 6_500,
       runs: 2,
+      calls: 3,
+    },
+  ],
+  byProvider: [
+    {
+      id: null,
+      name: "This board's own models",
+      kind: null,
+      tokens: tokens(1_200_000, 90_000, 400_000),
+      costMinorUnits: 41_250,
+      runs: 9,
       calls: 3,
     },
   ],
@@ -733,6 +760,8 @@ export const priceFixture: ModelPrice[] = [
   {
     id: id(60),
     model: "claude-sonnet-5",
+    providerId: null,
+    estimate: false,
     currency: "GBP",
     inputPerMillion: 240,
     outputPerMillion: 1200,
@@ -744,6 +773,8 @@ export const priceFixture: ModelPrice[] = [
   {
     id: id(61),
     model: "claude_code",
+    providerId: null,
+    estimate: false,
     currency: "GBP",
     inputPerMillion: null,
     outputPerMillion: null,

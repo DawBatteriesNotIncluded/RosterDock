@@ -219,9 +219,10 @@ export function MonthlyView(p: {
           <table className="costs">
             <tbody>
               {r.byModel.map((m) => (
-                <tr key={m.model}>
+                <tr key={`${m.model} ${m.providerId ?? ""}`}>
                   <td>
                     <span className="mono font-semibold">{modelLabel(m.model)}</span>
+                    {m.providerId ? <span className="hint"> · {m.provider}</span> : null}
                     <div className="hint">{fmtTokens(m.tokens.total)} tokens</div>
                   </td>
                   <td className="mono text-right">{money(m.costMinorUnits, cur)}</td>
@@ -233,8 +234,8 @@ export function MonthlyView(p: {
       </div>
       <span className="hint">
         Priced with the table as it stands now. Seats are the monthly seat price of every teammate on the
-        roster, not pro-rated. The chargeback CSV is one line per project; the usage CSV is one line per run
-        or planning call.
+        roster, not pro-rated. The chargeback CSV is one line per project and provider; the usage CSV is one
+        line per run or planning call.
       </span>
     </div>
   );
@@ -492,9 +493,10 @@ export function CostsView(p: CostsViewProps) {
                 <tbody>
                   {mode === "api"
                     ? report.byModel.map((m) => (
-                        <tr key={m.model}>
+                        <tr key={`${m.model} ${m.providerId ?? ""}`}>
                           <td>
                             <span className="font-semibold">{modelLabel(m.model)}</span>
+                            {m.providerId ? <span className="hint"> · {m.provider}</span> : null}
                             <div className="hint">
                               {m.teammates} teammate{m.teammates === 1 ? "" : "s"} ·{" "}
                               {fmtTokens(m.tokens.total)} tokens · {workCount(m)}
@@ -528,6 +530,27 @@ export function CostsView(p: CostsViewProps) {
               </table>
             </div>
           </div>
+
+          {report.byProvider.some((x) => x.id !== null) ? (
+            <div className="card overflow-hidden p-0">
+              <div className="eyebrow border-b border-[var(--border-soft)] px-[18px] py-3.5">By provider</div>
+              <table className="costs">
+                <tbody>
+                  {report.byProvider.map((x) => (
+                    <tr key={x.id ?? "board"}>
+                      <td>
+                        <span className="font-semibold">{x.name}</span>
+                        <div className="hint">
+                          {fmtTokens(x.tokens.total)} tokens · {workCount(x)}
+                        </div>
+                      </td>
+                      <td className="mono text-right">{money(x.costMinorUnits, cur)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
 
           <div className="card overflow-hidden p-0">
             <div className="flex items-center justify-between border-b border-[var(--border-soft)] px-[18px] py-3.5">

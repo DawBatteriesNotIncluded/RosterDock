@@ -830,6 +830,10 @@ export interface Budget {
 export interface ModelPrice {
   id: string;
   model: string;
+  /** The company provider whose price it is; null: the board's own models. */
+  providerId: string | null;
+  /** Filled from Anthropic's list for a Bedrock Claude model: check it against the AWS bill. */
+  estimate: boolean;
   currency: string;
   inputPerMillion: number | null;
   outputPerMillion: number | null;
@@ -887,7 +891,9 @@ export interface CostReport {
     departmentName: string | null;
     seatMinorUnits: number;
   })[];
-  byModel: (CostLine & { model: string; teammates: number })[];
+  /** By model and the provider it went through (null: the board's own models). */
+  byModel: (CostLine & { model: string; providerId: string | null; provider: string; teammates: number })[];
+  byProvider: (CostLine & { id: string | null; name: string; kind: ProviderKind | null })[];
   bySeat: { key: string; teammates: number; seatMinorUnits: number }[];
   daily: { day: string; tokens: number; costMinorUnits: number | null }[];
   prices: number;
@@ -911,7 +917,8 @@ export interface MonthlyReport {
     engine: string;
     seatMinorUnits: number;
   })[];
-  byModel: (CostLine & { model: string })[];
+  byModel: (CostLine & { model: string; providerId: string | null; provider: string })[];
+  byProvider: (CostLine & { id: string | null; name: string })[];
   daily: { day: string; tokens: number; costMinorUnits: number | null }[];
 }
 

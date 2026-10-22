@@ -552,6 +552,9 @@ export function App() {
         create: (input) => run(() => client.createModelProvider(cid, input), `${input.label} added.`),
         update: (id, input) => run(() => client.updateModelProvider(cid, id, input)),
         remove: (id) => run(() => client.deleteModelProvider(cid, id), "Provider removed."),
+        loadPrices: () => client.prices(cid),
+        savePrice: (input) => run(() => client.savePrice(cid, input), "Price saved."),
+        fillListPrices: (providerId) => run(() => client.fillListPrices(cid, providerId)),
       }}
       connections={{
         loadCatalog: () => client.catalog(),

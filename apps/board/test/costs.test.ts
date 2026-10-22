@@ -197,7 +197,15 @@ describe("cost report", () => {
     const month = (await api.get(`${base}/costs/monthly`)).body;
     expect(month.byModel.map((m: any) => m.model)).toEqual(["stub"]);
     expect(month.byTeammate.find((m: any) => m.id === stubby.id).model).toBe("stub");
-    // Filling list prices asks nobody to price the stub.
+    // Filling list prices asks nobody to price the stub. List prices are in USD, and this company's are in
+    // GBP: a company keeps one currency, so the fill is refused, and adds nothing.
+    const refused = await api.post(`${base}/prices/list`, {});
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe(
+      "list prices are in USD, and this company's prices are in GBP; a company keeps one currency, so type these prices in GBP",
+    );
+    expect((await api.get(`${base}/prices`)).body.map((p: any) => p.model)).toEqual(["claude-sonnet-5-5"]);
+    await api.del(`${base}/prices/${(await api.get(`${base}/prices`)).body[0].id}`);
     expect((await api.post(`${base}/prices/list`, {})).body.unknown).not.toContain("stub");
   });
 

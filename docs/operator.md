@@ -45,7 +45,10 @@ board, Postgres and, by default, public HTTPS for the model API and the git host
   answered, and the project, department and goal they served when made; priced from the same table, a
   line each in the usage CSV (`kind` plan, re-plan or org proposal, beside run), and against budgets,
   which they also alert. A spent budget stops runs at dispatch, not his planning. On upgrade, what goals
-  and org proposals had already spent planning is carried over, dated when each goal was planned.
+  and org proposals had already spent planning is carried over, dated when each goal was planned. A
+  company keeps its prices in one currency: a price in another is refused, and so are list prices (in USD)
+  for a company that prices in another. Both CSVs end with a `provider` column, and the chargeback CSV has
+  a line per project and provider (Company model providers, below).
 - **Drift.** A teammate whose runs suddenly cost or take far more than their own usual, or whose work is
   sent back far more often, raises one alert per day: in Activity, in the notifications, on their page.
   Nothing stops; open their recent runs and reviews and decide. What counts as "far more" is the
@@ -296,6 +299,10 @@ the company sees them by name.
   public, or private where `board.privateDestinations` lists it (Private destinations, above), and plain http
   only to a listed destination. An Azure private endpoint is a name that resolves to a private address, so it
   needs an entry too. Anthropic, OpenAI and Bedrock have fixed hosts, or hosts taken from the region.
+- A price belongs to a provider and a model, or to the board's own models (Settings > Prices and budgets).
+  Tokens through a provider with no price of its own take the board's own price for the model, then, for an
+  Anthropic provider, Anthropic's list price while the company prices in USD; else they have no price yet.
+  Costs says what went through each provider. A provider bills per token, so it has no seat price.
 - Teammates do not think with a company's provider yet: every run and every plan uses the board's own models.
   Until they do, leaving `board` out of the list changes nothing for runs and plans; it only shows companies
   that the board's own models are not lent.
