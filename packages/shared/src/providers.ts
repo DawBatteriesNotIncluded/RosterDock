@@ -7,6 +7,7 @@
 import { z } from "zod";
 import {
   azureEndpoint,
+  BEDROCK_OPENAI_ID_RE,
   BEDROCK_REGION_RE,
   COMPATIBLE_AUTH_HEADERS,
   compatibleEndpoint,
@@ -23,9 +24,6 @@ import {
 import { modelId, SecretNameSchema } from "./schemas.js";
 
 export * from "./provider-kinds.js";
-
-/** A Bedrock OpenAI model Runtime takes: a cross-Region inference profile id, or an inference profile's ARN. */
-const BEDROCK_OPENAI_ID_RE = /^(?:(?:global|[a-z]{2,4})\.openai\.|arn:aws[a-z-]*:bedrock:)/;
 
 /** A provider's name: short, lowercase, unique in the company. */
 const providerName = z

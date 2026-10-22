@@ -20,6 +20,7 @@ import {
   listFillLine,
   modelPriceLine,
   providerSlug,
+  removeLine,
   submitForm,
   suggestedSecretName,
   whereLine,
@@ -149,6 +150,7 @@ const panel = (over: Partial<ModelsPanelProps> = {}) =>
         load={async () => providers}
         loadSecrets={async () => []}
         setSecret={async () => undefined}
+        replaceSecret={async () => undefined}
         checkNew={async () => ({ ok: true })}
         create={async () => providers.providers[0]!}
         update={async () => providers.providers[0]!}
@@ -441,7 +443,11 @@ describe("Settings > Models", () => {
     // An archived provider's models stay listed, and nothing on them can be changed.
     expect(html).toContain("us.anthropic.claude-old");
     expect(html).not.toContain("Take us.anthropic.claude-old off the list");
-    expect(html).toContain("Take claude-opus-5-5 off the list");
+    expect(html).toContain("Take claude-opus-5-5 off the list of Acme Anthropic");
+    // Each card's controls say whose they are, and removing asks first.
+    expect(html).toContain('aria-label="Switch off Acme Anthropic"');
+    expect(html).toContain('aria-label="Remove Acme Anthropic"');
+    expect(html).not.toContain("Remove for good");
     expect(html).toContain("Turned off by your operator");
     expect(html).toContain("not set yet");
     // Bedrock is not offered here: the form says so in words, and offers no Bedrock choice.
@@ -465,9 +471,11 @@ describe("Settings > Models", () => {
     expect(fields.length).toBe(html.match(/<(?:input|select)\b/g)?.length);
     expect(new Set(fields)).toEqual(
       new Set([
-        "Model id",
-        "Whose model",
-        "Model label",
+        "Model id for Acme Anthropic",
+        "Model label for Acme Anthropic",
+        "Model id for Local vLLM",
+        "Whose model, for Local vLLM",
+        "Model label for Local vLLM",
         "Label",
         "Name",
         "How the key is given",
@@ -481,11 +489,33 @@ describe("Settings > Models", () => {
     const storeless = panel({ features: { oauth: false, objectStore: false } });
     expect(passwords(storeless)).toBe(0);
     expect(storeless).not.toContain("Paste a key");
+    // And it says so, with what an operator can do, instead of a picker with nothing in it.
+    expect(storeless).not.toContain("Use a saved secret");
+    expect(storeless).toContain("This board keeps no company secrets, and its operator shares no names");
+    expect(storeless).toContain("board.oauth.enabled");
+    const sharing = panel({
+      features: { oauth: false, objectStore: false, sharedEnvNames: ["SHARED_MODELS_KEY"] },
+    });
+    expect(sharing).toContain("This board keeps no company secrets, so a key cannot be pasted here");
+    expect(sharing).toContain("Use a name your operator shares");
     // Someone who may not manage providers gets no form at all.
     const viewer = panel({ canEdit: false });
     expect(viewer).not.toContain("<input");
     expect(viewer).not.toContain("Add a provider");
     expect(viewer).toContain("Acme Anthropic");
+  });
+
+  it("says what removing takes and leaves, and never makes a name from a label that looks like a key", () => {
+    expect(removeLine(providers.providers[0]!)).toBe(
+      "Remove Acme Anthropic? Its settings and its list of models go, for good. Its key stays in this company's secrets as MODELS_ACME_KEY. Archive it instead to keep it all, unused.",
+    );
+    expect(removeLine({ ...providers.providers[1]!, credentials: {} })).not.toContain("key stays");
+    // A Mistral-style key pasted into Label: nothing is made from it, and nothing is sent.
+    const key = ["mR7", "xQ2pL9", "vN4kT8", "wZ1sJ5", "bH3cY6", "dG0"].join("");
+    expect(formName(form({ label: key }))).toBe("");
+    expect(formProblem(form({ label: key }), nothingTaken)).toBe(
+      "That label looks like a key. The key goes in its own field below.",
+    );
   });
 });
 

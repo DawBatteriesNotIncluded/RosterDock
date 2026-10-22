@@ -21,6 +21,7 @@ import {
   FAMILY_LABELS,
   familiesFor,
   labelLooksLikeKey,
+  modelIdProblem,
   MAX_PROVIDER_LABEL,
   PROVIDER_KIND_LABELS,
   PROVIDER_KINDS,
@@ -37,7 +38,7 @@ import type {
   ModelProvider,
   ModelProviders,
 } from "../api/types.ts";
-import { Button, Field, Pill, Tip } from "../components/ui.tsx";
+import { Button, Field, Pill, Segs, Tip } from "../components/ui.tsx";
 import { actorInfo, relativeTime, toMinor } from "../lib/format.ts";
 import { money } from "./CostsView.tsx";
 
@@ -50,6 +51,8 @@ export interface ModelsPanelProps {
   loadSecrets(): Promise<CompanySecret[]>;
   /** Sets a pasted key under a new name only: never over a value already set (the board refuses with 409). */
   setSecret(name: string, value: string): Promise<unknown>;
+  /** Sets or replaces the value under a provider's key name: a key not set yet, or one rotated. */
+  replaceSecret(name: string, value: string): Promise<unknown>;
   /** Would the board add this provider? Asked before a key is set, so a refusal leaves no key behind. */
   checkNew(input: ModelProviderInput): Promise<unknown>;
   create(input: ModelProviderInput): Promise<ModelProvider>;
@@ -227,7 +230,9 @@ export interface ProviderForm {
 
 /** The provider's name: as typed, or made from the label. */
 export function formName(f: Pick<ProviderForm, "name" | "label">): string {
-  return f.name === null ? providerSlug(f.label) : f.name.trim();
+  if (f.name !== null) return f.name.trim();
+  // Never made from a label that looks like a key: the key would be on the page, in the name and the key's name.
+  return labelLooksLikeKey(f.label) ? "" : providerSlug(f.label);
 }
 
 /** The name a pasted key goes under, from the provider's name. */
@@ -362,64 +367,68 @@ function AddProviderForm(p: {
   secretsFailed?: boolean;
   /** Every provider, archived ones included. */
   providers: ModelProvider[];
-  /** True once saved; false leaves the form as it was, with the reason shown above. */
-  onSubmit(f: ProviderForm, taken: Parameters<typeof formProblem>[1]): Promise<boolean>;
+  /** Null once saved; else why not, shown under the form, which stays as it was. */
+  onSubmit(f: ProviderForm, taken: Parameters<typeof formProblem>[1]): Promise<string | null>;
 }) {
   const canPaste = p.features.oauth;
   const shared = p.features.sharedEnvNames ?? [];
+  const saved = p.secrets ?? [];
+  // How a key may be given here: pasted only with a secret store; a saved secret only when there is one.
+  const choicesFor = (kind: ProviderKind): { value: CredentialChoice; label: string }[] => [
+    ...(canPaste ? [{ value: "paste" as const, label: "Paste a key" }] : []),
+    ...(canPaste || saved.length ? [{ value: "saved" as const, label: "Use a saved secret" }] : []),
+    ...(shared.length ? [{ value: "shared" as const, label: "Use a name your operator shares" }] : []),
+    ...(kind === "openai_compatible" ? [{ value: "none" as const, label: "No key" }] : []),
+  ];
+  const firstKind = PROVIDER_KINDS.find((k) => p.offered.includes(k)) ?? "anthropic";
   const blank: ProviderForm = {
-    kind: PROVIDER_KINDS.find((k) => p.offered.includes(k)) ?? "anthropic",
+    kind: firstKind,
     label: "",
     name: null,
     endpoint: "",
     region: "",
     authHeader: "authorization",
-    how: canPaste ? "paste" : "saved",
+    how: choicesFor(firstKind)[0]?.value ?? "saved",
     value: "",
     picked: "",
   };
   const [f, setForm] = useState<ProviderForm>(blank);
   const set = (change: Partial<ProviderForm>) => setForm((was) => ({ ...was, ...change }));
   const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const taken = { providers: p.providers, secrets: p.secrets, shared };
-  const problem = formProblem(f, taken);
+  const choices = choicesFor(f.kind);
+  const noKey = !choices.length;
+  const problem = noKey ? "missing" : formProblem(f, taken);
   const secretName = formSecretName(f);
   const turnedOff = PROVIDER_KINDS.filter((k) => !p.offered.includes(k));
-  const choices: { value: CredentialChoice; label: string }[] = [
-    ...(canPaste ? [{ value: "paste" as const, label: "Paste a key" }] : []),
-    { value: "saved", label: "Use a saved secret" },
-    ...(shared.length ? [{ value: "shared" as const, label: "Use a name your operator shares" }] : []),
-    ...(f.kind === "openai_compatible" ? [{ value: "none" as const, label: "No key" }] : []),
-  ];
   const save = async () => {
     setBusy(true);
-    const saved = await p.onSubmit(f, taken);
+    const why = await p.onSubmit(f, taken);
     setBusy(false);
-    if (saved) setForm({ ...blank, kind: f.kind });
+    setRefusal(why);
+    if (why === null) setForm({ ...blank, kind: f.kind });
   };
   return (
     <div className="card flex flex-col gap-3 px-[18px] py-4">
       <span className="font-semibold">Add a provider</span>
-      <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Kind">
-        {PROVIDER_KINDS.filter((k) => p.offered.includes(k)).map((k) => (
-          <Button
-            key={k}
-            size="sm"
-            role="radio"
-            aria-checked={f.kind === k}
-            {...(f.kind === k ? { variant: "primary" as const } : {})}
-            onClick={() =>
-              set({
-                kind: k,
-                picked: "",
-                ...(f.how === "none" && k !== "openai_compatible" ? { how: blank.how } : {}),
-              })
-            }
-          >
-            {PROVIDER_KIND_LABELS[k]}
-          </Button>
-        ))}
-      </div>
+      <Segs
+        label="Kind"
+        value={f.kind}
+        onChange={(k) =>
+          set({
+            kind: k,
+            picked: "",
+            ...(choicesFor(k).some((c) => c.value === f.how)
+              ? {}
+              : { how: choicesFor(k)[0]?.value ?? "saved" }),
+          })
+        }
+        options={PROVIDER_KINDS.filter((k) => p.offered.includes(k)).map((k) => ({
+          value: k,
+          label: PROVIDER_KIND_LABELS[k],
+        }))}
+      />
       {turnedOff.length ? (
         <span className="hint">
           Turned off by your operator: {turnedOff.map((k) => PROVIDER_KIND_LABELS[k]).join(", ")}.
@@ -518,7 +527,7 @@ function AddProviderForm(p: {
             />
           </Field>
         ) : f.how === "saved" ? (
-          <Field label="Secret" hint="Set under Settings > Connections > Secrets">
+          <Field label="Secret" {...(canPaste ? { hint: "Set under Settings > Connections > Secrets" } : {})}>
             <select aria-label="Secret" value={f.picked} onChange={(e) => set({ picked: e.target.value })}>
               <option value="">Pick one</option>
               {(p.secrets ?? []).map((s) => (
@@ -549,6 +558,20 @@ function AddProviderForm(p: {
         </Button>
       </div>
       {problem && problem !== "missing" ? <span className="hint">{problem}</span> : null}
+      {refusal ? (
+        <span className="text-[13px]" style={{ color: "var(--bad)" }}>
+          {refusal}
+        </span>
+      ) : null}
+      {!canPaste ? (
+        <span className="hint">
+          {noKey
+            ? "This board keeps no company secrets, and its operator shares no names, so there is no key to give a provider here yet. "
+            : "This board keeps no company secrets, so a key cannot be pasted here: use a name your operator shares. "}
+          An operator turns a secret store on (board.oauth.enabled on the chart), or shares a name with every
+          company (board.sharedEnvNames).
+        </span>
+      ) : null}
       {p.secretsFailed && f.how === "paste" ? (
         <span className="hint">
           This company&apos;s secrets could not be read, so a key cannot be pasted now. Reload the page, or
@@ -561,7 +584,11 @@ function AddProviderForm(p: {
 
 function AddModelForm(p: {
   kind: ProviderKind;
-  onAdd(id: string, family: ModelFamily, label: string): Promise<boolean>;
+  /** What people call the provider, so each card's fields have names of their own. */
+  of: string;
+  listed: readonly string[];
+  /** Null once added; else why not, shown beside the form. */
+  onAdd(id: string, family: ModelFamily, label: string): Promise<string | null>;
 }) {
   const families = familiesFor(p.kind);
   const [id, setId] = useState("");
@@ -569,51 +596,215 @@ function AddModelForm(p: {
   const [family, setFamily] = useState<ModelFamily>(p.kind === "openai_compatible" ? "other" : families[0]!);
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  // The board's own rules, said before anything is sent; a label that looks like a key is refused there too.
+  const problem = !id.trim()
+    ? null
+    : (modelIdProblem(p.kind, family, id, p.listed) ??
+      (label.trim() && labelLooksLikeKey(label) ? "That label looks like a key." : null));
   const add = async () => {
     setBusy(true);
-    const added = await p.onAdd(id.trim(), family, label.trim());
+    const why = await p.onAdd(id.trim(), family, label.trim());
     setBusy(false);
-    if (!added) return;
+    setRefusal(why);
+    if (why !== null) return;
     setId("");
     setLabel("");
   };
   return (
-    <div className="flex flex-wrap items-end gap-2">
-      <Field label="Add a model id" hint={p.kind === "azure_openai" ? "Your deployment's name" : undefined}>
-        <input
-          aria-label="Model id"
-          className="mono"
-          value={id}
-          onChange={(e) => setId(e.target.value)}
-          style={{ width: 240 }}
-        />
-      </Field>
-      {families.length > 1 ? (
-        <Field label="Whose model">
-          <select
-            aria-label="Whose model"
-            value={family}
-            onChange={(e) => setFamily(e.target.value as ModelFamily)}
-          >
-            {families.map((f) => (
-              <option key={f} value={f}>
-                {familyName(f)}
-              </option>
-            ))}
-          </select>
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label="Add a model id" hint={p.kind === "azure_openai" ? "Your deployment's name" : undefined}>
+          <input
+            aria-label={`Model id for ${p.of}`}
+            className="mono"
+            value={id}
+            onChange={(e) => setId(e.target.value)}
+            style={{ width: 240 }}
+          />
         </Field>
+        {families.length > 1 ? (
+          <Field label="Whose model">
+            <select
+              aria-label={`Whose model, for ${p.of}`}
+              value={family}
+              onChange={(e) => setFamily(e.target.value as ModelFamily)}
+            >
+              {families.map((f) => (
+                <option key={f} value={f}>
+                  {familyName(f)}
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : null}
+        <Field label="Label">
+          <input
+            aria-label={`Model label for ${p.of}`}
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            style={{ width: 160 }}
+          />
+        </Field>
+        <Button
+          size="sm"
+          aria-label={`Add the model to ${p.of}`}
+          disabled={!id.trim() || problem !== null || busy}
+          onClick={() => void add()}
+        >
+          Add
+        </Button>
+      </div>
+      {(problem ?? refusal) ? (
+        <span className="text-[13px]" style={problem ? {} : { color: "var(--bad)" }}>
+          {problem ?? refusal}
+        </span>
       ) : null}
-      <Field label="Label">
-        <input
-          aria-label="Model label"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          style={{ width: 160 }}
-        />
-      </Field>
-      <Button size="sm" disabled={!id.trim() || busy} onClick={() => void add()}>
-        Add
-      </Button>
+    </div>
+  );
+}
+
+/** What removing a provider takes and what it leaves, said before it goes. */
+export function removeLine(v: Pick<ModelProvider, "label" | "credentials" | "kind">): string {
+  const key = v.credentials[credentialRole(v.kind)];
+  return `Remove ${v.label}? Its settings and its list of models go, for good.${
+    key ? ` Its key stays in this company's secrets as ${key}.` : ""
+  } Archive it instead to keep it all, unused.`;
+}
+
+/** A provider's settings, changed: its label, where it is reached, and its key's name or value. */
+function EditProvider(p: {
+  provider: ModelProvider;
+  secrets: readonly CompanySecret[];
+  shared: readonly string[];
+  /** Whether a value may be set here: the board keeps a secret store. */
+  canSetValue: boolean;
+  onSave(input: UpdateModelProviderInput): Promise<string | null>;
+  /** Set or replace the value under the provider's key name: rotation, or a key not set yet. */
+  onSetValue(name: string, value: string): Promise<string | null>;
+  onClose(): void;
+}) {
+  const v = p.provider;
+  const role = credentialRole(v.kind);
+  const keyName = v.credentials[role] ?? "";
+  const [label, setLabel] = useState(v.label);
+  const [endpoint, setEndpoint] = useState(v.endpoint ?? "");
+  const [region, setRegion] = useState(v.region ?? "");
+  const [name, setName] = useState(keyName);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  const names = [...new Set([keyName, ...p.secrets.map((x) => x.name), ...p.shared].filter(Boolean))];
+  const problem =
+    labelLooksLikeKey(label) || !label.trim()
+      ? "A label is what people read, such as Acme Azure (prod)."
+      : v.kind === "azure_openai" && !azureEndpoint(endpoint)
+        ? "The resource's address is https://<resource>.openai.azure.com or https://<resource>.services.ai.azure.com."
+        : v.kind === "openai_compatible" && !compatibleEndpoint(endpoint)
+          ? "The base URL is http or https, with no key, password or query in it."
+          : v.kind === "bedrock" && !BEDROCK_REGION_RE.test(region.trim())
+            ? "The region is an AWS region, such as us-east-1."
+            : null;
+  const save = async () => {
+    setBusy(true);
+    const why = await p.onSave({
+      label: label.trim(),
+      ...(v.kind === "azure_openai" || v.kind === "openai_compatible" ? { endpoint: endpoint.trim() } : {}),
+      ...(v.kind === "bedrock" ? { region: region.trim() } : {}),
+      ...(name && name !== keyName ? { credentials: { [role]: name } } : {}),
+    });
+    setBusy(false);
+    setSaid(why);
+    if (why === null) p.onClose();
+  };
+  const setKey = async () => {
+    setBusy(true);
+    const why = await p.onSetValue(keyName, value);
+    setBusy(false);
+    setSaid(why);
+    if (why === null) setValue("");
+  };
+  return (
+    <div className="flex flex-col gap-2 border-t border-[var(--border)] pt-2">
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Label">
+          <input
+            aria-label={`Label of ${v.label}`}
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            style={{ width: 220 }}
+          />
+        </Field>
+        {v.kind === "azure_openai" || v.kind === "openai_compatible" ? (
+          <Field label={v.kind === "azure_openai" ? "Resource address" : "Base URL"}>
+            <input
+              aria-label={`Address of ${v.label}`}
+              className="mono"
+              value={endpoint}
+              onChange={(e) => setEndpoint(e.target.value)}
+              style={{ width: 280 }}
+            />
+          </Field>
+        ) : null}
+        {v.kind === "bedrock" ? (
+          <Field label="Region">
+            <input
+              aria-label={`Region of ${v.label}`}
+              className="mono"
+              value={region}
+              onChange={(e) => setRegion(e.target.value)}
+              style={{ width: 140 }}
+            />
+          </Field>
+        ) : null}
+        {keyName || names.length ? (
+          <Field label={role === "bearerToken" ? "Bedrock API key's name" : "Key's name"}>
+            <select
+              aria-label={`Key's name for ${v.label}`}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            >
+              {names.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : null}
+        <Button size="sm" variant="primary" disabled={busy || problem !== null} onClick={() => void save()}>
+          Save
+        </Button>
+        <Button size="sm" onClick={p.onClose}>
+          Cancel
+        </Button>
+      </div>
+      {keyName && p.canSetValue ? (
+        <div className="flex flex-wrap items-end gap-2">
+          <Field
+            label={`New value for ${keyName}`}
+            hint="Replaces the value under that name, for everything that names it, and is never shown again"
+          >
+            <input
+              aria-label={`New value for ${keyName}`}
+              type="password"
+              autoComplete="off"
+              className="mono"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              style={{ width: 260 }}
+            />
+          </Field>
+          <Button size="sm" disabled={busy || !value.trim()} onClick={() => void setKey()}>
+            Set the value
+          </Button>
+        </div>
+      ) : null}
+      {(problem ?? said) ? (
+        <span className="text-[13px]" style={problem ? {} : { color: "var(--bad)" }}>
+          {problem ?? said}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -706,11 +897,16 @@ function ProviderCard(p: {
   provider: ModelProvider;
   canEdit: boolean;
   data: ModelsPanelProps["data"];
+  secrets: readonly CompanySecret[];
+  shared: readonly string[];
+  canSetValue: boolean;
   prices: ModelPrice[];
-  onUpdate(input: UpdateModelProviderInput): Promise<boolean>;
-  onRemove(): Promise<boolean>;
-  onSavePrice(input: ModelPriceInput): Promise<boolean>;
-  onDeletePrice(priceId: string): Promise<boolean>;
+  /** Null once done; else why not, shown on the card. */
+  onUpdate(input: UpdateModelProviderInput): Promise<string | null>;
+  onRemove(): Promise<string | null>;
+  onSetValue(name: string, value: string): Promise<string | null>;
+  onSavePrice(input: ModelPriceInput): Promise<string | null>;
+  onDeletePrice(priceId: string): Promise<string | null>;
   onFillList(): Promise<ListPricesResult | null>;
 }) {
   const [pricing, setPricing] = useState<string | null>(null);
@@ -722,6 +918,10 @@ function ProviderCard(p: {
   const keyName = v.credentials[role];
   const state = v.credentialStates[role];
   const missing = !!keyName && (!state || state.state === "missing");
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const act = async (fn: () => Promise<string | null>) => setError(await fn());
   return (
     <div className="card flex flex-col gap-2 px-[18px] py-4" style={v.archivedAt ? { opacity: 0.7 } : {}}>
       <div className="flex flex-wrap items-center gap-2">
@@ -737,21 +937,54 @@ function ProviderCard(p: {
         {p.canEdit ? (
           <span className="ml-auto flex items-center gap-2">
             {!v.archivedAt ? (
-              <Button size="sm" onClick={() => void p.onUpdate({ enabled: !v.enabled })}>
+              <Button size="sm" aria-label={`Change ${v.label}`} onClick={() => setEditing(!editing)}>
+                {editing ? "Close" : "Change"}
+              </Button>
+            ) : null}
+            {!v.archivedAt ? (
+              <Button
+                size="sm"
+                aria-label={`${v.enabled ? "Switch off" : "Switch on"} ${v.label}`}
+                onClick={() => void act(() => p.onUpdate({ enabled: !v.enabled }))}
+              >
                 {v.enabled ? "Switch off" : "Switch on"}
               </Button>
             ) : null}
-            <Button size="sm" onClick={() => void p.onUpdate({ archived: !v.archivedAt })}>
+            <Button
+              size="sm"
+              aria-label={`${v.archivedAt ? "Bring back" : "Archive"} ${v.label}`}
+              onClick={() => void act(() => p.onUpdate({ archived: !v.archivedAt }))}
+            >
               {v.archivedAt ? "Bring back" : "Archive"}
             </Button>
             <Tip text="Remove">
-              <Button size="sm" aria-label={`Remove ${v.label}`} onClick={() => void p.onRemove()}>
+              <Button size="sm" aria-label={`Remove ${v.label}`} onClick={() => setConfirming(true)}>
                 <Trash2 size={14} />
               </Button>
             </Tip>
           </span>
         ) : null}
       </div>
+      {confirming ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px]">{removeLine(v)}</span>
+          <Button
+            size="sm"
+            variant="danger"
+            onClick={() => void act(p.onRemove).then(() => setConfirming(false))}
+          >
+            Remove for good
+          </Button>
+          <Button size="sm" onClick={() => setConfirming(false)}>
+            Keep it
+          </Button>
+        </div>
+      ) : null}
+      {error ? (
+        <span className="text-[13px]" style={{ color: "var(--bad)" }}>
+          {error}
+        </span>
+      ) : null}
       <span className="hint">
         <span className="mono">{whereLine(v)}</span>
         {v.kind === "openai_compatible" && !keyName ? " · no key" : null}
@@ -760,9 +993,28 @@ function ProviderCard(p: {
         <span className="hint">
           {role === "bearerToken" ? "Bedrock API key" : "Key"}: <span className="mono">{keyName}</span> ·{" "}
           <span style={missing ? { color: "var(--warn-ink)" } : {}}>{credentialLine(state, p.data)}</span>
+          {missing && p.canEdit && !v.archivedAt && !editing ? (
+            <>
+              {" "}
+              <Button size="sm" aria-label={`Set the key of ${v.label}`} onClick={() => setEditing(true)}>
+                Set it
+              </Button>
+            </>
+          ) : null}
         </span>
       ) : null}
       <span className="hint">{checkLine(v)}</span>
+      {editing ? (
+        <EditProvider
+          provider={v}
+          secrets={p.secrets}
+          shared={p.shared}
+          canSetValue={p.canSetValue}
+          onSave={p.onUpdate}
+          onSetValue={p.onSetValue}
+          onClose={() => setEditing(false)}
+        />
+      ) : null}
       {v.models.length ? (
         <table className="text-[13px]" style={{ borderCollapse: "collapse" }}>
           <tbody>
@@ -780,7 +1032,7 @@ function ProviderCard(p: {
                         {" "}
                         <Button
                           size="sm"
-                          aria-label={`Set the price of ${m.id}`}
+                          aria-label={`Set the price of ${m.id} on ${v.label}`}
                           onClick={() => setPricing(pricing === m.id ? null : m.id)}
                         >
                           {pricing === m.id ? "Close" : "Set price"}
@@ -793,9 +1045,11 @@ function ProviderCard(p: {
                       <Tip text="Take it off the list">
                         <Button
                           size="sm"
-                          aria-label={`Take ${m.id} off the list`}
+                          aria-label={`Take ${m.id} off the list of ${v.label}`}
                           onClick={() =>
-                            void p.onUpdate({ models: given(v.models.filter((x) => x.id !== m.id)) })
+                            void act(() =>
+                              p.onUpdate({ models: given(v.models.filter((x) => x.id !== m.id)) }),
+                            )
                           }
                         >
                           <Trash2 size={14} />
@@ -813,16 +1067,18 @@ function ProviderCard(p: {
                         firstPrice={!p.prices.length}
                         initial={p.prices.find((x) => x.providerId === v.id && x.model === m.id)}
                         onSave={async (price) => {
-                          if (await p.onSavePrice({ ...price, model: m.id, providerId: v.id }))
-                            setPricing(null);
-                          return true;
+                          const why = await p.onSavePrice({ ...price, model: m.id, providerId: v.id });
+                          setError(why);
+                          if (why === null) setPricing(null);
+                          return why === null;
                         }}
                         {...(own(m.id)
                           ? {
                               onRemove: async () => {
-                                const removed = await p.onDeletePrice(own(m.id)!.id);
-                                if (removed) setPricing(null);
-                                return removed;
+                                const why = await p.onDeletePrice(own(m.id)!.id);
+                                setError(why);
+                                if (why === null) setPricing(null);
+                                return why === null;
                               },
                             }
                           : {})}
@@ -859,6 +1115,8 @@ function ProviderCard(p: {
       {p.canEdit && !v.archivedAt ? (
         <AddModelForm
           kind={v.kind}
+          of={v.label}
+          listed={v.models.map((m) => m.id)}
           onAdd={(id, family, label) =>
             p.onUpdate({ models: [...given(v.models), { id, family, ...(label ? { label } : {}) }] })
           }
@@ -898,19 +1156,44 @@ export function ModelsPanel(p: ModelsPanelProps) {
         () => setSecretsFailed(true),
       );
   }, [changedSeq]);
-  /** Make a change, then load the providers again; a refusal is shown above, and says false. */
-  const change = async (fn: () => Promise<unknown>): Promise<boolean> => {
-    let ok = false;
+  /** Make a change, then load the providers again: null once done, else why not, for the place it was asked. */
+  const change = async (fn: () => Promise<unknown>): Promise<string | null> => {
+    let refusal: string | null = null;
     try {
       await fn();
-      setError(null);
-      ok = true;
     } catch (err) {
-      setError((err as Error).message);
+      refusal = (err as Error).message;
     }
     await reload().catch(() => {});
-    return ok;
+    return refusal;
   };
+  const shared = p.features.sharedEnvNames ?? [];
+  const card = (v: ModelProvider) => (
+    <ProviderCard
+      key={v.id}
+      provider={v}
+      canEdit={p.canEdit}
+      data={p.data}
+      secrets={secrets ?? []}
+      shared={shared}
+      canSetValue={p.features.oauth}
+      prices={prices}
+      onUpdate={(input) => change(() => p.update(v.id, input))}
+      onRemove={() => change(() => p.remove(v.id))}
+      onSavePrice={(input) => change(() => p.savePrice(input))}
+      onDeletePrice={(id) => change(() => p.deletePrice(id))}
+      onFillList={async () => {
+        let r: ListPricesResult | null = null;
+        await change(async () => (r = await p.fillListPrices(v.id)));
+        return r;
+      }}
+      onSetValue={async (name, value) => {
+        const why = await change(() => p.replaceSecret(name, value));
+        setSecrets(await p.loadSecrets().catch(() => secrets));
+        return why;
+      }}
+    />
+  );
   if (!info) return <div className="card px-[18px] py-4 hint">{error ?? "Loading providers…"}</div>;
   const live = info.providers.filter((v) => !v.archivedAt);
   const archived = info.providers.filter((v) => v.archivedAt);
@@ -941,24 +1224,7 @@ export function ModelsPanel(p: ModelsPanelProps) {
           </span>
         ) : null}
       </div>
-      {live.map((v) => (
-        <ProviderCard
-          key={v.id}
-          provider={v}
-          canEdit={p.canEdit}
-          data={p.data}
-          prices={prices}
-          onUpdate={(input) => change(() => p.update(v.id, input))}
-          onRemove={() => change(() => p.remove(v.id))}
-          onSavePrice={(input) => change(() => p.savePrice(input))}
-          onDeletePrice={(id) => change(() => p.deletePrice(id))}
-          onFillList={async () => {
-            let r: ListPricesResult | null = null;
-            await change(async () => (r = await p.fillListPrices(v.id)));
-            return r;
-          }}
-        />
-      ))}
+      {live.map(card)}
       {p.canEdit && info.offered.kinds.length ? (
         <AddProviderForm
           offered={info.offered.kinds}
@@ -968,31 +1234,18 @@ export function ModelsPanel(p: ModelsPanelProps) {
           providers={info.providers}
           onSubmit={async (f, taken) => {
             let sent = false;
-            const ok = await change(async () => {
+            const why = await change(async () => {
               sent = (await submitForm(f, taken, p)) !== null;
             });
             if (f.how === "paste") setSecrets(await p.loadSecrets().catch(() => secrets));
-            return ok && sent;
+            return why ?? (sent ? null : "Nothing was sent: something above is still to fill in.");
           }}
         />
       ) : null}
       {archived.length ? (
         <>
           <span className="eyebrow px-1">Archived</span>
-          {archived.map((v) => (
-            <ProviderCard
-              key={v.id}
-              provider={v}
-              canEdit={p.canEdit}
-              data={p.data}
-              prices={prices}
-              onUpdate={(input) => change(() => p.update(v.id, input))}
-              onRemove={() => change(() => p.remove(v.id))}
-              onSavePrice={(input) => change(() => p.savePrice(input))}
-              onDeletePrice={(id) => change(() => p.deletePrice(id))}
-              onFillList={async () => null}
-            />
-          ))}
+          {archived.map(card)}
         </>
       ) : null}
     </>

@@ -3,6 +3,7 @@ import {
   assertNoRawSecrets,
   azureEndpoint,
   labelLooksLikeKey,
+  modelIdProblem,
   nameLooksLikeKey,
   providerNameRefusal,
   compatibleEndpoint,
@@ -250,6 +251,38 @@ describe("a provider's schema", () => {
     expect(nameLooksLikeKey("aBcDeFgHiJkLmNoPqRsTuVwXyZ")).toBe(true);
     // Built here, so the repository holds no string a secret scanner would stop a push for.
     expect(nameLooksLikeKey(["hf", "AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh"].join("_"))).toBe(true);
+  });
+
+  it("knows the keys model providers issue, by prefix or by how random they read, in a label or a name", () => {
+    // Built here, so the repository holds no string a secret scanner would stop a push for.
+    const run = (n: number) => "mR7xQ2pL9vN4kT8wZ1sJ5bH3cY6dG0aF8eK2uB4iO6".repeat(3).slice(0, n);
+    for (const key of [
+      `gsk_${run(52)}`,
+      `pplx-${run(48)}`,
+      `csk-${run(48)}`,
+      `nvapi-${run(64)}`,
+      `fw_${run(24)}`,
+      run(32), // Mistral's: no prefix, 32 random characters
+    ]) {
+      expect(labelLooksLikeKey(`Acme ${key}`), key).toBe(true);
+      expect(nameLooksLikeKey(key.replace(/-/g, "_")), key).toBe(true);
+    }
+    // Identifiers people write, a digit in them or not, read as words.
+    for (const name of ["notionIntegrationV2Secret", "hubspotPrivateApp2Token", "AzureOpenAiKeyEastUs2"])
+      expect(nameLooksLikeKey(name), name).toBe(false);
+    for (const label of ["Qwen25Coder32BInstructAWQ", "Llama31Nemotron70BInstructHF on vLLM"])
+      expect(labelLooksLikeKey(label), label).toBe(false);
+  });
+
+  it("says why a model id will not do, as the board would", () => {
+    expect(modelIdProblem("anthropic", "claude", "claude-opus-5.5", ["claude-opus-5-5"])).toBe(
+      "This model is on the list already.",
+    );
+    expect(modelIdProblem("openai", "openai", "gpt x", [])).toBe("A model id has no spaces.");
+    expect(modelIdProblem("bedrock", "openai", "gpt-oss-120b", [])).toMatch(/cross-Region inference profile/);
+    expect(modelIdProblem("bedrock", "openai", "global.openai.example-model", [])).toBeNull();
+    expect(modelIdProblem("openai", "claude", "claude-x", [])).toBe("OpenAI serves OpenAI models here.");
+    expect(modelIdProblem("anthropic", "claude", "", [])).toBe("Give the model's id.");
   });
 
   it("keeps a key out of a server's address, and an account id in it", () => {
