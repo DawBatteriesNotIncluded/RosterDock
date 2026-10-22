@@ -66,7 +66,9 @@ function jobScript(
     "    @('AssignProcessToJobObject', [bool], @([IntPtr], [IntPtr]))",
     "  )",
     "  foreach ($f in $functions) {",
-    "    [void]$type.DefinePInvokeMethod($f[0], 'kernel32.dll', 'Public, Static, PinvokeImpl', 'Standard', $f[1], [Type[]]$f[2], 'Winapi', 'Unicode')",
+    "    $method = $type.DefinePInvokeMethod($f[0], 'kernel32.dll', 'Public, Static, PinvokeImpl', 'Standard', $f[1], [Type[]]$f[2], 'Winapi', 'Unicode')",
+    // As a [DllImport] has it: without PreserveSig .NET takes the return for an HRESULT and gives back 0.
+    "    $method.SetImplementationFlags('PreserveSig')",
     "  }",
     "  $kernel32 = $type.CreateType()",
     "  $job = $kernel32::CreateJobObjectW([IntPtr]::Zero, [IntPtr]::Zero)",
