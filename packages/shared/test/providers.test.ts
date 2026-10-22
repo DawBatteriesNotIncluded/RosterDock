@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertNoRawSecrets,
   azureEndpoint,
+  nameLooksLikeKey,
   compatibleEndpoint,
   engineFor,
   ModelProviderSchema,
@@ -148,6 +149,64 @@ describe("a provider's schema", () => {
     expect(issues({ kind: "azure_openai", name: "z", label: "Z", credentials: key })).not.toEqual([]);
   });
 
+  it("takes a name, never a key shaped like one, and says neither back", () => {
+    // An Azure key is 32 hex characters; one that starts with a letter is a valid env var name.
+    const azureKey = "a3f9c2e1b4d5f60718293a4b5c6d7e8f";
+    for (const key of [
+      azureKey,
+      "AKIAABCDEFGHIJKLMNOP",
+      "TOKEN_ABCDEFGHIJKLMNOPQRSTUVWX0123",
+      "DEADBEEFCAFEBABE0",
+    ]) {
+      expect(nameLooksLikeKey(key), key).toBe(true);
+      const r = parse({
+        kind: "azure_openai",
+        name: "z",
+        label: "Z",
+        endpoint: "https://z.openai.azure.com",
+        credentials: { apiKey: key },
+      });
+      expect(r.success, key).toBe(false);
+      expect(JSON.stringify(r.error?.issues)).not.toContain(key);
+    }
+    for (const name of ["MODELS_ACME_KEY", "OPENAI", "AZURE_OPENAI_API_KEY_FOR_PRODUCTION", "x"])
+      expect(nameLooksLikeKey(name), name).toBe(false);
+    // A change names a role, never anything else.
+    expect(
+      UpdateModelProviderSchema.safeParse({ credentials: { "sk-ant-api03-abcdefghijklmnopqrstuvwxyz": "K" } })
+        .success,
+    ).toBe(false);
+  });
+
+  it("keeps a key out of a server's address, and an account id in it", () => {
+    expect(
+      compatibleEndpoint("https://llm.example.com/v1/sk-proj-abcdefghijklmnopqrstuvwxyz0123"),
+    ).toBeNull();
+    // A gateway's address may carry an account id: not a key.
+    expect(
+      compatibleEndpoint("https://gateway.example.com/v1/0123456789abcdef0123456789abcdef/gw/openai"),
+    ).toBe("https://gateway.example.com/v1/0123456789abcdef0123456789abcdef/gw/openai");
+  });
+
+  it("keeps a model id as the provider takes it; only Anthropic's own are put Claude Code's way", () => {
+    const compatible = parse({
+      kind: "openai_compatible",
+      name: "c",
+      label: "C",
+      endpoint: "https://llm.example.com/v1",
+      models: [{ id: "claude-3.7-sonnet", family: "claude" }],
+    });
+    expect(compatible.data?.models[0]?.id).toBe("claude-3.7-sonnet");
+    const anthropic = parse({
+      kind: "anthropic",
+      name: "a",
+      label: "A",
+      credentials: { apiKey: "K" },
+      models: [{ id: "claude-3.7-sonnet", family: "claude" }],
+    });
+    expect(anthropic.data?.models[0]?.id).toBe("claude-3-7-sonnet");
+  });
+
   it("takes names only: a value where a name goes is refused, and never echoed", () => {
     const value = "sk-ant-api03-0123456789abcdefghijklmnopqrstuvwxyz";
     const r = parse({ kind: "anthropic", name: "a", label: "A", credentials: { apiKey: value } });
@@ -188,7 +247,7 @@ describe("a provider's schema", () => {
           { id: "claude-opus-5.5", family: "claude" },
         ],
       }),
-    ).toEqual(["models.1.id: claude-opus-5-5 is listed twice"]);
+    ).toEqual(["models.1.id: this model is listed twice"]);
     expect(
       issues({
         kind: "bedrock",

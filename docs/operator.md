@@ -289,6 +289,8 @@ in the company sees them by name.
   only to a listed destination. An Azure private endpoint is a name that resolves to a private address, so it
   needs an entry too. Anthropic, OpenAI and Bedrock have fixed hosts, or hosts taken from the region.
 - Teammates do not think with a company's provider yet: every run and every plan uses the board's own models.
+  Until they do, leaving `board` out of the list changes nothing for runs and plans; it only shows companies
+  that the board's own models are not lent.
 
 ## Upgrades and backups
 

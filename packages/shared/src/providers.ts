@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { modelId, SecretNameSchema, type Engine } from "./schemas.js";
+import { containsRawSecret, looksLikeRawSecret } from "./secrets.js";
 
 export const PROVIDER_KINDS = [
   "anthropic",
@@ -141,13 +142,41 @@ export function compatibleEndpoint(raw: string): string | null {
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
   if (url.username || url.password || url.search || url.hash || !url.hostname) return null;
+  // A key in the path would be kept, sent in events and shown: refused like one anywhere else.
+  if (containsRawSecret(url.pathname)) return null;
   return url.toString().replace(/\/+$/, "");
 }
 
+/**
+ * Whether what was given as an env var NAME looks like a key pasted in its place. A name is words joined by
+ * underscores; a key is a long unbroken run (an Azure key is 32 hex characters, an AWS key id 20, a Stripe
+ * key's tail longer), or one of the shapes the raw-secret guard knows.
+ */
+export function nameLooksLikeKey(name: string): boolean {
+  return (
+    looksLikeRawSecret(name) ||
+    /^[0-9a-f]{16,}$/i.test(name) ||
+    name.split("_").some((word) => word.length >= 20)
+  );
+}
+
+/** A credential's env var NAME, never the value: a pasted key is refused without being said back. */
+const credentialName = SecretNameSchema.refine(
+  (v) => !nameLooksLikeKey(v),
+  "an env var NAME, such as MODELS_ACME_KEY; this looks like the key itself",
+);
+
+/** A model id exactly as the provider takes it: an OpenAI id, an Azure deployment name, a Bedrock profile id or ARN. */
+const providerModelId = z
+  .string()
+  .trim()
+  .min(1)
+  .max(120)
+  .refine((v) => !/\s/.test(v), "a model id has no spaces");
+
 /** One model a provider serves. Where it came from (`listed` by Check, or `typed`) is the board's to say. */
 export const ProviderModelSchema = z.object({
-  /** The id the provider takes: an Anthropic or OpenAI model id, an Azure deployment name, a Bedrock profile id or ARN. */
-  id: modelId.refine((v) => !/\s/.test(v), "a model id has no spaces"),
+  id: providerModelId,
   label: label.optional(),
   family: z.enum(MODEL_FAMILIES),
   contextWindow: z.number().int().positive().max(100_000_000).optional(),
@@ -161,6 +190,11 @@ export interface ProviderModel extends ProviderModelInput {
 
 export const MAX_PROVIDER_MODELS = 200;
 const models = z.array(ProviderModelSchema).max(MAX_PROVIDER_MODELS).default([]);
+/** Anthropic's own ids, written the way people say them (claude-opus-5.5), are put the way Claude Code takes them. */
+const anthropicModels = z
+  .array(ProviderModelSchema.extend({ id: modelId.refine((v) => !/\s/.test(v), "a model id has no spaces") }))
+  .max(MAX_PROVIDER_MODELS)
+  .default([]);
 
 /** The headers an OpenAI-compatible server may take its key in. */
 export const COMPATIBLE_AUTH_HEADERS = ["authorization", "api-key", "x-api-key"] as const;
@@ -172,7 +206,7 @@ const common = {
   models,
   enabled: z.boolean().default(true),
 };
-const apiKeyOnly = z.strictObject({ apiKey: SecretNameSchema });
+const apiKeyOnly = z.strictObject({ apiKey: credentialName });
 
 /**
  * A provider, by kind. Every credential is an env var NAME, never a value: the company's own secret (set
@@ -180,7 +214,12 @@ const apiKeyOnly = z.strictObject({ apiKey: SecretNameSchema });
  */
 export const ModelProviderSchema = z
   .discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("anthropic"), ...common, credentials: apiKeyOnly }),
+    z.strictObject({
+      kind: z.literal("anthropic"),
+      ...common,
+      models: anthropicModels,
+      credentials: apiKeyOnly,
+    }),
     z.strictObject({ kind: z.literal("openai"), ...common, credentials: apiKeyOnly }),
     z.strictObject({
       kind: z.literal("azure_openai"),
@@ -199,7 +238,7 @@ export const ModelProviderSchema = z
       kind: z.literal("bedrock"),
       ...common,
       region: z.string().trim().regex(BEDROCK_REGION_RE, "an AWS region, such as us-east-1"),
-      credentials: z.strictObject({ bearerToken: SecretNameSchema }),
+      credentials: z.strictObject({ bearerToken: credentialName }),
     }),
     z.strictObject({
       kind: z.literal("openai_compatible"),
@@ -214,14 +253,14 @@ export const ModelProviderSchema = z
         .transform((v) => compatibleEndpoint(v)!),
       /** The header the key goes in; without a key (a keyless Ollama or vLLM) none. Default: authorization. */
       authHeader: z.enum(COMPATIBLE_AUTH_HEADERS).nullable().optional(),
-      credentials: z.strictObject({ apiKey: SecretNameSchema.optional() }).default({}),
+      credentials: z.strictObject({ apiKey: credentialName.optional() }).default({}),
     }),
   ])
   .superRefine((p, ctx) => {
     const seen = new Set<string>();
     p.models.forEach((m, i) => {
       if (seen.has(m.id))
-        ctx.addIssue({ code: "custom", path: ["models", i, "id"], message: `${m.id} is listed twice` });
+        ctx.addIssue({ code: "custom", path: ["models", i, "id"], message: "this model is listed twice" });
       seen.add(m.id);
       if (!KIND_FAMILIES[p.kind].includes(m.family))
         ctx.addIssue({
@@ -254,8 +293,8 @@ export const UpdateModelProviderSchema = z.strictObject({
   endpoint: z.string().max(500).optional(),
   region: z.string().trim().optional(),
   authHeader: z.enum(COMPATIBLE_AUTH_HEADERS).nullable().optional(),
-  /** The whole set of credential names, replacing the row's. */
-  credentials: z.record(z.string(), SecretNameSchema).optional(),
+  /** The whole set of credential names, replacing the row's: apiKey, or bearerToken for Bedrock. */
+  credentials: z.partialRecord(z.enum(["apiKey", "bearerToken"]), credentialName).optional(),
   /** The whole list, replacing the row's. */
   models: z.array(ProviderModelSchema).max(MAX_PROVIDER_MODELS).optional(),
   enabled: z.boolean().optional(),

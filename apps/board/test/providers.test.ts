@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { endpointRefusal } from "../src/providers/providers.js";
 import { parsePrivateDestinations } from "../src/web/address.js";
-import { companyEgress } from "../src/web/egress.js";
+import { boardEgress, companyEgress } from "../src/web/egress.js";
 import { PUBLIC_TEST_ADDRESS, seedCompany, startTestBoard, testEgress, type TestBoard } from "./helpers.js";
 
 const dir = mkdtempSync(path.join(os.tmpdir(), "rosterdock-providers-"));
@@ -261,7 +261,11 @@ describe("model providers", () => {
     // Another company's provider is not there at all.
     const other = await seedCompany(board, "mp3-other@example.com");
     expect((await other.api.get(`${other.base}/model-providers/${created.body.id}`)).status).toBe(404);
+    expect(
+      (await other.api.patch(`${other.base}/model-providers/${created.body.id}`, { enabled: false })).status,
+    ).toBe(404);
     expect((await other.api.del(`${other.base}/model-providers/${created.body.id}`)).status).toBe(404);
+    expect((await admin.get(url)).body.enabled).toBe(true);
     expect((await admin.del(url)).status).toBe(200);
   });
 
@@ -285,7 +289,72 @@ describe("model providers", () => {
     });
     expect(inLabel.status).toBe(422);
     expect(JSON.stringify(inLabel.body)).not.toContain(value);
+
+    // A key shaped like a name: an Azure key is 32 hex characters, and an AWS key id is all capitals.
+    for (const key of ["a3f9c2e1b4d5f60718293a4b5c6d7e8f", "AKIAABCDEFGHIJKLMNOP"]) {
+      const named = await api.post(`${base}/model-providers`, {
+        kind: "azure_openai",
+        name: "az",
+        label: "Az",
+        endpoint: "https://az.openai.azure.com",
+        credentials: { apiKey: key },
+      });
+      expect(named.status, key).toBe(400);
+      expect(JSON.stringify(named.body)).not.toContain(key);
+    }
+    // Where a field's name goes, and in a server's address.
+    const asField = await api.post(`${base}/model-providers`, {
+      kind: "anthropic",
+      name: "raw",
+      label: "Raw",
+      credentials: { apiKey: "MODELS_RAW_KEY", [value]: "MODELS_RAW_KEY" },
+    });
+    expect(asField.status).toBe(400);
+    expect(JSON.stringify(asField.body)).not.toContain(value);
+    const inPath = await api.post(`${base}/model-providers`, {
+      kind: "openai_compatible",
+      name: "raw",
+      label: "Raw",
+      endpoint: `https://llm.example.test/v1/${value}`,
+    });
+    expect(inPath.status).toBe(400);
+    expect(JSON.stringify(inPath.body)).not.toContain(value);
     expect((await providerEvents(api, base)).length).toBe(0);
+  });
+
+  it("builds each change on the one before it, and a change that changes nothing says nothing", async () => {
+    const { api, base } = await seedCompany(board, "mp8@example.com");
+    const created = await api.post(`${base}/model-providers`, {
+      kind: "openai",
+      name: "o",
+      label: "O",
+      credentials: { apiKey: "MODELS_O_KEY" },
+    });
+    const url = `${base}/model-providers/${created.body.id}`;
+    // Two people at once: neither change undoes the other, and each event says what its own change did.
+    for (let round = 0; round < 5; round++) {
+      const label = `O ${round}`;
+      const models = [{ id: `gpt-${round}`, family: "openai" }];
+      const [a, b] = await Promise.all([api.patch(url, { label }), api.patch(url, { models })]);
+      expect([a.status, b.status]).toEqual([200, 200]);
+      const now = (await api.get(url)).body;
+      expect(now.label).toBe(label);
+      expect(now.models.map((m: { id: string }) => m.id)).toEqual([`gpt-${round}`]);
+    }
+    const changes = (await providerEvents(api, base))
+      .filter((e) => e.type === "model_provider.updated")
+      .map((e) => e.payload.changes);
+    expect(changes).toHaveLength(10);
+    expect(
+      changes.every((c) => JSON.stringify(c) === '["label"]' || JSON.stringify(c) === '["models"]'),
+    ).toBe(true);
+    // Nothing to change: the provider as it is, and no event.
+    const before = (await providerEvents(api, base)).length;
+    const same = await api.patch(url, { label: "O 4", enabled: true });
+    expect(same.status).toBe(200);
+    expect(same.body.label).toBe("O 4");
+    expect((await api.patch(url, {})).status).toBe(200);
+    expect((await providerEvents(api, base)).length).toBe(before);
   });
 
   it("refuses a name that is the board's own, unless the company set it or the operator shares it", async () => {
@@ -380,6 +449,10 @@ describe("model providers", () => {
     );
     // Never narrowed, the list ignores every company's own entries.
     expect(await endpointRefusal(egress, "https://vllm.internal.test/v1")).not.toBeNull();
+    // The board's own egress, as a running board narrows it: the same answers.
+    const own = boardEgress(parsePrivateDestinations(`${mine}=vllm.internal.test`), resolve);
+    expect(await endpointRefusal(companyEgress(own, mine), "http://vllm.internal.test/v1")).toBeNull();
+    expect(await endpointRefusal(companyEgress(own, theirs), "https://vllm.internal.test/v1")).not.toBeNull();
   });
 
   it("refuses an endpoint whose name does not answer in time, instead of holding the write", async () => {

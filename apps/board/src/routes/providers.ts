@@ -10,12 +10,13 @@ import {
   deleteProvider,
   listProviders,
   loadProvider,
+  parseProviderBody,
   providerToJson,
   updateProvider,
   type ProviderDeps,
   type ProviderRow,
 } from "../providers/providers.js";
-import { parseBody, uuidParam } from "../validate.js";
+import { uuidParam } from "../validate.js";
 
 export function registerProviderRoutes(app: FastifyInstance, deps: ProviderDeps): void {
   const { db, policy } = deps;
@@ -47,7 +48,7 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ProviderDeps)
     "/api/companies/:companyId/model-providers",
     { config: { action: "model.manage" } },
     async (req, reply) => {
-      const body = parseBody(ModelProviderSchema, req.body);
+      const body = parseProviderBody(ModelProviderSchema, req.body);
       const row = await createProvider(deps, req.companyId, req.principal.actor, body);
       reply.code(201);
       return one(req.companyId, row);
@@ -59,7 +60,7 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ProviderDeps)
     { config: { action: "model.manage" } },
     async (req) => {
       const id = idParam(req);
-      const body = parseBody(UpdateModelProviderSchema, req.body);
+      const body = parseProviderBody(UpdateModelProviderSchema, req.body);
       return one(req.companyId, await updateProvider(deps, req.companyId, req.principal.actor, id, body));
     },
   );

@@ -7,6 +7,8 @@
 
 import {
   addressListed,
+  assertNoRawSecrets,
+  RawSecretError,
   hostListed,
   isAddress,
   PROVIDER_KIND_LABELS,
@@ -20,6 +22,7 @@ import {
   type UpdateModelProviderInput,
   ModelProviderSchema,
 } from "@rosterdock/shared";
+import type { z, ZodType } from "zod";
 import type { Db, Queryable } from "../db/pool.js";
 import { conflict, HttpError, notFound } from "../http-error.js";
 import { mutate } from "../mutate.js";
@@ -257,6 +260,51 @@ function eventPayload(row: ProviderRow): Record<string, unknown> {
   };
 }
 
+// The fields a provider body has. A refusal names only these: a field it does not know is "?", and its
+// message is the board's, since a key pasted where a field's name goes would otherwise be said back.
+const FIELDS = new Set([
+  "kind",
+  "name",
+  "label",
+  "models",
+  "enabled",
+  "credentials",
+  "endpoint",
+  "region",
+  "authHeader",
+  "archived",
+  "id",
+  "family",
+  "contextWindow",
+  "apiKey",
+  "bearerToken",
+]);
+
+/** A schema's refusal as the board answers it: the fields' names and the schema's words, never what was sent. */
+export function safeIssues(issues: readonly z.core.$ZodIssue[]) {
+  return issues.map((i) => ({
+    code: i.code,
+    path: i.path.map((p) => (typeof p === "number" || (typeof p === "string" && FIELDS.has(p)) ? p : "?")),
+    message:
+      i.code === "unrecognized_keys" || i.code === "invalid_key"
+        ? "a field this kind of provider does not take"
+        : i.message,
+  }));
+}
+
+/** parseBody for a provider: the schema, with a refusal that says nothing back, then the raw-secret guard. */
+export function parseProviderBody<T>(schema: ZodType<T>, body: unknown): T {
+  const parsed = schema.safeParse(body ?? {});
+  if (!parsed.success) throw new HttpError(400, "invalid request body", safeIssues(parsed.error.issues));
+  try {
+    assertNoRawSecrets(parsed.data);
+  } catch (err) {
+    if (err instanceof RawSecretError) throw new HttpError(422, err.message, err.findings);
+    throw err;
+  }
+  return parsed.data;
+}
+
 function isUniqueViolation(err: unknown): boolean {
   return (err as { code?: string }).code === "23505";
 }
@@ -327,26 +375,12 @@ function merged(row: ProviderRow, patch: UpdateModelProviderInput): Record<strin
   return out;
 }
 
-export async function updateProvider(
-  deps: ProviderDeps,
-  companyId: string,
-  actor: ActorRef,
-  id: string,
-  patch: UpdateModelProviderInput,
-): Promise<ProviderRow> {
-  const row = await loadProvider(deps.db, companyId, id);
+/** What a change makes of a row: the provider it becomes, its columns and models, and the fields it changes. */
+function plan(row: ProviderRow, patch: UpdateModelProviderInput) {
   const parsed = ModelProviderSchema.safeParse(merged(row, patch));
-  if (!parsed.success) throw new HttpError(400, "invalid request body", parsed.error.issues);
+  if (!parsed.success) throw new HttpError(400, "invalid request body", safeIssues(parsed.error.issues));
   const next = parsed.data;
   const c = columns(next);
-  // The names this change writes; one the row already carries stays as it is (it resolves or it does not).
-  const had = new Set(Object.values(row.credentials));
-  await assertCompanyEnvNames(
-    deps.operator,
-    companyId,
-    Object.values(c.credentials).filter((n) => !had.has(n)),
-  );
-  if (c.endpoint !== row.endpoint) await assertEndpoint(deps, companyId, c.endpoint);
   const models = keptModels(next.models, row.models);
   const archive = patch.archived === true && !row.archived_at;
   const restore = patch.archived === false && !!row.archived_at;
@@ -360,40 +394,81 @@ export async function updateProvider(
     next.enabled !== row.enabled && "enabled",
     (archive || restore) && "archived",
   ].filter((f): f is string => !!f);
-  const { result } = await mutate(deps.db, companyId, actor, async (ctx) => {
-    const updated = (
-      await ctx.client.query<ProviderRow>(
-        `UPDATE model_providers
-            SET label = $3, endpoint = $4, region = $5, auth_header = $6, credentials = $7, models = $8,
-                enabled = $9,
-                archived_at = CASE WHEN $10 THEN now() WHEN $11 THEN NULL ELSE archived_at END,
-                updated_at = now()
-          WHERE id = $1 AND company_id = $2
-          RETURNING *`,
-        [
-          id,
-          companyId,
-          next.label,
-          c.endpoint,
-          c.region,
-          c.authHeader,
-          JSON.stringify(c.credentials),
-          JSON.stringify(models),
-          next.enabled,
-          archive,
-          restore,
-        ],
-      )
-    ).rows[0];
-    if (!updated) throw notFound("model provider");
-    await ctx.emit(
-      archive ? "model_provider.archived" : "model_provider.updated",
-      { kind: "model_provider", id },
-      { ...eventPayload(updated), changes, archived: !!updated.archived_at },
-    );
-    return updated;
-  });
-  return result;
+  return { next, c, models, archive, restore, changes };
+}
+
+/** A change that changes nothing: nothing is written, no event says otherwise, and the row is answered as it is. */
+class Unchanged {
+  constructor(readonly row: ProviderRow) {}
+}
+
+export async function updateProvider(
+  deps: ProviderDeps,
+  companyId: string,
+  actor: ActorRef,
+  id: string,
+  patch: UpdateModelProviderInput,
+): Promise<ProviderRow> {
+  // What the change brings in is checked before the row is held: the names it adds, and the endpoint it moves
+  // to (a lookup, never inside the transaction).
+  const before = await loadProvider(deps.db, companyId, id);
+  const first = plan(before, patch);
+  const had = new Set(Object.values(before.credentials));
+  await assertCompanyEnvNames(
+    deps.operator,
+    companyId,
+    Object.values(first.c.credentials).filter((n) => !had.has(n)),
+  );
+  if (first.c.endpoint !== before.endpoint) await assertEndpoint(deps, companyId, first.c.endpoint);
+  try {
+    const { result } = await mutate(deps.db, companyId, actor, async (ctx) => {
+      // The row as it is now, held until commit: a change made meanwhile is built on, never undone. A field
+      // this change does not name keeps the row's value, which its own change checked.
+      const row = (
+        await ctx.client.query<ProviderRow>(
+          "SELECT * FROM model_providers WHERE id = $1 AND company_id = $2 FOR UPDATE",
+          [id, companyId],
+        )
+      ).rows[0];
+      if (!row) throw notFound("model provider");
+      const { next, c, models, archive, restore, changes } = plan(row, patch);
+      if (!changes.length) throw new Unchanged(row);
+      const updated = (
+        await ctx.client.query<ProviderRow>(
+          `UPDATE model_providers
+              SET label = $3, endpoint = $4, region = $5, auth_header = $6, credentials = $7, models = $8,
+                  enabled = $9,
+                  archived_at = CASE WHEN $10 THEN now() WHEN $11 THEN NULL ELSE archived_at END,
+                  updated_at = now()
+            WHERE id = $1 AND company_id = $2
+            RETURNING *`,
+          [
+            id,
+            companyId,
+            next.label,
+            c.endpoint,
+            c.region,
+            c.authHeader,
+            JSON.stringify(c.credentials),
+            JSON.stringify(models),
+            next.enabled,
+            archive,
+            restore,
+          ],
+        )
+      ).rows[0]!;
+      await ctx.emit(
+        archive ? "model_provider.archived" : "model_provider.updated",
+        { kind: "model_provider", id },
+        { ...eventPayload(updated), changes, archived: !!updated.archived_at },
+      );
+      return updated;
+    });
+    return result;
+  } catch (err) {
+    if (err instanceof Unchanged) return err.row;
+    throw err;
+  }
 }
 
 export async function deleteProvider(db: Db, companyId: string, actor: ActorRef, id: string): Promise<void> {

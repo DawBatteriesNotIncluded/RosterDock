@@ -23,11 +23,13 @@ model output on their cluster.
   first, then among the names the operator shares, so a value set in Settings wins over a shared one.
   Without a store the route refuses.
 - **A company's model providers carry names too.** A provider (Anthropic, OpenAI, Azure OpenAI, Amazon
-  Bedrock, a compatible server) keeps the env var names its credentials resolve under, never a value. They
-  resolve as a connection's do, the company's own secrets first, then the names the operator shares; a name
-  that is the board's own is refused when a provider is written, and the raw-secret guard refuses a value
-  where a name goes. An endpoint a company gives is checked as a connection's URL is (What a company's
-  connections reach). Owners and admins manage providers (`model.manage`).
+  Bedrock, a compatible server) keeps the env var names of its credentials, never a value: one of the
+  company's own secrets, or a name the operator shares. A name that is the board's own is refused when a
+  provider is written, and so is a value given where a name goes, whether a known key shape or a long
+  unbroken run such as a 32-character Azure key; a refusal never repeats what was sent. An endpoint a
+  company gives is checked as a connection's URL is (What a company's connections reach). Owners and admins
+  manage providers (`model.manage`). Nothing resolves a provider's names yet: teammates still think with the
+  board's own models.
 
 - **External writes are propose, approve, execute.** A teammate proposes the exact payload; the board
   stores it with its sha256; a person approves; the executor re-hashes the stored payload and sends those
