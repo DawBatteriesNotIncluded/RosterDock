@@ -1,6 +1,6 @@
 // The engines' CLIs as npm installs them on Windows: the shims recorded in @rosterdock/shared's fixtures, and
 // the files they run where `npm view <package> bin` puts them. No CLI runs here.
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,3 +48,27 @@ it("starts today's Claude Code by its claude.exe and Codex's script with this No
   expect(resolveEngineBin("claude", { PATH: prefix }, "linux")).toEqual({ bin: "claude", prefix: [] });
   expect(resolveEngineBin("opencode", { PATH: prefix }, "win32")).toEqual({ bin: "opencode", prefix: [] });
 });
+
+it.runIf(process.platform !== "win32")(
+  "passes over a PATH folder it cannot read, where a stat there throws, and finds the CLI after it",
+  async () => {
+    const locked = path.join(prefix, "locked");
+    await mkdir(locked, { recursive: true });
+    const exe = await install("claude-2.1.307", "claude", [
+      "@anthropic-ai",
+      "claude-code",
+      "bin",
+      "claude.exe",
+    ]);
+    await chmod(locked, 0o000);
+    try {
+      // A stat under a folder this user cannot search fails with EACCES, not ENOENT.
+      expect(resolveEngineBin("claude", { PATH: [locked, prefix].join(path.delimiter) }, "win32")).toEqual({
+        bin: exe,
+        prefix: [],
+      });
+    } finally {
+      await chmod(locked, 0o755);
+    }
+  },
+);

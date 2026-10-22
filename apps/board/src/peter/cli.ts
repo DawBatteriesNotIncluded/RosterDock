@@ -29,7 +29,14 @@ export function resolveCliBin(
 ): { bin: string; prefix: string[] } {
   if (platform !== "win32") return { bin, prefix: [] };
   return resolveWindowsBin(bin, (env.Path || env.PATH || "").split(path.delimiter), process.execPath, {
-    isFile: (p) => statSync(p, { throwIfNoEntry: false })?.isFile() ?? false,
+    isFile: (p) => {
+      // Not only not-found: a folder this account cannot read, a share that is gone, a drive not ready.
+      try {
+        return statSync(p).isFile();
+      } catch {
+        return false;
+      }
+    },
     read: (p) => {
       try {
         return readFileSync(p, "utf8");

@@ -79,6 +79,27 @@ describe("npm's Windows shims", () => {
     });
   });
 
+  it("passes over a folder it cannot read and takes one in quotes without them, as Windows does", () => {
+    const files = windows({ [`${NPM}\\claude.cmd`]: shim("claude-2.1.307"), [CLAUDE_EXE]: "" });
+    const share = "\\\\fileserver\\tools";
+    const unreadable: WindowsBinFiles = {
+      ...files,
+      isFile: (p) => {
+        if (p.startsWith(share))
+          throw Object.assign(new Error("UNKNOWN: unknown error, stat"), { code: "UNKNOWN" });
+        return files.isFile(p);
+      },
+    };
+    expect(resolveWindowsBin("claude", [share, NPM], NODE, unreadable)).toEqual({
+      bin: CLAUDE_EXE,
+      prefix: [],
+    });
+    expect(resolveWindowsBin("claude", [`"${NPM}"`], NODE, files)).toEqual({ bin: CLAUDE_EXE, prefix: [] });
+    // A .com comes before an .exe, as PATHEXT has it.
+    const com = windows({ [`${NPM}\\claude.com`]: "", [`${NPM}\\claude.exe`]: "" });
+    expect(resolveWindowsBin("claude", [NPM], NODE, com)).toEqual({ bin: `${NPM}\\claude.com`, prefix: [] });
+  });
+
   it("leaves a name found nowhere, or a batch file npm did not write, as it is", () => {
     expect(resolveWindowsBin("claude", [NPM], NODE, windows({}))).toEqual({ bin: "claude", prefix: [] });
     const other = windows({ [`${NPM}\\claude.cmd`]: "@echo off\r\nexit /b 1\r\n" });

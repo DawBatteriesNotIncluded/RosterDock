@@ -6,6 +6,7 @@
 
 /** The file system and path functions resolveWindowsBin reads with. */
 export interface WindowsBinFiles {
+  /** Whether a file is there; a throw is taken as no. */
   isFile(p: string): boolean;
   /** A file's text; null when it cannot be read. */
   read(p: string): string | null;
@@ -15,8 +16,9 @@ export interface WindowsBinFiles {
 
 /**
  * What a .cmd shim npm wrote (cmd-shim, npm 7 and later) runs, by its path from the shim's folder: a program,
- * or a script node runs. Null for any other .cmd, a shim that runs another interpreter or passes it arguments
- * included.
+ * or a script node runs. Read from the line that runs it, as npm writes it, so a .cmd of another's that holds
+ * such a line reads the same. Null for a .cmd without one, or whose line runs another interpreter or passes it
+ * arguments.
  */
 export function npmShimTarget(cmd: string): { path: string[]; node: boolean } | null {
   const program = /^"%dp0%\\([^"\r\n]+)"[ \t]+%\*\s*$/m.exec(cmd);
@@ -27,9 +29,10 @@ export function npmShimTarget(cmd: string): { path: string[]; node: boolean } | 
 }
 
 /**
- * `bin` as Windows finds it, a path or a name looked for on `pathList` folder by folder (a program before a
- * shim in each), and as a spawn without a shell starts it: npm's shim by what it runs, a script with `node`.
- * A name found nowhere, or a .cmd npm did not write, as it is.
+ * `bin` as a path, or a name looked for on `pathList` folder by folder: a program (.com, .exe) before a shim
+ * (.cmd) in each, a folder in quotes taken without them, a folder that cannot be read (no access, a share that
+ * is gone, a drive not ready) passed over, as Windows does. Then as a spawn without a shell starts it: npm's
+ * shim by what it runs, a script with `node`. A name found nowhere, or a .cmd npm did not write, as it is.
  */
 export function resolveWindowsBin(
   bin: string,
@@ -37,12 +40,18 @@ export function resolveWindowsBin(
   node: string,
   files: WindowsBinFiles,
 ): { bin: string; prefix: string[] } {
-  const withExt = /\.(?:exe|cmd)$/i.test(bin);
-  const at = (base: string) => (withExt ? [base] : [`${base}.exe`, `${base}.cmd`]);
-  const candidates = /[\\/]/.test(bin)
-    ? at(bin)
-    : pathList.filter(Boolean).flatMap((dir) => at(files.join(dir, bin)));
-  const found = candidates.find((p) => files.isFile(p));
+  const withExt = /\.(?:com|exe|cmd)$/i.test(bin);
+  const at = (base: string) => (withExt ? [base] : [`${base}.com`, `${base}.exe`, `${base}.cmd`]);
+  const folders = pathList.map((dir) => dir.replace(/^"(.*)"$/, "$1")).filter(Boolean);
+  const candidates = /[\\/]/.test(bin) ? at(bin) : folders.flatMap((dir) => at(files.join(dir, bin)));
+  const here = (p: string) => {
+    try {
+      return files.isFile(p);
+    } catch {
+      return false;
+    }
+  };
+  const found = candidates.find(here);
   if (!found) return { bin, prefix: [] };
   if (!/\.cmd$/i.test(found)) return { bin: found, prefix: [] };
   const text = files.read(found);
