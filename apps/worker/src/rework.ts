@@ -1,9 +1,10 @@
 // A rework run starts from the round the reviewer sent back: that round's diff, checked against the
 // sha256 the review recorded, applied to the fresh clone before the engine starts. Uncommitted, so the
 // harvest still diffs against the base branch and the next round carries the whole change, which keeps
-// the review's hunks and the pull request right. git apply is all or nothing: when the base branch moved
-// and any part no longer applies, the clone stays as it was and the run says which files. It writes
-// nothing outside the clone, into .git or through a link; and a round that would leave a link behind, or
+// the review's hunks and the pull request right. git apply checks it all before it writes: when the base
+// branch moved and any part no longer applies, the clone stays as it was and the run says which files, and
+// what it wrote before it failed to write the rest is undone. It writes nothing outside the clone, into
+// .git or through a link; and a round that would leave a link behind, or
 // whose diff makes one or changes one the repository holds, is undone, so the engine never starts with one
 // the run did not make (the harvest refuses links anyway).
 // The clone is read whole for that, a submodule's folder included: git status and git clean never look
@@ -144,30 +145,37 @@ function numstatPaths(out: string): string[] {
  * another mode, the mode spelled otherwise), and git apply then takes it from the diff or from the file on
  * disk. Where the clone has no symlink support (Windows, core.symlinks false) that file is a plain one holding
  * the link's target, and git writes a new target into it, which linksLeft never sees. A link the diff deletes
- * (or replaces with a file: a delete, then a new file) is not one. Null when git cannot say.
+ * (or replaces with a file: a delete, then a new file) is not one. What the diff names is read with what the
+ * index calls what the apply changed, and compared without case where the file system ignores it (Windows,
+ * macOS: core.ignorecase), which takes `L` for the link `l`. Null when git cannot say.
  */
 async function linksDeclared(ws: Workspace, patch: string): Promise<string[] | null> {
-  const [summary, numstat, tree] = await Promise.all([
+  const [summary, numstat, tree, modified, ignorecase] = await Promise.all([
     git(["apply", "--summary", patch], ws.dir),
     git(["apply", "--numstat", "-z", patch], ws.dir),
     git(["ls-tree", "-r", "-z", "--full-tree", "HEAD"], ws.dir),
+    git(["ls-files", "--modified", "-z"], ws.dir),
+    git(["config", "--bool", "core.ignorecase"], ws.dir),
   ]);
-  if (summary.code !== 0 || numstat.code !== 0 || tree.code !== 0) return null;
+  if (summary.code !== 0 || numstat.code !== 0 || tree.code !== 0 || modified.code !== 0) return null;
+  // Folded where case does not count, and compared so: a match is a refusal, so folding more is the safe side.
+  const fold = ignorecase.stdout.trim() === "true" ? (p: string) => p.toLowerCase() : (p: string) => p;
   const made: string[] = [];
   const deleted = new Set<string>();
   for (const line of summary.stdout.split("\n")) {
     const link = /^ (?:create mode 120000|mode change \d+ => 120000) (.+)$/.exec(line);
     if (link) made.push(link[1]!);
     const gone = /^ delete mode \d+ (.+)$/.exec(line);
-    if (gone) deleted.add(gone[1]!);
+    if (gone) deleted.add(fold(gone[1]!));
   }
   const committed = new Set(
     tree.stdout.split("\0").flatMap((entry) => {
       const link = /^120000 \S+ [0-9a-f]+\t(.+)$/s.exec(entry);
-      return link ? [link[1]!] : [];
+      return link ? [fold(link[1]!)] : [];
     }),
   );
-  const changed = numstatPaths(numstat.stdout).filter((p) => committed.has(p) && !deleted.has(p));
+  const touched = new Set([...numstatPaths(numstat.stdout), ...modified.stdout.split("\0").filter(Boolean)]);
+  const changed = [...touched].filter((p) => committed.has(fold(p)) && !deleted.has(fold(p)));
   return [...made, ...changed];
 }
 
@@ -285,6 +293,9 @@ export async function applyPreviousRound(
       reason: links ? linksReason(links) : "git could not list what they changed",
     };
   }
+  // git apply checks everything first, but can still fail while writing (a new file under a path that is a file),
+  // with what it wrote before still there: a link among it, maybe. The run starts from the clean clone it is told of.
+  await undoApply(ws, before);
   const head = (await git(["rev-parse", "HEAD"], ws.dir)).stdout.trim();
   const moved = rework.baseSha !== null && head !== "" && head !== rework.baseSha;
   return { round, applied: false, reason: whyNotApplied(res.stderr, round, branch, moved) };

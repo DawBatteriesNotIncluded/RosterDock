@@ -563,6 +563,16 @@ describe("removing a run's directory", () => {
     expect(calls).toBe(1);
   });
 
+  it("gives up within its time when that is longer than the longest wait between tries", async () => {
+    const started = Date.now();
+    await expect(
+      removeTree(path.join(root, "held-long"), 1500, async () => {
+        throw busy();
+      }),
+    ).rejects.toMatchObject({ code: "EBUSY" });
+    expect(Date.now() - started).toBeLessThan(4000);
+  });
+
   it("tries again after a first try that took longer than its time, as a large tree's does", async () => {
     let calls = 0;
     await removeTree(path.join(root, "large"), 200, async () => {

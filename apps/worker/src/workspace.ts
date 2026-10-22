@@ -435,25 +435,32 @@ async function readArtifact(
 
 /**
  * Where git checks a link out as a plain file holding its target (core.symlinks false, as Git for Windows has
- * it), git add keeps the link's type for that file, whatever the run wrote in it, and the diff would show the
- * link pointing at the file's new contents. The run wrote a file there: each committed link it changed into
- * one leaves the index first, so the add records the file and the diff a link replaced by it, as on Linux.
+ * it), git add keeps the link's type for that file, whatever the run wrote in it (or staged itself), and the
+ * diff would show the link pointing at the file's new contents. The run wrote a file there: each committed
+ * link (HEAD's) whose file is now a regular one with other contents leaves the index and comes back as that
+ * file, forced, since the add after this skips a path .gitignore matches. The diff then shows the link
+ * replaced by the file, as on Linux, where this changes nothing.
  */
 async function unstageLinksMadeFiles(ws: Workspace): Promise<void> {
-  const [index, modified] = await Promise.all([
-    git(["ls-files", "--stage", "-z"], ws.dir),
-    git(["ls-files", "--modified", "-z"], ws.dir),
+  const [tree, changed] = await Promise.all([
+    git(["ls-tree", "-r", "-z", "--full-tree", "HEAD"], ws.dir),
+    git(
+      ["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "HEAD", "--"],
+      ws.dir,
+    ),
   ]);
-  if (index.code !== 0 || modified.code !== 0) return;
-  const changed = new Set(modified.stdout.split("\0"));
+  if (tree.code !== 0 || changed.code !== 0) return;
+  const differs = new Set(changed.stdout.split("\0"));
   const files: string[] = [];
-  for (const entry of index.stdout.split("\0")) {
-    const link = /^120000 [0-9a-f]+ \d\t(.+)$/s.exec(entry)?.[1];
+  for (const entry of tree.stdout.split("\0")) {
+    const link = /^120000 \S+ [0-9a-f]+\t(.+)$/s.exec(entry)?.[1];
     // The handover and the blocked note stay out of the add, so out of this too.
-    if (!link || link === HANDOVER_FILE || link === BLOCKED_FILE || !changed.has(link)) continue;
+    if (!link || link === HANDOVER_FILE || link === BLOCKED_FILE || !differs.has(link)) continue;
     if ((await lstat(path.join(ws.dir, link)).catch(() => null))?.isFile()) files.push(link);
   }
-  if (files.length) await git(["--literal-pathspecs", "rm", "--cached", "--quiet", "--", ...files], ws.dir);
+  if (!files.length) return;
+  await git(["--literal-pathspecs", "rm", "--cached", "--quiet", "--", ...files], ws.dir);
+  await git(["--literal-pathspecs", "add", "--force", "--", ...files], ws.dir);
 }
 
 /** Declared outputs (or, if none were declared, new and changed files), the handover, blocked note and diff. */

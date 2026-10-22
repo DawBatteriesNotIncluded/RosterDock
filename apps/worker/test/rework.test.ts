@@ -611,20 +611,140 @@ describe("a rework run and links", () => {
   });
 
   it("records a committed link a run replaced with a file as a file where links are plain files, so it carries over", async () => {
-    const { repo } = await linkRepo("link-to-file", { a: "a\n" }, { l: "a" });
-    const ws = await cloneFor(repo, "link-to-file", true, ["l"]);
-    // A run there writes a file where the link is: a plain file holding "a" to it.
+    const { repo } = await linkRepo("link-to-file", { a: "a\n" }, { l: "a", m: "a", "dir/n": "../a" });
+    const ws = await cloneFor(repo, "link-to-file", true, ["l", "m", "dir/n"]);
+    // A run there writes a file where the links l and dir/n are: plain files holding their targets to it. m it
+    // leaves be.
     await writeFile(path.join(ws.dir, "l"), "now a file\n", "utf8");
+    await writeFile(path.join(ws.dir, "dir", "n"), "a file too\n", "utf8");
     const harvest = await harvestWorkspace(ws, []);
     const diff = harvest.artifacts.find((a) => a.kind === "diff")?.content ?? "";
     expect(diff).toContain("deleted file mode 120000");
     expect(diff).toContain("new file mode 100644");
     expect(diff).not.toMatch(/^index \S+ 120000$/m);
+    expect(parseUnifiedDiff(diff).map((f) => f.path)).toEqual(["dir/n", "dir/n", "l", "l"]);
     // Sent back, the round carries over, where links are real and where they are not.
     for (const windows of CLONES) {
       const again = await cloneFor(repo, `link-to-file-again-${windows ? "win" : "posix"}`, windows, ["l"]);
       expect(await applyPreviousRound(again, roundOf(diff), "main")).toMatchObject({ applied: true });
       expect(await readFile(path.join(again.dir, "l"), "utf8")).toBe("now a file\n");
+    }
+  });
+
+  it("records the file a run put in place of a committed link at a path .gitignore matches, wherever it runs", async () => {
+    const { repo } = await linkRepo(
+      "ignored-link",
+      { ".gitignore": ".env\n", ".env.example": "MODE=example\n" },
+      { ".env": ".env.example" },
+    );
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `ignored-link-${windows ? "win" : "posix"}`, windows, [".env"]);
+      await rm(path.join(ws.dir, ".env"));
+      await writeFile(path.join(ws.dir, ".env"), "MODE=dev\n", "utf8");
+      const harvest = await harvestWorkspace(ws, []);
+      const diff = harvest.artifacts.find((a) => a.kind === "diff")?.content ?? "";
+      expect(diff).toContain("deleted file mode 120000");
+      expect(diff).toMatch(/^new file mode 100644$/m);
+      expect(diff).toMatch(/^\+MODE=dev$/m);
+    }
+  });
+
+  it("records a committed link the engine itself staged as a file, where links are plain files", async () => {
+    const { repo } = await linkRepo("staged-link", { a: "a\n" }, { l: "a" });
+    const ws = await cloneFor(repo, "staged-link", true, ["l"]);
+    await writeFile(path.join(ws.dir, "l"), "now a file\n", "utf8");
+    // git add there keeps the link's type, whatever the file now holds.
+    await run(["add", "l"], ws.dir);
+    const diff = (await harvestWorkspace(ws, [])).artifacts.find((a) => a.kind === "diff")?.content ?? "";
+    expect(diff).toContain("deleted file mode 120000");
+    expect(diff).toContain("new file mode 100644");
+    expect(diff).not.toMatch(/^index \S+ 120000$/m);
+  });
+
+  it("leaves a committed link named as the handover in the index, as the add leaves the handover out", async () => {
+    const { repo } = await linkRepo("handover-link", { a: "a\n" }, { "handover-summary.md": "a" });
+    const ws = await cloneFor(repo, "handover-link", true, ["handover-summary.md"]);
+    await writeFile(path.join(ws.dir, "handover-summary.md"), "The handover.\n", "utf8");
+    const harvest = await harvestWorkspace(ws, []);
+    expect(harvest.handover).toBe("The handover.");
+    expect(harvest.artifacts.find((a) => a.kind === "diff")?.content ?? "").not.toContain(
+      "handover-summary.md",
+    );
+  });
+
+  it("refuses a change to a committed link in a folder, where links are plain files too", async () => {
+    const { repo } = await linkRepo("nested-link", { a: "a\n", "dir/x": "x\n" }, { "dir/l": "../a" });
+    const diff = await recordIn(
+      repo,
+      "nested-link",
+      async (dir) => {
+        const target = path.join(root, "nested-target");
+        await writeFile(target, secretFile, "utf8");
+        const sha = await run(["hash-object", "-w", target], dir);
+        await run(["update-index", "--cacheinfo", `120000,${sha},dir/l`], dir);
+      },
+      true,
+    );
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `nested-link-${windows ? "win" : "posix"}`, windows, ["dir/l"]);
+      expect(await applyPreviousRound(ws, roundOf(diff), "main")).toEqual({
+        round: 1,
+        applied: false,
+        reason: "dir/l is a symbolic link, which a rework run does not carry over",
+      });
+    }
+  });
+
+  it("refuses a change to a committed link named in another case, which a file system that ignores case takes", async () => {
+    const { repo } = await linkRepo("case-link", { a: "a\n" }, { l: "a" });
+    const honest = await recordIn(
+      repo,
+      "case-link",
+      async (dir) => {
+        const target = path.join(root, "case-target");
+        await writeFile(target, secretFile, "utf8");
+        const sha = await run(["hash-object", "-w", target], dir);
+        await run(["update-index", "--cacheinfo", `120000,${sha},l`], dir);
+      },
+      true,
+    );
+    // L for l: on Windows and macOS it is the same file; on Linux git finds no L.
+    const diff = honest
+      .replace(/^diff --git a\/l b\/l$/m, "diff --git a/L b/L")
+      .replace(/^--- a\/l$/m, "--- a/L")
+      .replace(/^\+\+\+ b\/l$/m, "+++ b/L");
+    for (const windows of CLONES) {
+      const ws = await cloneFor(repo, `case-link-${windows ? "win" : "posix"}`, windows, ["l"]);
+      expect((await applyPreviousRound(ws, roundOf(diff), "main")).applied).toBe(false);
+      expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
+    }
+  });
+
+  it("undoes what a round wrote before git apply failed to write the rest, so the clone is the clean one", async () => {
+    // A new link, then a file under README.md, which is a file: git apply writes the link, then fails.
+    const diff = [
+      "diff --git a/evil b/evil",
+      "new file mode 120000",
+      "index 0000000..e0b3f1b",
+      "--- /dev/null",
+      "+++ b/evil",
+      "@@ -0,0 +1 @@",
+      "+/etc/passwd",
+      "\\ No newline at end of file",
+      "diff --git a/README.md/x b/README.md/x",
+      "new file mode 100644",
+      "index 0000000..587be6b",
+      "--- /dev/null",
+      "+++ b/README.md/x",
+      "@@ -0,0 +1 @@",
+      "+x",
+      "",
+    ].join("\n");
+    for (const windows of CLONES) {
+      const ws = await cloneFor(baseRepo, `half-applied-${windows ? "win" : "posix"}`, windows, []);
+      expect((await applyPreviousRound(ws, roundOf(diff), "main")).applied).toBe(false);
+      expect(await lstat(path.join(ws.dir, "evil")).catch(() => null)).toBeNull();
+      expect((await git(["status", "--porcelain", "--ignored"], ws.dir, GIT_ENV)).stdout).toBe("");
     }
   });
 
