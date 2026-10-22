@@ -10,7 +10,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { WorkerCheckInput } from "@rosterdock/shared";
-import { inJob, killTree } from "./kill.js";
+import { inJob, jobsWork, killTree } from "./kill.js";
 import { tail } from "./text.js";
 import type { Workspace } from "./workspace.js";
 
@@ -67,14 +67,17 @@ export function testEnvironment(env: Record<string, string | undefined>): Record
  * process running (a server, a watcher), which would hold its output open and outlive the run. Elsewhere the
  * command leads a process group of its own and the group is ended; on Windows it runs in a job (inJob), and
  * taskkill ends the tree on top, where no job could be made. The group gets SIGTERM, and STOP_GRACE_MS later
- * SIGKILL: past that the step reads no more of its output.
+ * SIGKILL, whether or not the output is still held: past that the step reads no more of it.
  */
-export const execCommand: Exec = (command, args, opts) =>
-  new Promise((resolve) => {
-    if (opts.signal?.aborted) return resolve({ code: null, output: "", timedOut: false });
-    const win = process.platform === "win32";
-    const env = { ...opts.env, CI: "1" };
-    const job = win ? inJob(command, args, env) : null;
+export const execCommand: Exec = async (command, args, opts) => {
+  const stopped = { code: null, output: "", timedOut: false };
+  if (opts.signal?.aborted) return stopped;
+  const win = process.platform === "win32";
+  const env = { ...opts.env, CI: "1" };
+  // Where Windows PowerShell cannot run the job, under cmd.exe as before.
+  const job = win && (await jobsWork()) ? inJob(command, args, env) : null;
+  if (opts.signal?.aborted) return stopped;
+  return new Promise((resolve) => {
     const child = job
       ? spawn(job.file, job.args, { cwd: opts.cwd, env, windowsHide: true })
       : spawn(command, args, {
@@ -113,7 +116,7 @@ export const execCommand: Exec = (command, args, opts) =>
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      clearTimeout(grace);
+      // The grace runs on: a process that outlived SIGTERM gets its SIGKILL though it no longer holds the output.
       opts.signal?.removeEventListener("abort", end);
       child.stdout.destroy();
       child.stderr.destroy();
@@ -136,6 +139,7 @@ export const execCommand: Exec = (command, args, opts) =>
     child.on("error", (err) => settle(null, `\n${err.message}`));
     child.on("close", (code) => settle(code));
   });
+};
 
 async function exists(p: string): Promise<boolean> {
   try {

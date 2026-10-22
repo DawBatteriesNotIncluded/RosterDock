@@ -632,7 +632,7 @@ export async function checkConnection(
       check = { ok: false, at: "", latencyMs: 0, error: "the connection has no manifest", tools: none };
     } else {
       const probe = await probeOpenApi({ url: row.url, authEnvName: row.auth_env_name }, manifest, {
-        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        ...(deps.egress ? { egress: deps.egress } : {}),
         ...(deps.env ? { env: deps.env } : {}),
       });
       check = {

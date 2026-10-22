@@ -54,6 +54,7 @@ import { plannerRouter, probePlanners, type PlannerStatus } from "./peter/planne
 import { anthropicModel, tracedModel, type PeterModel } from "./peter/model.js";
 import { startReaper } from "./runs/reaper.js";
 import { sourceFetcher, type SourceFetcher } from "./reviews/sources.js";
+import { boardEgress, type Egress } from "./web/egress.js";
 import { boardWebReader, type Resolve, type WebReader } from "./web/transport.js";
 import { s3Store, type ObjectStore } from "./storage/s3.js";
 import { registerStyleRoutes } from "./routes/styles.js";
@@ -83,7 +84,7 @@ export interface BuildOptions {
   peterCliPrefixArgs?: string[];
   /** The same for the Codex CLI. */
   peterCodexPrefixArgs?: string[];
-  /** The fetch a style pack's file is downloaded with; tests use a fake. Default: global fetch. */
+  /** What a style pack's file is downloaded with, under the egress check (egressResolve); tests use a fake. Default: the board's pinned transport. */
   stylesFetch?: typeof fetch;
   /** The style packs offered; tests pin their own stand-in files. Default: styles/catalog.ts. */
   styleCatalog?: readonly StylePack[];
@@ -93,9 +94,15 @@ export interface BuildOptions {
   plannerStatuses?: () => Promise<PlannerStatus[]>;
   /** Sends an approved write to its live system. Tests inject one; the default sends nothing until a connection exists. */
   approvalExecutor?: ApprovalExecutor;
-  /** The fetch the board's MCP client uses for HTTP connections; tests replay recorded JSON-RPC. Default: global fetch. */
+  /**
+   * What HTTP connections (MCP and OpenAPI) and their OAuth are sent with, under the egress check
+   * (egressResolve); tests replay recorded JSON-RPC. Default: the board's pinned transport.
+   */
   mcpFetch?: typeof fetch;
-  /** The fetch needs-you notifications go out with; tests record the posts. Default: global fetch. */
+  /**
+   * What needs-you webhooks are posted with: the board's own as it is, a company's under the egress check;
+   * tests record the posts. Default: global fetch for the board's own, the pinned transport for a company's.
+   */
   notifyFetch?: typeof fetch;
   /** For the SMTP client behind email notifications: a private CA in tests. */
   smtp?: SmtpOptions;
@@ -114,6 +121,12 @@ export interface BuildOptions {
    */
   webFetch?: typeof fetch;
   webResolve?: Resolve;
+  /**
+   * What the names a company chose are checked with before anything is sent (a connection's server, its OAuth
+   * endpoints, a company's webhook and SMTP server, a style pack's host): every address public, or private
+   * where ROSTERDOCK_PRIVATE_DESTINATIONS allows it. Tests inject one. Default: the system resolver.
+   */
+  egressResolve?: Resolve;
   /** The fetch the Kubernetes secret store reaches the API server with; tests use a fake. Default: global fetch. */
   secretsFetch?: typeof fetch;
 }
@@ -166,6 +179,11 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
     ? { fetch: opts.webFetch ?? board.fetch, resolve: opts.webResolve ?? board.resolve }
     : null;
   const sources: SourceFetcher | null = web ? sourceFetcher(web) : null;
+  // What a company chose the board should reach: public addresses, and the private ones the operator lists.
+  // Each call site keeps its own transport in tests; the check above it is the same everywhere.
+  const egress = boardEgress(config.privateDestinations, opts.egressResolve);
+  const reach = (transport: typeof fetch | undefined): Egress =>
+    transport ? { ...egress, fetch: transport } : egress;
   // Artifacts over the inline limit live here, when the config names a bucket.
   const store: ObjectStore | null = config.storage
     ? s3Store(config.storage, opts.storageFetch ? { fetch: opts.storageFetch } : {})
@@ -197,7 +215,7 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
   // stdio children stay up between calls and go when idle; closed with the board.
   const mcpPool = mcpClientPool();
   const mcp: McpClientDeps = {
-    ...(opts.mcpFetch ? { fetch: opts.mcpFetch } : {}),
+    egress: reach(opts.mcpFetch),
     env: shared,
     secrets,
     log: { warn: (msg) => app.log.warn(msg) },
@@ -208,6 +226,7 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
   const notify: NotifyDeps = {
     db,
     ...(opts.notifyFetch ? { fetch: opts.notifyFetch } : {}),
+    egress: reach(opts.notifyFetch),
     env: shared,
     secrets,
     defaultWebhookUrl: config.notifyWebhookUrl,
@@ -316,14 +335,14 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
   registerPeterRoutes(app, peter, planners);
   registerStyleRoutes(app, {
     db,
-    fetch: opts.stylesFetch ?? ((input, init) => fetch(input, init)),
+    egress: reach(opts.stylesFetch),
     catalog: opts.styleCatalog ?? STYLE_PACKS,
     vendorDir: opts.stylesVendorDir === undefined ? VENDOR_DIR : opts.stylesVendorDir,
   });
   registerApprovalRoutes(app, db, queue, opts.approvalExecutor ?? brokerExecutor({ db, mcp }));
   registerConnectionRoutes(app, db, mcp, {
     store: secrets,
-    oauth: { fetch: opts.mcpFetch ?? ((input, init) => fetch(input, init)), log: mcp.log! },
+    oauth: { egress: reach(opts.mcpFetch), log: mcp.log! },
     env: shared,
     publicUrl: config.publicUrl,
     operator,
@@ -347,7 +366,12 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
       // Whether the board reads the web: the web connection's pages and research sources.
       web: !!web,
       ...(manages
-        ? { sharedEnvNames: config.sharedEnvNames, stdioCommands: config.stdioCommands.map(stdioCommandLine) }
+        ? {
+            sharedEnvNames: config.sharedEnvNames,
+            stdioCommands: config.stdioCommands.map(stdioCommandLine),
+            // The private names, addresses and ranges connections may reach, as the operator wrote them.
+            privateDestinations: config.privateDestinations.entries,
+          }
         : {}),
     };
   });

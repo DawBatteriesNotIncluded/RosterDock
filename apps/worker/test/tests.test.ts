@@ -217,11 +217,12 @@ describe("runRepoTests", () => {
 
   /**
    * A Node that stands in for a test runner: it starts one that holds its output open, as a worker or a server
-   * would, and then waits, or with `exit` ends at once and leaves it running.
+   * would, and then waits, or with `exit` ends at once and leaves it running. `stubborn`: the one it starts
+   * writes its output elsewhere and lives through SIGTERM, as a server started `> log 2>&1 &` that handles it.
    */
   async function holder(
     name: string,
-    exit?: number,
+    { exit, stubborn = false }: { exit?: number; stubborn?: boolean } = {},
   ): Promise<{ script: string; pidFile: string; held(): number; started(): Promise<void> }> {
     const script = path.join(root, `${name}.cjs`);
     const pidFile = path.join(root, `${name}.pid`);
@@ -229,7 +230,9 @@ describe("runRepoTests", () => {
       script,
       [
         'const { spawn } = require("node:child_process");',
-        'const held = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "inherit" });',
+        stubborn
+          ? 'const held = spawn(process.execPath, ["-e", "process.on(`SIGTERM`, () => {}); setTimeout(() => {}, 60000)"], { stdio: "ignore" });'
+          : 'const held = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "inherit" });',
         // Whole or not at all: a stop between the file's creation and its write left it empty.
         'require("node:fs").writeFileSync(`${process.argv[2]}.part`, String(held.pid));',
         'require("node:fs").renameSync(`${process.argv[2]}.part`, process.argv[2]);',
@@ -282,7 +285,7 @@ describe("runRepoTests", () => {
 
   it("ends what a command left running when it ends by itself, and reports the command's own exit", async () => {
     // A test script that passes and leaves its server running: the server holds the output open.
-    const h = await holder("left-running", 7);
+    const h = await holder("left-running", { exit: 7 });
     const started = Date.now();
     const res = await execCommand(process.execPath, [h.script, h.pidFile], {
       cwd: root,
@@ -292,6 +295,20 @@ describe("runRepoTests", () => {
     expect(res).toMatchObject({ code: 7, timedOut: false });
     expect(Date.now() - started).toBeLessThan(STARTS_WITHIN_MS + 10_000);
     expect(await ended(h.held())).toBe(true);
+  });
+
+  it("ends a process the command left that outlives SIGTERM and holds no output, at the time limit or when it ends", async () => {
+    for (const exit of [undefined, 0]) {
+      const h = await holder(`stubborn-${exit ?? "limit"}`, { exit, stubborn: true });
+      const res = await execCommand(process.execPath, [h.script, h.pidFile], {
+        cwd: root,
+        env: testEnvironment(process.env),
+        timeoutMs: exit === undefined ? STARTS_WITHIN_MS : 60_000,
+      });
+      expect(res.timedOut).toBe(exit === undefined);
+      // Its SIGKILL comes STOP_GRACE_MS after the SIGTERM, though the step has read on.
+      expect(await ended(h.held())).toBe(true);
+    }
   });
 
   it("ends a command, and every process it started, at once when the run stops", async () => {

@@ -1,6 +1,8 @@
 // The board's MCP client: one purpose, let the broker list and call tools on
 // a connection the policy already allowed. Two transports: Streamable HTTP
-// (fetch injected, so tests replay recorded JSON-RPC) and stdio (a child
+// (through the board's egress, web/egress.ts: every request's address checked,
+// no redirect followed; tests inject its transport and replay recorded
+// JSON-RPC) and stdio (a child
 // process the board spawns, only for a command line the operator lists in
 // ROSTERDOCK_STDIO_COMMANDS; tests spawn a fixture replayer). A stdio child is
 // kept between calls in a pool keyed by the company, the connection's
@@ -24,6 +26,7 @@ import { stdioRefusal } from "../operator.js";
 import { notSetForCompany } from "../secrets/company.js";
 import type { SecretStore } from "../secrets/store.js";
 import { isExpiring, refreshTokens, type TokenAuth } from "./oauth.js";
+import { defaultEgress, egressFetch, type Egress } from "../web/egress.js";
 import type { WebReader } from "../web/transport.js";
 
 export const MCP_CALL_TIMEOUT_MS = 30_000;
@@ -55,8 +58,12 @@ export interface McpOAuthTarget {
 }
 
 export interface McpClientDeps {
-  /** Injected in tests; never the real network there. */
-  fetch?: typeof fetch;
+  /**
+   * How an HTTP connection, its OAuth refresh and an OpenAPI service are reached: public addresses and the
+   * private ones the operator lists (web/egress.ts). Tests inject its transport and resolver. Default: the
+   * board's own, with nothing private allowed.
+   */
+  egress?: Egress;
   /** Where env var names resolve: a company's secrets over the names the board shares (withCompanyEnv). Default: none. */
   env?: NodeJS.ProcessEnv;
   /** Where OAuth tokens live. Without one, an OAuth connection cannot be called. */
@@ -214,7 +221,7 @@ async function resolveCredential(target: McpTarget, deps: McpClientDeps): Promis
         resource: target.oauth.resource,
       },
       {
-        fetch: deps.fetch ?? ((input, init) => fetch(input, init)),
+        egress: deps.egress ?? defaultEgress(),
         ...(deps.now ? { now: deps.now } : {}),
         log: deps.log ?? { warn: () => undefined },
       },
@@ -241,8 +248,15 @@ function buildTransport(target: McpTarget, deps: McpClientDeps, secret: string |
       throw new McpTargetError(`${notSetForCompany(target.authEnvName)}; nothing was called`);
     if (target.oauth && !secret)
       throw new McpTargetError("the connection is not authorised; nothing was called");
+    // A redirect is refused, not followed: the bearer and the call go where the connection says, or nowhere.
+    // The answer may be an event stream, so the deadline stops at its headers and the call's own timeout and
+    // the client's close end the rest.
     return new StreamableHTTPClientTransport(new URL(target.url), {
-      ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      fetch: egressFetch(deps.egress ?? defaultEgress(), {
+        redirect: "error",
+        timeoutMs: deps.timeoutMs ?? MCP_CALL_TIMEOUT_MS,
+        stream: true,
+      }),
       requestInit: secret ? { headers: { authorization: `Bearer ${secret}` } } : {},
     });
   }

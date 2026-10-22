@@ -45,7 +45,8 @@ export function killTree(child: ChildProcess): void {
  * and more where this takes under one).
  */
 function jobScript(comspec: string, line: string, restore: Record<string, string | undefined>): string {
-  const quoted = (s: string) => `'${s.replace(/'/g, "''")}'`;
+  // PowerShell ends a single-quoted string at any single quote, the typographic ones included.
+  const quoted = (s: string) => `'${s.replace(/['\u2018-\u201b]/g, "$&$&")}'`;
   return [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
@@ -89,7 +90,7 @@ function jobScript(comspec: string, line: string, restore: Record<string, string
  * Windows: how to start `command` with `args` in `env` as cmd.exe would run them (npm, pnpm and yarn are .cmd
  * shims there), in a job, so that ending what this returns ends every process the command started, those
  * whose parent already ended included; and when the command ends by itself, whatever it left running ends
- * with it. Null without Windows PowerShell: start it under cmd.exe as it is.
+ * with it. Null without Windows PowerShell: start it under cmd.exe as it is (and so where jobsWork says no).
  */
 export function inJob(
   command: string,
@@ -114,4 +115,47 @@ export function inJob(
       Buffer.from(script, "utf16le").toString("base64"),
     ],
   };
+}
+
+/**
+ * Whether the job can start a command here at all: Windows PowerShell starts (a rule may block it), runs the
+ * script in full language mode (AppLocker and WDAC put it in Constrained Language, which refuses the .NET the
+ * script calls, and it would exit before cmd.exe starts) and starts the command through it. Tried with a
+ * command that only exits with a code of its own.
+ */
+export function probeJob(): Promise<boolean> {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined),
+  );
+  const job = inJob("exit", ["7"], env);
+  if (!job) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(job.file, job.args, { env, stdio: "ignore", windowsHide: true });
+    } catch {
+      // Where a rule blocks powershell.exe, the spawn throws (EPERM, UNKNOWN).
+      return resolve(false);
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve(false);
+    }, 30_000);
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      resolve(code === 7);
+    });
+  });
+}
+
+let jobs: Promise<boolean> | undefined;
+
+/** probeJob, asked once for this worker. */
+export function jobsWork(): Promise<boolean> {
+  jobs ??= probeJob();
+  return jobs;
 }

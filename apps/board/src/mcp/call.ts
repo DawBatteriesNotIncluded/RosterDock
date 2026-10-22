@@ -34,7 +34,7 @@ export async function callConnectionTool(
     return callOpenApiOperation(
       { url: connection.url, authEnvName: connection.auth_env_name },
       connection.manifest as unknown as OpenApiManifest,
-      { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.env ? { env: deps.env } : {}) },
+      { ...(deps.egress ? { egress: deps.egress } : {}), ...(deps.env ? { env: deps.env } : {}) },
       name,
       args,
     );

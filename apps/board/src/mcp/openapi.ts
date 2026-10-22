@@ -4,7 +4,9 @@
 // risky is enforced here: only manifest operations exist, a mutating method is
 // always a write, request and response sizes and time are capped, the
 // credential is an env var NAME resolved at call time (from `deps.env`: a
-// company's secrets over the names the board shares), and answers come back
+// company's secrets over the names the board shares), a request reaches only a
+// public address or a private one the operator lists and follows no redirect
+// (web/egress.ts), and answers come back
 // with secret-shaped keys redacted. Carried over from the v1 prototype without
 // its governance ladder; the broker decides, this module calls.
 
@@ -16,6 +18,7 @@ import {
 } from "@rosterdock/shared";
 import YAML from "yaml";
 import { notSetForCompany } from "../secrets/company.js";
+import { defaultEgress, egressFetch, type Egress } from "../web/egress.js";
 import type { McpCallOutcome } from "./client.js";
 
 export type OpenApiManifest = OpenApiManifestInput;
@@ -212,7 +215,8 @@ export interface OpenApiTarget {
 }
 
 export interface OpenApiDeps {
-  fetch?: typeof fetch;
+  /** How the service is reached (web/egress.ts); tests inject its transport and resolver. Default: the board's own. */
+  egress?: Egress;
   /** Where the credential's NAME resolves: a company's secrets over the names the board shares. Default: none. */
   env?: NodeJS.ProcessEnv;
 }
@@ -278,7 +282,11 @@ export async function probeOpenApi(
     const header = (manifest.authHeader ?? "authorization").toLowerCase();
     headers[header] = (manifest.authScheme ?? "bearer") === "bearer" ? `Bearer ${secret}` : secret;
   }
-  const doFetch = deps.fetch ?? fetch;
+  // A redirect is an answer like any other here: the service is there. Nothing follows it.
+  const doFetch = egressFetch(deps.egress ?? defaultEgress(), {
+    redirect: "manual",
+    timeoutMs: manifest.timeoutMs,
+  });
   try {
     const response = await doFetch(target.url, {
       method: "GET",
@@ -342,7 +350,11 @@ export async function callOpenApiOperation(
     const header = (manifest.authHeader ?? "authorization").toLowerCase();
     headers[header] = (manifest.authScheme ?? "bearer") === "bearer" ? `Bearer ${secret}` : secret;
   }
-  const doFetch = deps.fetch ?? fetch;
+  // A redirect is refused: an operation, a write above all, goes to the URL the manifest names or nowhere.
+  const doFetch = egressFetch(deps.egress ?? defaultEgress(), {
+    redirect: "error",
+    timeoutMs: manifest.timeoutMs,
+  });
   let response: Response;
   try {
     response = await doFetch(built.url, {
