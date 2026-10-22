@@ -3,10 +3,11 @@
 // itself, its sign-in and a proxy, the prompt on stdin, stopped at a timeout.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveWindowsBin } from "@rosterdock/shared";
 
 const PASS_ENV =
   /^(PATH|Path|PATHEXT|HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|USER|USERNAME|LOGNAME|SHELL|TMPDIR|TEMP|TMP|LANG|LC_[A-Z_]+|APPDATA|LOCALAPPDATA|SystemRoot|ComSpec|XDG_[A-Z_]+|HTTPS?_PROXY|NO_PROXY|https?_proxy|no_proxy|CLAUDE_[A-Z0-9_]+|ANTHROPIC_[A-Z0-9_]+|CODEX_[A-Z0-9_]+|OPENAI_[A-Z0-9_]+)$/;
@@ -16,30 +17,29 @@ export function cliEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([k, v]) => v !== undefined && PASS_ENV.test(k)));
 }
 
-/** The script npm's .cmd shim runs on Windows, for each CLI the board plans with by default. */
-const NPM_SCRIPTS = new Map<string, string[]>([
-  ["claude", ["@anthropic-ai", "claude-code", "cli.js"]],
-  ["codex", ["@openai", "codex", "bin", "codex.js"]],
-]);
-
 /**
- * On Windows npm installs claude and codex as .cmd shims, which a spawn without a shell cannot start: the
- * script the shim runs, found beside it on PATH, is run with this Node instead (as the worker runs its
- * engines). Any other binary, or any other platform, as it is.
+ * On Windows npm installs claude and codex as .cmd shims, which a spawn without a shell cannot start: a CLI
+ * is started as the shim would start it, Claude Code's claude.exe as it is and a script with this Node (as the
+ * worker runs its engines). A program named, or found first on PATH, as it is; any other platform, as it is.
  */
 export function resolveCliBin(
   bin: string,
   env: NodeJS.ProcessEnv = process.env,
   platform = process.platform,
 ): { bin: string; prefix: string[] } {
-  const script = NPM_SCRIPTS.get(bin);
-  if (!script || platform !== "win32") return { bin, prefix: [] };
-  for (const dir of (env.Path || env.PATH || "").split(path.delimiter)) {
-    if (!dir) continue;
-    const js = path.join(dir, "node_modules", ...script);
-    if (existsSync(js)) return { bin: process.execPath, prefix: [js] };
-  }
-  return { bin, prefix: [] };
+  if (platform !== "win32") return { bin, prefix: [] };
+  return resolveWindowsBin(bin, (env.Path || env.PATH || "").split(path.delimiter), process.execPath, {
+    isFile: (p) => statSync(p, { throwIfNoEntry: false })?.isFile() ?? false,
+    read: (p) => {
+      try {
+        return readFileSync(p, "utf8");
+      } catch {
+        return null;
+      }
+    },
+    join: path.join,
+    dirname: path.dirname,
+  });
 }
 
 export interface CliCall {
