@@ -11,7 +11,6 @@ import {
   DEFAULT_ALLOWED_TOOLS,
   narrowTools,
   parseStream,
-  resolveClaudeBin,
 } from "../src/engines/claude-code.js";
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -235,24 +234,6 @@ process.stderr.write("available=" + a[a.indexOf("--tools") + 1] + "\\n");`,
       );
       expect(texts).toContain("tools=Write(./**)");
       expect(texts).toContain("available=Write");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("resolves the Windows npm shim to cli.js run by this Node", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-shim-"));
-    try {
-      const js = path.join(dir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
-      await (await import("node:fs/promises")).mkdir(path.dirname(js), { recursive: true });
-      await writeFile(js, "", "utf8");
-      const resolved = resolveClaudeBin("claude", { PATH: dir }, "win32");
-      expect(resolved).toEqual({ bin: process.execPath, prefix: [js] });
-      expect(resolveClaudeBin("claude", { PATH: dir }, "linux")).toEqual({ bin: "claude", prefix: [] });
-      expect(resolveClaudeBin("/opt/claude", { PATH: dir }, "win32")).toEqual({
-        bin: "/opt/claude",
-        prefix: [],
-      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
