@@ -134,9 +134,12 @@ install built from that tree changes each of these:
   quoted name with an emoji in it another's spelling. The board now reads a diff by its hunks' counts, opens a
   review of a diff git would not write with none of it and a failing secrets check, and builds a pull request
   only while the review's diff, read again, reads as the files the review showed. Upgrading: a review open
-  before the upgrade whose diff an older board misread fails its pull request on approval, saying so; request
-  changes for a round that reads it again. Files whose names are not UTF-8 (Linux allows any bytes) shared one
-  name in the review; a run that would complete now fails, saying so.
+  before the upgrade whose diff an older board misread fails its pull request on approval, saying so; a person
+  vetoes the approval and requests changes, for a round the new board reads. Files whose names are not UTF-8
+  (Linux allows any bytes) shared one name in the review; a run that would complete now fails, saying so, as
+  it does on two names that differ only by spaces or a U+FEFF at an end, and, without a repository, on a file
+  named `.git`, which is not delivered. The board kept an artifact's name trimmed of those, so such a file
+  replaced the one without them.
 - On Windows, 0.1.0-rc.1 and 0.1.0-rc.2 ran the repository's tests without the job object: Windows
   PowerShell never made it (kernel32's functions were declared without PreserveSig), so what the tests left
   running when they ended by themselves carried on, as without one. The worker now makes it, and its log

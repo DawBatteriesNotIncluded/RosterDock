@@ -187,8 +187,10 @@ their own, each with its own database and workers.
 - The git token (`worker.gitSecret`) goes into a clone's URL only over https and only to the hosts it is for
   (`worker.gitSecret.hosts`, `ROSTERDOCK_GIT_TOKEN_HOSTS`; github.com by default), and the clone's remote is
   set back without it. A clone that fails, or that Stop, the time limit or a shutdown ends part-way, is
-  removed at once (on Windows, where a git ended by taskkill can hold its files a moment longer, as soon as it
-  lets go, tried for half a minute), so no `.git/config` with the token in its URL stays on disk. A project
+  removed at once, so no `.git/config` with the token in its URL stays on disk. On Windows, where a git ended
+  by taskkill can hold its files a moment longer, it goes as soon as git lets go, tried for half a minute,
+  which a worker shutting down waits out; a file held past that keeps the folder until a run is prepared in it
+  again. A project
   whose repository is on any other host is cloned with no token, so whoever sets a project's repository cannot
   send the fleet's token somewhere else.
 - An artifact over 512 KB goes to the object store as bytes the board has already scanned for raw
@@ -267,7 +269,10 @@ their own, each with its own database and workers.
   local `.env` that `.gitignore` matches) is not delivered, whatever it holds. Where git cannot read the
   changes back (a lock left by a git that something ended part-way, a folder it cannot open, a name that is
   not UTF-8, which the review could not tell from another), a run that would complete fails rather than send
-  part of them for review; one that is blocked or failed says so as it would.
+  part of them for review; one that is blocked or failed says so as it would. It fails as well on two names
+  that differ only by spaces or a U+FEFF at an end, which a reviewer could not tell apart, and, without a
+  repository, on a file named `.git`, which no diff can show and which is not delivered. An artifact keeps
+  its name as the run gave it, never trimmed into another's.
 - A run sent back with changes requested starts from that round only as its diff, checked against the
   sha256 the review recorded and applied with `git apply`, which writes nothing outside the clone, into
   `.git` or through a link. A round that would leave a link in the clone is undone, and the run starts

@@ -207,6 +207,14 @@ export function decodeNames(out: Buffer): { names: string[]; notUtf8: string[] }
   return decoded;
 }
 
+/** A name as a reason quotes it: quoted and in ASCII, so a space or a U+FEFF at an end shows (`"\ufeffreport.md"`). */
+function spellName(name: string): string {
+  return JSON.stringify(name).replace(
+    /[^\x20-\x7e]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 /**
  * Why git said it failed, in its line: its error before any warning beside it (a line-ending one), the warning
  * where that is all it said, its last line otherwise. Credentials redacted.
@@ -251,6 +259,17 @@ export function redactGit(text: string): string {
 export const CLONE_LOW_SPEED = { bytesPerSecond: 1000, seconds: 60 };
 
 /**
+ * Removals of a stopped clone's folder that outlived removeTree's window, by folder: a run prepared there next
+ * waits for its own, so it never takes the new clone's files, and a worker that stops waits for them all.
+ */
+const removing = new Map<string, Promise<void>>();
+
+/** Every stopped clone's removal still going on, settled: each folder gone, or given up after half a minute. */
+export async function removalsDone(): Promise<void> {
+  await Promise.all(removing.values());
+}
+
+/**
  * The run's directory, with the repository cloned into it. `signal` (Stop, the time limit, shutdown) ends the
  * clone; a clone that fails or is ended leaves no directory behind.
  */
@@ -260,10 +279,13 @@ export async function prepareWorkspace(
   project: { repoUrl: string | null; defaultBranch: string },
   credential: GitCredential | null,
   signal?: AbortSignal,
+  /** How a folder is removed; a test's stands in for a file Windows holds. */
+  remove: typeof rm = rm,
 ): Promise<Workspace> {
   const dir = path.join(workRoot, runId);
+  await removing.get(dir);
   // A git just stopped in it holds its files a moment on Windows (EBUSY).
-  await removeTree(dir);
+  await removeTree(dir, undefined, remove);
   await mkdir(dir, { recursive: true });
   if (!project.repoUrl) return { dir, repo: false };
   try {
@@ -272,8 +294,13 @@ export async function prepareWorkspace(
     // A clone that failed or was stopped part-way leaves nothing: its .git/config holds the URL, token and all.
     // On Windows a git just ended by taskkill may hold its files past removeTree's window: the removal goes on
     // without holding the run's stop, until git lets go.
-    await removeTree(dir).catch(() => {
-      void removeTree(dir, 30_000).catch(() => {});
+    await removeTree(dir, undefined, remove).catch(() => {
+      const removal: Promise<void> = removeTree(dir, 30_000, remove)
+        .catch(() => {})
+        .finally(() => {
+          if (removing.get(dir) === removal) removing.delete(dir);
+        });
+      removing.set(dir, removal);
     });
     throw err;
   }
@@ -703,18 +730,38 @@ export async function harvestWorkspace(
       }
     }
   } else {
-    // Each file once, under the name git would give it (a declared `./report.md` is report.md); one no tree
-    // holds (a file named .git) is not in it.
+    // A file no repository holds (one named .git) is none the review could show: it is not delivered, and a run
+    // that would complete fails, naming it.
+    const outside = out.artifacts.filter(
+      (a) => a.kind !== "handover" && !isTreePath(path.posix.normalize(a.path)),
+    );
+    if (outside.length) {
+      out.artifacts = out.artifacts.filter((a) => !outside.includes(a));
+      out.filesWritten = out.filesWritten.filter((f) => !outside.some((a) => a.path === f));
+      out.unreadable ??= `the run's changes could not be read back for review (a file's name is one no repository can hold: ${spellName(outside[0]!.path)})`;
+    }
+    // Each file once, under the name git would give it (a declared `./report.md` is report.md).
     const rendered = new Set<string>();
     diffText = out.artifacts
       .filter((a) => a.kind !== "handover" && a.kind !== "diff")
       .flatMap((a) => {
         const name = path.posix.normalize(a.path);
-        if (rendered.has(name) || !isTreePath(name)) return [];
+        if (rendered.has(name)) return [];
         rendered.add(name);
         return [a.encoding === "base64" ? renderBinaryFileDiff(name) : renderNewFileDiff(name, a.content)];
       })
       .join("");
+  }
+  // Two files whose names are the same but for spaces or a U+FEFF at either end, which a reviewer cannot tell
+  // apart: a run that would complete fails, naming both.
+  const trimmed = new Map<string, string>();
+  for (const name of out.filesWritten) {
+    const other = trimmed.get(name.trim());
+    if (other !== undefined && other !== name) {
+      out.unreadable ??= `the run's changes could not be read back for review (two files' names differ only by spaces or a U+FEFF at an end: ${spellName(other)} and ${spellName(name)})`;
+      break;
+    }
+    trimmed.set(name.trim(), name);
   }
   const fitted = fitDiff(diffText, maxBytes);
   out.diffOmitted = fitted.omitted;

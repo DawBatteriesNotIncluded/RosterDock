@@ -807,7 +807,7 @@ describe("reviews", () => {
     expect(await approve(old.id)).toMatchObject({
       status: "failed",
       error:
-        "the review's diff reads otherwise than the files the review showed (an older board read it): request changes for a round that reads it again",
+        "the review's diff reads otherwise than the files the review showed (an older board read it): veto the approval and request changes, for a round this board reads",
     });
     // A diff that no longer hashes to what the review was opened with opens nothing.
     const changed = await open("Its diff changed since");

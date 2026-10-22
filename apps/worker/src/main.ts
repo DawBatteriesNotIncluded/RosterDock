@@ -16,6 +16,7 @@ import { createWorkerMetrics, startMetricsServer } from "./metrics.js";
 import { createPodMetricsSampler, podMetricsConfig } from "./pod-metrics.js";
 import { createResourceSampler } from "./resources.js";
 import { engineEnvironment, executeRun, RunInterrupted } from "./run.js";
+import { removalsDone } from "./workspace.js";
 
 const config = loadConfig();
 for (const stream of [process.stdout, process.stderr]) dropLinesWhenGone(stream);
@@ -138,6 +139,8 @@ const stop = async () => {
   log.info("shutting down");
   shutdown.abort();
   await boss.stop({ graceful: true, timeout: 20_000, close: true });
+  // A clone a stop ended part-way, still being removed (Windows): its .git/config holds the token.
+  await removalsDone();
   await metricsServer?.close();
   process.exit(0);
 };

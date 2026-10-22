@@ -18,7 +18,7 @@ import type { EngineAdapter } from "../src/engines/types.js";
 import { engineEnvironment, executeRun, fitCompletion, RunInterrupted, type RunDeps } from "../src/run.js";
 import { runRootSpanId, traceIdForRun } from "@rosterdock/shared";
 import type { Exec } from "../src/tests.js";
-import { git } from "../src/workspace.js";
+import { git, removalsDone } from "../src/workspace.js";
 import { skipWithoutSymlinks } from "./helpers.js";
 
 let workRoot: string;
@@ -50,11 +50,13 @@ function fakeBoard(
     limits?: ClaimedRun["spec"]["limits"];
     engine?: string;
     department?: ClaimedRun["spec"]["department"];
+    /** The run's id, and so its folder under workRoot. */
+    runId?: string;
   } = {},
 ): FakeBoard {
   const claimed: ClaimedRun = {
     run: {
-      id: "run-1",
+      id: opts.runId ?? "run-1",
       taskId: "task-1",
       teammateId: "cody",
       engine: opts.engine ?? "stub",
@@ -66,7 +68,7 @@ function fakeBoard(
     tokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
     pack,
     spec: {
-      runId: "run-1",
+      runId: opts.runId ?? "run-1",
       attempt: 1,
       task: { id: "task-1", number: 7, title: "Fixture", description: "", declaredOutputs },
       project: { repoUrl: opts.repoUrl ?? null, defaultBranch: "main", name: "P" },
@@ -470,14 +472,21 @@ async function silentHost(): Promise<{ url: string; close(): Promise<void> }> {
 }
 
 describe("a stalled clone", () => {
+  // Each test's clone in a folder of its own: a removal still going on from one never meets the next one's.
   it("ends on Stop instead of holding the worker", async () => {
     const host = await silentHost();
     try {
-      const board = fakeBoard(PACK(), [], { repoUrl: host.url, stopAfterHeartbeats: 2 });
+      const board = fakeBoard(PACK(), [], {
+        repoUrl: host.url,
+        stopAfterHeartbeats: 2,
+        runId: "run-stall-stop",
+      });
       const started = Date.now();
-      const outcome = await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board));
+      const outcome = await executeRun({ runId: "run-stall-stop", jobId: "job-1" }, deps(board));
       expect(outcome.status).toBe("stopped");
       expect(Date.now() - started).toBeLessThan(4000);
+      await removalsDone();
+      expect(existsSync(path.join(workRoot, "run-stall-stop"))).toBe(false);
     } finally {
       await host.close();
     }
@@ -489,18 +498,18 @@ describe("a stalled clone", () => {
       const board = fakeBoard(PACK(), [], {
         repoUrl: host.url,
         sandbox: { allowedTools: null, envNames: null, timeoutSeconds: 1 },
+        runId: "run-stall-limit",
       });
       const outcome = await executeRun(
-        { runId: "run-1", jobId: "job-1" },
+        { runId: "run-stall-limit", jobId: "job-1" },
         deps(board, { heartbeatMs: 10_000 }),
       );
       expect(outcome.status).toBe("failed");
       expect(board.completion?.blocker?.code).toBe("timeout");
       expect(board.completion?.error).toMatch(/time limit/);
-      // Gone, token and all: at once where git dies at once, within seconds where taskkill ends it (Windows).
-      for (const until = Date.now() + 15_000; existsSync(path.join(workRoot, "run-1")) && Date.now() < until;)
-        await new Promise((r) => setTimeout(r, 200));
-      expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
+      // Gone, token and all: at once where git dies at once, once git lets go where taskkill ends it (Windows).
+      await removalsDone();
+      expect(existsSync(path.join(workRoot, "run-stall-limit"))).toBe(false);
     } finally {
       await host.close();
     }
@@ -514,13 +523,15 @@ describe("a stalled clone", () => {
       const board = fakeBoard(PACK(), [], {
         repoUrl: `https://127.0.0.1:${port}/stalled.git`,
         stopAfterHeartbeats: 4,
+        runId: "run-stall-token",
       });
       const outcome = await executeRun(
-        { runId: "run-1", jobId: "job-1" },
+        { runId: "run-stall-token", jobId: "job-1" },
         deps(board, { gitCredential: { token: "partial-clone-token", hosts: [`127.0.0.1:${port}`] } }),
       );
       expect(outcome.status).toBe("stopped");
-      expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
+      await removalsDone();
+      expect(existsSync(path.join(workRoot, "run-stall-token"))).toBe(false);
     } finally {
       await host.close();
     }

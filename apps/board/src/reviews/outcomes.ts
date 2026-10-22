@@ -3,14 +3,7 @@
 // section). Kept apart from the service so the routes and the board tools
 // share one path.
 
-import {
-  canonicalJson,
-  parseUnifiedDiff,
-  payloadSha256,
-  sha256Hex,
-  type ActorRef,
-  type DiffFile,
-} from "@rosterdock/shared";
+import { parseUnifiedDiff, payloadSha256, sha256Hex, type ActorRef, type DiffFile } from "@rosterdock/shared";
 import type { Db } from "../db/pool.js";
 import { openChange, type GitHosts } from "../git/hosts.js";
 import { artifactBytes, artifactText } from "../storage/artifacts.js";
@@ -28,16 +21,28 @@ export interface Restarted {
   reason: string | null;
 }
 
-/** A file as a review shows it and a pull request writes it. */
-function shown(f: DiffFile): DiffFile {
-  return {
-    path: f.path,
-    status: f.status,
-    binary: f.binary,
-    additions: f.additions,
-    deletions: f.deletions,
-    hunks: f.hunks,
-  };
+/**
+ * The same value, field by field, a field left undefined the same as one left out (as JSON, and so the stored
+ * rows, has it). Stops at the first difference and copies nothing: a near-cap diff is a million lines.
+ */
+function same(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!same(a[i], b[i])) return false;
+    return true;
+  }
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  let fields = 0;
+  for (const k in x) {
+    if (x[k] === undefined) continue;
+    if (!same(x[k], y[k])) return false;
+    fields++;
+  }
+  for (const k in y) if (y[k] !== undefined) fields--;
+  return fields === 0;
 }
 
 /**
@@ -83,8 +88,9 @@ async function approvedFiles(
   } catch (err) {
     return `the review's diff could not be read: ${(err as Error).message}`;
   }
-  if (canonicalJson(files.map(shown)) !== canonicalJson(rows))
-    return "the review's diff reads otherwise than the files the review showed (an older board read it): request changes for a round that reads it again";
+  const shown = (f: DiffFile) => [f.path, f.status, f.binary, f.additions, f.deletions, f.hunks];
+  if (files.length !== rows.length || files.some((f, i) => !same(shown(f), shown(rows[i]!))))
+    return "the review's diff reads otherwise than the files the review showed (an older board read it): veto the approval and request changes, for a round this board reads";
   return rows;
 }
 
