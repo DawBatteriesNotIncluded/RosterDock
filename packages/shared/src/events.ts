@@ -88,6 +88,11 @@ export const EVENT_TYPES = [
   "notify.sent",
   // Deployable (M6)
   "teammate.drift",
+  // Company model providers: the payload carries names only, never a value.
+  "model_provider.created",
+  "model_provider.updated",
+  "model_provider.archived",
+  "model_provider.deleted",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -109,7 +114,8 @@ export interface SubjectRef {
     | "goal"
     | "draft"
     | "approval"
-    | "connection";
+    | "connection"
+    | "model_provider";
   id: string;
 }
 

@@ -5,11 +5,13 @@
 import {
   isPublicOidcIssuer,
   otlpHeaders,
+  parseModelProviders,
   otlpTracesEndpoint,
   parseCompanyCreators,
   parseSharedEnvNames,
   parseStdioCommands,
   type CompanyCreators,
+  type ModelProvidersPolicy,
   type OtlpTarget,
   type StdioCommand,
 } from "@rosterdock/shared";
@@ -84,6 +86,11 @@ export interface BoardConfig {
   stdioCommands: StdioCommand[];
   /** Who may create a company (ROSTERDOCK_COMPANY_CREATORS). Null: the first company on an empty board, or anyone with the dev login on. */
   companyCreators: CompanyCreators | null;
+  /**
+   * The model provider kinds a company may add, and whether the board lends its own models
+   * (ROSTERDOCK_MODEL_PROVIDERS). Unset: every kind, and the board's own.
+   */
+  modelProviders: ModelProvidersPolicy;
 }
 
 export type SecretStoreConfig = { kind: "kubernetes" } | { kind: "file"; dir: string };
@@ -218,5 +225,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BoardConfig {
     sharedEnvNames: parseSharedEnvNames(env.ROSTERDOCK_SHARED_ENV_NAMES),
     stdioCommands: parseStdioCommands(env.ROSTERDOCK_STDIO_COMMANDS),
     companyCreators: parseCompanyCreators(env.ROSTERDOCK_COMPANY_CREATORS),
+    modelProviders: parseModelProviders(env.ROSTERDOCK_MODEL_PROVIDERS),
   };
 }

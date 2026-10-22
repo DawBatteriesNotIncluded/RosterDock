@@ -14,3 +14,4 @@ export * from "./text.js";
 export * from "./web.js";
 export * from "./windows-bin.js";
 export * from "./address.js";
+export * from "./providers.js";
