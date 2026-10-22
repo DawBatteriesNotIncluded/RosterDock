@@ -299,10 +299,14 @@ the company sees them by name.
   public, or private where `board.privateDestinations` lists it (Private destinations, above), and plain http
   only to a listed destination. An Azure private endpoint is a name that resolves to a private address, so it
   needs an entry too. Anthropic, OpenAI and Bedrock have fixed hosts, or hosts taken from the region.
-- A price belongs to a provider and a model, or to the board's own models (Settings > Prices and budgets).
-  Tokens through a provider with no price of its own take the board's own price for the model, then, for an
-  Anthropic provider, Anthropic's list price while the company prices in USD; else they have no price yet.
-  Costs says what went through each provider. A provider bills per token, so it has no seat price.
+- A price belongs to a provider and a model, set on the model's row of the provider's card under Settings >
+  Models (`PUT /prices` with `providerId`), or to the board's own models (Settings > Prices and budgets).
+  Tokens through a provider with no price of its own take the board's own per-token price for the model
+  (never a seat), then, for an Anthropic provider, Anthropic's list price while the company prices in USD;
+  else they have no price yet. Fill list prices on a card (`POST /prices/list` with `providerId`) prices an
+  Anthropic provider's models at the list, and a Bedrock provider's Claude models at it too, marked as
+  estimates to check against the AWS bill. Costs says what went through each provider. A provider bills per
+  token, so it has no seat price.
 - Teammates do not think with a company's provider yet: every run and every plan uses the board's own models.
   Until they do, leaving `board` out of the list changes nothing for runs and plans; it only shows companies
   that the board's own models are not lent.

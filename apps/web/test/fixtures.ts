@@ -594,7 +594,7 @@ export const monthlyFixture: MonthlyReport = {
     {
       model: "claude-sonnet-5",
       providerId: null,
-      provider: "This board\'s own models",
+      provider: "This board's own models",
       tokens: { input: 1_500_000, output: 60_000, cacheRead: 100_000, cacheWrite: 0, total: 1_660_000 },
       costMinorUnits: 41_250,
       runs: 9,
@@ -718,7 +718,7 @@ export const costFixture: CostReport = {
     {
       model: "claude-sonnet-5",
       providerId: null,
-      provider: "This board\'s own models",
+      provider: "This board's own models",
       teammates: 4,
       tokens: tokens(1_000_000, 70_000, 330_000),
       costMinorUnits: 34_750,
@@ -728,7 +728,7 @@ export const costFixture: CostReport = {
     {
       model: "claude-opus-5",
       providerId: null,
-      provider: "This board\'s own models",
+      provider: "This board's own models",
       teammates: 1,
       tokens: tokens(200_000, 20_000, 70_000),
       costMinorUnits: 6_500,

@@ -57,6 +57,8 @@ async function otherCurrency(
   currency: string,
   replacing: { providerId: string | null; model: string } | null,
 ): Promise<string | null> {
+  // Held until the transaction ends: two prices written at once are checked one after the other.
+  await db.query("SELECT pg_advisory_xact_lock(hashtext('model_prices:' || $1::text))", [companyId]);
   const res = await db.query<{ currency: string }>(
     `SELECT currency FROM model_prices
       WHERE company_id = $1 AND currency <> $2

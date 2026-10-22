@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bedrockListModel, BOARD_OWN_MODELS, priceFor, priceTable } from "../src/budgets/prices.js";
 import { recordPlanningUsage } from "../src/budgets/usage.js";
-import { seatedPeter, seedCompany, startTestBoard, type Api, type TestBoard } from "./helpers.js";
+import { addProject, seatedPeter, seedCompany, startTestBoard, type Api, type TestBoard } from "./helpers.js";
 
 let board: TestBoard;
 beforeAll(async () => {
@@ -124,7 +124,9 @@ describe("prices by provider", () => {
     // Removing a provider removes its prices; the board's own stay.
     expect((await api.del(`${base}/model-providers/${anthropic.id}`)).status).toBe(200);
     expect((await api.get(`${base}/prices`)).body.map((p: any) => p.providerId)).toEqual([null]);
-    expect((await priceTable(board.db, companyId)).providerLabel(anthropic.id)).toBe("A removed provider");
+    expect((await priceTable(board.db, companyId)).providerLabel(anthropic.id)).toBe(
+      `A removed provider (${anthropic.id.slice(0, 8)})`,
+    );
   });
 
   it("keeps one currency per company, and no list price in another one", async () => {
@@ -280,5 +282,84 @@ describe("prices by provider", () => {
         .map((l) => l.split(",").at(-1))
         .sort(),
     ).toEqual(["Acme Anthropic", "This board's own models"]);
+  });
+
+  it("never prices a provider's tokens with a seat, and checks two prices written at once one after the other", async () => {
+    const { api, base } = await seedCompany(board, "pp5@example.com");
+    const { anthropic } = await providers(api, base);
+    const companyId = companyOf(base);
+    expect(
+      (await api.put(`${base}/prices`, { model: "claude-sonnet-5-5", currency: "USD", seatPriceMonth: 2000 }))
+        .status,
+    ).toBe(200);
+    // The board's own seat for the model says nothing of a per-token key: the list price applies.
+    expect((await priceFor(board.db, companyId, anthropic.id, "claude-sonnet-5-5"))?.inputPerMillion).toBe(
+      200,
+    );
+    expect(
+      (await priceTable(board.db, companyId)).priceOf(anthropic.id, "claude-sonnet-5-5")?.inputPerMillion,
+    ).toBe(200);
+
+    const other = await seedCompany(board, "pp5-race@example.com");
+    for (let round = 0; round < 5; round++) {
+      const [a, b] = await Promise.all([
+        other.api.put(`${other.base}/prices`, { model: `m-a-${round}`, currency: "USD", inputPerMillion: 1 }),
+        other.api.put(`${other.base}/prices`, { model: `m-b-${round}`, currency: "GBP", inputPerMillion: 1 }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 409]);
+    }
+    const currencies = new Set(
+      ((await other.api.get(`${other.base}/prices`)).body as any[]).map((p) => p.currency),
+    );
+    expect(currencies.size).toBe(1);
+  });
+
+  it("splits a project's chargeback line by provider, and prices a goal's spend by provider", async () => {
+    const { api, base, owner } = await seedCompany(board, "pp6@example.com");
+    const { anthropic } = await providers(api, base);
+    const companyId = companyOf(base);
+    const peter = await seatedPeter(api, base);
+    const project = await addProject(api, base, "Digest");
+    const goal = (await api.post(`${base}/goals`, { text: "Send a weekly digest.", projectId: project.id }))
+      .body;
+    await api.put(`${base}/prices`, { model: "claude-opus-5-5", currency: "USD", inputPerMillion: 500 });
+    await api.put(`${base}/prices`, {
+      model: "claude-opus-5-5",
+      providerId: anthropic.id,
+      currency: "USD",
+      inputPerMillion: 400,
+    });
+    const usage = { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    for (const providerId of [null, anthropic.id])
+      await recordPlanningUsage(board.db, {
+        companyId,
+        teammateId: peter.id,
+        purpose: "plan",
+        goalId: goal.id,
+        projectId: project.id,
+        providerId,
+        model: "claude-opus-5-5",
+        usage,
+      });
+    // The goal's spend prices each call at its own provider's price.
+    const spent = (await api.get(`${base}/goals/${goal.id}`)).body.spend;
+    expect(spent.costMinorUnits).toBe(500 + 400);
+    // The chargeback CSV: one line for the project per provider its work went through.
+    const csv = await board.app.inject({
+      method: "GET",
+      url: `${base}/costs/monthly.csv`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    const lines = csv.body
+      .trim()
+      .split("\r\n")
+      .slice(1)
+      .filter((l) => l.split(",")[1] === "Digest")
+      .map((l) => [l.split(",")[6], l.split(",").at(-1)])
+      .sort();
+    expect(lines).toEqual([
+      ["4.00", "Acme Anthropic"],
+      ["5.00", BOARD_OWN_MODELS],
+    ]);
   });
 });

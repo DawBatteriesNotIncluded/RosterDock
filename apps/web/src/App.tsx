@@ -554,6 +554,7 @@ export function App() {
         remove: (id) => run(() => client.deleteModelProvider(cid, id), "Provider removed."),
         loadPrices: () => client.prices(cid),
         savePrice: (input) => run(() => client.savePrice(cid, input), "Price saved."),
+        deletePrice: (id) => run(() => client.deletePrice(cid, id), "Price removed."),
         fillListPrices: (providerId) => run(() => client.fillListPrices(cid, providerId)),
       }}
       connections={{

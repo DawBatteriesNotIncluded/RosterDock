@@ -943,7 +943,8 @@ function PricesTab(p: SettingsViewProps) {
                 Add list prices
               </Button>
               <span className="hint">
-                Prices every Claude model the company uses and has not priced, in USD. Prices you set stay.
+                Prices every Claude model the company uses and has not priced, in USD, unless the company
+                prices in another currency. Prices you set stay.
               </span>
             </div>
             <span className="hint">

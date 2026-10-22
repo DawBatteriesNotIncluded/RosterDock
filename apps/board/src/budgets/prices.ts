@@ -76,10 +76,18 @@ export function fallbackPrice(
   own: ModelPrice | null,
   currency: string,
 ): ModelPrice | null {
-  if (own) return own;
+  // A seat on the board's own models says nothing of what a provider's tokens cost: a provider bills per token.
+  if (own && perToken(own)) return own;
   if (kind !== "anthropic") return null;
   const list = listPriceFor(model);
   return list && list.currency === currency ? { ...list, seatPriceMonth: null } : null;
+}
+
+/** Whether a price says what tokens cost: a seat alone does not. */
+export function perToken(p: ModelPrice): boolean {
+  return [p.inputPerMillion, p.outputPerMillion, p.cacheReadPerMillion, p.cacheWritePerMillion].some(
+    (v) => v !== null,
+  );
 }
 
 /** The company's one currency: its prices', or GBP before it has any. */
@@ -128,7 +136,8 @@ export async function priceTable(db: Queryable, companyId: string): Promise<Pric
     providers,
     providerLabel(providerId) {
       if (providerId === null) return BOARD_OWN_MODELS;
-      return providers.get(providerId)?.label ?? "A removed provider";
+      // A removed provider's usage stays; each keeps a line of its own.
+      return providers.get(providerId)?.label ?? `A removed provider (${providerId.slice(0, 8)})`;
     },
     rows: rows.length,
   };
@@ -166,7 +175,7 @@ export async function priceFor(
  */
 export function bedrockListModel(id: string): string {
   return id
-    .replace(/^(?:[a-z]+\.)?anthropic\./, "")
+    .replace(/^(?:[a-z-]+\.)?anthropic\./, "")
     .replace(/-v\d+(?::\d+)?$/, "")
     .replace(/-\d{8}$/, "");
 }

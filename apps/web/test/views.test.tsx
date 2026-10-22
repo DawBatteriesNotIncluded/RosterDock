@@ -2063,6 +2063,7 @@ describe("pure helpers", () => {
         initialSecrets: [],
         loadPrices: async () => priceFixture,
         savePrice: async () => priceFixture[0]!,
+        deletePrice: asyncNoop,
         fillListPrices: async () => ({ added: [], unknown: [] }),
         initialPrices: priceFixture,
       },

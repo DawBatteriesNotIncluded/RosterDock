@@ -60,6 +60,7 @@ export interface ModelsPanelProps {
   /** The company's prices: a provider's are the ones with its id. */
   loadPrices(): Promise<ModelPrice[]>;
   savePrice(input: ModelPriceInput): Promise<ModelPrice>;
+  deletePrice(priceId: string): Promise<void>;
   /** List prices for one provider's Claude models: Anthropic's at the list, Bedrock's as estimates. */
   fillListPrices(providerId: string): Promise<ListPricesResult>;
   initialPrices?: ModelPrice[];
@@ -156,15 +157,25 @@ function perMillion(p: Pick<ModelPrice, "inputPerMillion" | "outputPerMillion" |
  */
 export function modelPriceLine(
   provider: Pick<ModelProvider, "id" | "kind">,
-  model: string,
+  model: { id: string; listPrice?: boolean },
   prices: readonly ModelPrice[],
 ): string {
-  const own = prices.find((x) => x.providerId === provider.id && x.model === model);
+  const own = prices.find((x) => x.providerId === provider.id && x.model === model.id);
   if (own) return `${perMillion(own)}${own.estimate ? " · an estimate: check your AWS price" : ""}`;
-  const board = prices.find((x) => x.providerId === null && x.model === model);
+  // A seat on the board's own models says nothing of what a provider's tokens cost.
+  const board = prices.find((x) => x.providerId === null && x.model === model.id && perTokenPrice(x));
   if (board) return `${perMillion(board)}, this board's own price for the model`;
-  if (provider.kind === "anthropic") return "Anthropic's list price, while your prices are in USD";
+  // The company's one currency is its prices'; before it has any, the board's default, GBP.
+  const currency = prices[0]?.currency ?? "GBP";
+  if (provider.kind === "anthropic" && model.listPrice && currency === "USD") return "Anthropic's list price";
   return "No price yet";
+}
+
+/** Whether a price says what tokens cost: a seat alone does not. */
+function perTokenPrice(p: ModelPrice): boolean {
+  return [p.inputPerMillion, p.outputPerMillion, p.cacheReadPerMillion, p.cacheWritePerMillion].some(
+    (v) => v !== null,
+  );
 }
 
 /** What filling list prices did, in a sentence or two. */
@@ -615,9 +626,13 @@ function PriceEditor(p: {
   firstPrice: boolean;
   initial: ModelPrice | undefined;
   onSave(input: Omit<ModelPriceInput, "model" | "providerId">): Promise<boolean>;
+  /** Take the provider's own price away, so the board's own price for the model, or none, applies again. */
+  onRemove?(): Promise<boolean>;
 }) {
   const major = (minor: number | null | undefined) => (minor == null ? "" : (minor / 100).toFixed(2));
-  const [currency, setCurrency] = useState(p.currency);
+  const [typedCurrency, setCurrency] = useState(p.currency);
+  // Typed only for the company's first price; after that, the company's.
+  const currency = p.firstPrice ? typedCurrency : p.currency;
   const [input, setInput] = useState(major(p.initial?.inputPerMillion));
   const [output, setOutput] = useState(major(p.initial?.outputPerMillion));
   const [cacheRead, setCacheRead] = useState(major(p.initial?.cacheReadPerMillion));
@@ -670,6 +685,19 @@ function PriceEditor(p: {
       >
         Save price
       </Button>
+      {p.onRemove ? (
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            await p.onRemove!();
+            setBusy(false);
+          }}
+        >
+          Remove price
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -682,12 +710,14 @@ function ProviderCard(p: {
   onUpdate(input: UpdateModelProviderInput): Promise<boolean>;
   onRemove(): Promise<boolean>;
   onSavePrice(input: ModelPriceInput): Promise<boolean>;
+  onDeletePrice(priceId: string): Promise<boolean>;
   onFillList(): Promise<ListPricesResult | null>;
 }) {
   const [pricing, setPricing] = useState<string | null>(null);
   const [filled, setFilled] = useState<string | null>(null);
   const currency = p.prices[0]?.currency ?? "GBP";
   const v = p.provider;
+  const own = (model: string) => p.prices.find((x) => x.providerId === v.id && x.model === model);
   const role = credentialRole(v.kind);
   const keyName = v.credentials[role];
   const state = v.credentialStates[role];
@@ -744,7 +774,7 @@ function ProviderCard(p: {
                   <td className="hint py-1 pr-3">{familyName(m.family)}</td>
                   <td className="hint py-1 pr-3">{engineLine(v.kind, m.family)}</td>
                   <td className="hint py-1 pr-3">
-                    {modelPriceLine(v, m.id, p.prices)}
+                    {modelPriceLine(v, m, p.prices)}
                     {p.canEdit && !v.archivedAt ? (
                       <>
                         {" "}
@@ -787,6 +817,15 @@ function ProviderCard(p: {
                             setPricing(null);
                           return true;
                         }}
+                        {...(own(m.id)
+                          ? {
+                              onRemove: async () => {
+                                const removed = await p.onDeletePrice(own(m.id)!.id);
+                                if (removed) setPricing(null);
+                                return removed;
+                              },
+                            }
+                          : {})}
                       />
                     </td>
                   </tr>
@@ -912,6 +951,7 @@ export function ModelsPanel(p: ModelsPanelProps) {
           onUpdate={(input) => change(() => p.update(v.id, input))}
           onRemove={() => change(() => p.remove(v.id))}
           onSavePrice={(input) => change(() => p.savePrice(input))}
+          onDeletePrice={(id) => change(() => p.deletePrice(id))}
           onFillList={async () => {
             let r: ListPricesResult | null = null;
             await change(async () => (r = await p.fillListPrices(v.id)));
@@ -949,6 +989,7 @@ export function ModelsPanel(p: ModelsPanelProps) {
               onUpdate={(input) => change(() => p.update(v.id, input))}
               onRemove={() => change(() => p.remove(v.id))}
               onSavePrice={(input) => change(() => p.savePrice(input))}
+              onDeletePrice={(id) => change(() => p.deletePrice(id))}
               onFillList={async () => null}
             />
           ))}

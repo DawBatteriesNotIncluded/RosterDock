@@ -319,7 +319,8 @@ export interface ModelProvider {
   /** role -> env var NAME (apiKey, or bearerToken for Bedrock). */
   credentials: Record<string, string>;
   credentialStates: Record<string, CredentialState>;
-  models: ProviderModel[];
+  /** listPrice: Anthropic's list prices the model's tokens when nothing else does (an Anthropic provider). */
+  models: (ProviderModel & { listPrice?: boolean })[];
   enabled: boolean;
   /** Whether the operator still offers its kind; one no longer offered is kept, unused. */
   offered: boolean;

@@ -155,6 +155,7 @@ const panel = (over: Partial<ModelsPanelProps> = {}) =>
         initialSecrets={[]}
         loadPrices={async () => prices}
         savePrice={async () => prices[0]!}
+        deletePrice={async () => undefined}
         fillListPrices={async () => ({ added: [], unknown: [] })}
         initialPrices={prices}
         {...over}
@@ -379,19 +380,38 @@ describe("Settings > Models", () => {
   it("says what each model costs through its provider, in the order the board prices it", () => {
     const anthropic = { id: "p1", kind: "anthropic" as const };
     const local = { id: "p2", kind: "openai_compatible" as const };
-    expect(modelPriceLine(anthropic, "claude-opus-5-5", prices)).toBe(
+    expect(modelPriceLine(anthropic, { id: "claude-opus-5-5" }, prices)).toBe(
       "US$4.00 in · US$20.00 out per million",
     );
-    // None of its own: the board's own price for the model, then Anthropic's list for an Anthropic provider.
-    expect(modelPriceLine(local, "qwen3-coder", prices)).toBe(
+    // None of its own: the board's own price for the model, then Anthropic's list for an Anthropic provider,
+    // for a model the list knows, while the company prices in USD.
+    expect(modelPriceLine(local, { id: "qwen3-coder" }, prices)).toBe(
       "US$0.10 in · US$0.20 out per million, this board's own price for the model",
     );
-    expect(modelPriceLine(anthropic, "claude-sonnet-5-5", prices)).toBe(
-      "Anthropic's list price, while your prices are in USD",
+    const sonnet = { id: "claude-sonnet-5-5", listPrice: true };
+    expect(modelPriceLine(anthropic, sonnet, prices)).toBe("Anthropic's list price");
+    expect(modelPriceLine(anthropic, { id: "claude-preview-x", listPrice: false }, prices)).toBe(
+      "No price yet",
     );
-    expect(modelPriceLine(local, "llama", prices)).toBe("No price yet");
     expect(
-      modelPriceLine({ id: "p3", kind: "bedrock" }, "us.anthropic.x", [
+      modelPriceLine(anthropic, sonnet, [price({ providerId: null, model: "x", currency: "GBP" })]),
+    ).toBe("No price yet");
+    // No prices at all: the board's default currency is GBP, so no list price either.
+    expect(modelPriceLine(anthropic, sonnet, [])).toBe("No price yet");
+    // A seat on the board's own models is not a price for a provider's tokens.
+    const seat = price({
+      providerId: null,
+      model: "claude-sonnet-5-5",
+      inputPerMillion: null,
+      outputPerMillion: null,
+      cacheReadPerMillion: null,
+      cacheWritePerMillion: null,
+      seatPriceMonth: 2000,
+    });
+    expect(modelPriceLine(anthropic, sonnet, [seat])).toBe("Anthropic's list price");
+    expect(modelPriceLine(local, { id: "llama" }, prices)).toBe("No price yet");
+    expect(
+      modelPriceLine({ id: "p3", kind: "bedrock" }, { id: "us.anthropic.x" }, [
         price({ providerId: "p3", model: "us.anthropic.x", estimate: true }),
       ]),
     ).toBe("US$4.00 in · US$20.00 out per million · an estimate: check your AWS price");
