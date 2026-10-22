@@ -4,6 +4,8 @@
 // the request body); limits and redaction are enforced. A fake service replays
 // recorded bodies; no network.
 import { readFileSync } from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -16,6 +18,8 @@ import {
   scanOpenApi,
   toolNameFor,
 } from "../src/mcp/openapi.js";
+import { parsePrivateDestinations } from "../src/web/address.js";
+import { boardEgress } from "../src/web/egress.js";
 import { fakeOpenApi } from "./openapi-fake.js";
 import {
   addProject,
@@ -171,6 +175,52 @@ describe("the OpenAPI runtime", () => {
     expect(JSON.stringify(cutPlus)).toContain("[redacted]");
     const keyed = await call(`{"${unicode}":1,"AbC+dEf+GhI/jKl=":2}`, 4096, plus);
     expect(keyed).toEqual({ ok: true, result: { "[redacted]": 2 } });
+  });
+
+  it("scrubs the credential from JSON an answer carries as a string, and never repeats a reason phrase", async () => {
+    const manifest = buildOpenApiManifest(spec, { allow: ["listContacts"] }).manifest!;
+    const secret = "AbC+dEf+GhI/jKl=";
+    // A request log whose headers are JSON written by PHP (\/) and .NET (\u002B), kept as a string: in the
+    // answer the credential is escaped twice.
+    const headers = `{"authorization":"Bearer ${secret.replace(/\+/g, "\\u002B").replace(/\//g, "\\/")}"}`;
+    const body = JSON.stringify({ log: [{ path: "/v1/contacts", headers }] });
+    expect(body).not.toContain(secret);
+    const answering = (async () =>
+      new Response(body, { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const logged = await callOpenApiOperation(
+      { url: "https://crm.example.test/v1", authEnvName: "CRM_API_TOKEN" },
+      manifest,
+      { egress: testEgress(answering), env: { CRM_API_TOKEN: secret } },
+      "list_contacts",
+      {},
+    );
+    expect(logged).toEqual({
+      ok: true,
+      result: { log: [{ path: "/v1/contacts", headers: '{"authorization":"Bearer [redacted]"}' }] },
+    });
+    // A refusal whose reason phrase echoes the credential, from a real server: the status alone comes back.
+    const server = http.createServer((_req, res) => {
+      res.writeHead(401, `Invalid token ${secret}`);
+      res.end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    try {
+      const port = (server.address() as AddressInfo).port;
+      const refused = await callOpenApiOperation(
+        { url: `http://crm.test:${port}/v1`, authEnvName: "CRM_API_TOKEN" },
+        manifest,
+        {
+          egress: boardEgress(parsePrivateDestinations("127.0.0.1"), async () => ["127.0.0.1"]),
+          env: { CRM_API_TOKEN: secret },
+        },
+        "list_contacts",
+        {},
+      );
+      expect(refused).toEqual({ ok: false, error: "list_contacts answered HTTP 401" });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 
   it("scrubs a large answer in one linear pass, whatever its strings or the credential hold", async () => {

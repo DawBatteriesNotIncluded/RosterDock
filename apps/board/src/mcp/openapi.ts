@@ -325,12 +325,13 @@ function scrubCut(text: string, secret: string | null): string {
 }
 
 /**
- * The credential out of every string in a parsed answer, keys and values. Parsing has read every escape, so a
- * plain search per string is all it takes: one split, no pattern built.
+ * The credential out of every string in a parsed answer, keys and values. Parsing has read one level of
+ * escapes; a string may carry JSON of its own (a request log, echoed headers), where the credential is escaped
+ * still, so each string is scrubbed as text is, escapes read: linear in the string, as scrub is.
  */
 function deepScrub(value: unknown, secret: string | null, depth = 0): unknown {
   if (!secret || secret.length < 6 || depth > 12) return value;
-  const plain = (s: string) => (s.includes(secret) ? s.split(secret).join("[redacted]") : s);
+  const plain = (s: string) => scrub(s, secret);
   if (typeof value === "string") return plain(value);
   if (Array.isArray(value)) return value.map((v) => deepScrub(v, secret, depth + 1));
   if (value && typeof value === "object")
@@ -476,12 +477,9 @@ export async function callOpenApiOperation(
     };
   }
   if (!response.ok) {
-    // Error bodies never travel: the status line only.
+    // Error bodies never travel, nor the server's reason phrase, which may echo the credential: the status only.
     await response.body?.cancel().catch(() => {});
-    return {
-      ok: false,
-      error: `${name} answered HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`,
-    };
+    return { ok: false, error: `${name} answered HTTP ${response.status}` };
   }
   // Read up to the cap and no further, decoded: what a server compresses never grows past it in memory.
   let read: Awaited<ReturnType<typeof readCapped>>;

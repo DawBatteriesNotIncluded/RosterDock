@@ -42,6 +42,11 @@ export default tseslint.config(
             "ImportExpression[source.value=/^@rosterdock\\/shared(\\/(?!(events|text|web|address)$).*)?$/]",
           message: "Only events, text, web and address are kept browser-safe, loaded late or not.",
         },
+        // The same for a re-export: `export { type X } from "m"` keeps loading "m".
+        {
+          selector: "ExportNamedDeclaration[source] > ExportSpecifier[exportKind='type']",
+          message: "Re-export types with `export type { X } from`, which leaves nothing behind.",
+        },
       ],
       "@typescript-eslint/no-restricted-imports": [
         "error",
@@ -133,6 +138,10 @@ export default tseslint.config(
       "no-restricted-syntax": [
         "error",
         { selector: "ImportExpression", message: "This module runs in the browser too: no dynamic import." },
+        {
+          selector: "ExportNamedDeclaration[source] > ExportSpecifier[exportKind='type']",
+          message: "Re-export types with `export type { X } from`, which leaves nothing behind.",
+        },
         {
           selector:
             "TSAsExpression[expression.name='globalThis'], TSNonNullExpression[expression.name='globalThis']",

@@ -354,10 +354,15 @@ their own, each with its own database and workers.
   own origin and at or above its MCP URL's path (the MCP SDK's rule: Notion's origin-only identifier passes,
   a sibling's on a shared gateway does not), so the board never asks for a token named for another server; a
   token a connection kept for a resource that fails this, from before the board checked it, is neither sent
-  nor refreshed until a person authorises the connection again. That Authorise drops the kept tokens and asks
-  the MCP server afresh which resource and authorization server it names, as it does when a kept issuer is
-  refused or publishes no metadata. Which authorization server it names stays
-  the server's choice, and a person consents on that server's page before any token is issued.
+  nor refreshed until a person authorises the connection again. That Authorise asks the MCP server afresh
+  which resource and authorization server it names, as it does when a kept issuer is refused or publishes no
+  metadata (not when it is down or answering 5xx). The row changes first, with its event, to the new issuer
+  and no authorisation; then the store loses the kept tokens, and the client secret too if the issuer
+  changed. Every store entry names the issuer it came from, and only the row's issuer's entry is sent or
+  refreshed, so a refresh that lands late never hands one server's tokens or secret to another. A client id
+  a person gave is never carried to another issuer: Authorise refuses and asks for one registered there.
+  Which authorization server it names stays the server's choice, and a person consents on that server's
+  page before any token is issued.
 - **Redirects.** An MCP server is followed within its own server (`/mcp` to `/mcp/`, or http to https on
   the same host and the default ports), its credential kept and every hop checked again, when the call
   arrives as it was sent: a 307 or 308. A 301, 302 or 303 would turn its POST into a GET without its body,
@@ -376,11 +381,23 @@ their own, each with its own database and workers.
   and again counts each time, empty or not), OAuth metadata and token answers 256 KB, an OpenAPI operation its manifest's response cap (the answer is
   cut there and read no further), a style pack 256 KB, an SMTP reply's line 1,000 characters and a reply
   100 lines. A webhook's answer and an OpenAPI check's body are never read.
+- **What an answer repeats.** A service may echo the credential it was sent. An OpenAPI operation's answer
+  has the credential replaced by `[redacted]` as written, and as JSON escapes any of its characters
+  (`\uXXXX` in either case, `\/` and the other short escapes): in the raw text, and again in every string
+  of the parsed answer, keys and values, so JSON a string carries (a request log, echoed headers) is
+  scrubbed one level of escapes deep. A cut answer also drops its last 256 characters, or six times the
+  credential's length if that is more, so a credential cut in two shows no part of itself, and the text
+  is the same whatever a guess at it matched. The values of keys that look secret (`authorization`,
+  `token`, `password` and the like) are redacted. A refusal repeats the status alone, never the server's
+  reason phrase or body. A credential shorter than 6 characters is never scrubbed, since that would blank
+  ordinary text: give such a service a longer one. An MCP server's errors lose the credential as written,
+  at 6 characters or more too; what its tools answer reaches the teammate as the server wrote it.
 - **Time.** One deadline per request, looking names up included: an MCP request's is the call's timeout
   (30 seconds) up to the answer's headers, after which an event stream stays open until the call ends;
   an OpenAPI operation takes its manifest's timeout, OAuth 15 seconds, a webhook 15, and an SMTP exchange
-  15, connecting and its TLS handshake included. A connection kept between requests closes after four idle
-  seconds.
+  15, connecting and its TLS handshake included. A whole MCP tools list (Discover, Check) takes 3 minutes
+  at most, every page together, and ends after 20 pages in a row with no tool. A connection kept between
+  requests closes after four idle seconds.
 - **The operator's list.** `ROSTERDOCK_PRIVATE_DESTINATIONS` (chart `board.privateDestinations`) names the
   private destinations companies may use: host names (`*.tools.svc.cluster.local` for the names under
   one), addresses and ranges (`10.20.0.0/16`). A name is matched as the connection's URL writes it, without

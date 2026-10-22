@@ -11,6 +11,7 @@ import { mutate } from "../mutate.js";
 import { companyEnv, notSetForCompany } from "../secrets/company.js";
 import {
   connectionSecretName,
+  entryFor,
   SecretStoreError,
   type SecretData,
   type SecretStore,
@@ -22,6 +23,7 @@ import {
   discoverAuthorizationServer,
   discoverResource,
   exchangeCode,
+  IssuerUnusable,
   OAuthError,
   registerClient,
   type AuthorizationServer,
@@ -49,9 +51,9 @@ async function namedClientSecret(row: ConnectionRow, deps: AuthorizeDeps): Promi
   return value;
 }
 
-/** What the store keeps for a connection: the client secret when one was issued, and the tokens. */
-export function tokenData(existing: SecretData | null, set: TokenSet): SecretData {
-  const out: SecretData = {};
+/** What the store keeps for a connection: the issuer they are from, its client secret when it issued one, and the tokens. */
+export function tokenData(existing: SecretData | null, set: TokenSet, issuer: string | null): SecretData {
+  const out: SecretData = issuer ? { issuer } : {};
   if (existing?.client_secret) out.client_secret = existing.client_secret;
   out.access_token = set.accessToken;
   if (set.refreshToken) out.refresh_token = set.refreshToken;
@@ -131,11 +133,12 @@ export async function startAuthorization(
     try {
       as = await discoverAuthorizationServer(issuer, oauth);
     } catch (err) {
-      if (!(err instanceof OAuthError) || err.code !== "server" || issuer !== meta.authorizationServer)
-        throw err;
-      // What the kept issuer said is the answer, unless the server now names another.
+      // Only a kept issuer the board refuses, or that publishes nothing, is replaced; one that is down or
+      // answering 5xx is the answer for now. The replacement is what the server's own document names.
+      if (!(err instanceof IssuerUnusable) || issuer !== meta.authorizationServer) throw err;
       const found = await discoverResource(row.url, oauth).catch(() => null);
-      if (!found || trimTrailingSlashes(found.authorizationServer) === trimTrailingSlashes(issuer)) throw err;
+      if (!found?.named || trimTrailingSlashes(found.authorizationServer) === trimTrailingSlashes(issuer))
+        throw err;
       issuer = found.authorizationServer;
       scopesHint = found.scopes;
       declared = found.resource;
@@ -144,51 +147,68 @@ export async function startAuthorization(
     }
     const resource = declared ?? row.url;
     const tokenAuth = tokenAuthFor(as);
-    let clientId = meta.clientId;
-    let registered = meta.registered;
     const issuerChanged =
       !!meta.authorizationServer &&
       trimTrailingSlashes(meta.authorizationServer) !== trimTrailingSlashes(as.issuer);
+    // A client a person gave was registered at the issuer it was given for: neither its id nor its secret goes
+    // to another. The row stays as it was until a person gives one registered at the new issuer.
+    if (issuerChanged && meta.clientId && !meta.registered)
+      throw new HttpError(
+        409,
+        `${row.name}'s server now names ${new URL(as.issuer).host} as its authorization server; give the connection a client id registered there`,
+      );
+    const name = connectionSecretName(row.id);
+    let clientId = meta.clientId;
+    let registered = meta.registered;
+    // A client the board registered at another issuer is registered again here; so is one whose secret a late
+    // write replaced with another issuer's (entryFor).
+    if (registered && (issuerChanged || !entryFor(await deps.store.get(name), as.issuer))) {
+      clientId = null;
+      registered = false;
+    }
+    const scopes = meta.scopes.length ? meta.scopes : (scopesHint ?? []);
+    const at = (id: string | null, reg: boolean): ConnectionOAuth => ({
+      ...meta,
+      authorizationServer: as.issuer,
+      tokenEndpoint: as.token_endpoint,
+      clientId: id,
+      registered: reg,
+      scopes,
+      resource: declared,
+      tokenAuth,
+      ...(replaced ? { authorizedAt: null } : {}),
+    });
+    const save = async (next: ConnectionOAuth) => {
+      if (JSON.stringify(next) === JSON.stringify(meta)) return;
+      await saveOAuth(db, row, input.actor, next, {
+        authorizationServer: next.authorizationServer,
+        clientId: next.clientId,
+        registered: next.registered,
+        ...(replaced ? { authorized: false } : {}),
+      });
+      meta = next;
+    };
     if (replaced) {
-      // Nothing kept for the old resource or issuer is sent again, Authorise abandoned or not: the tokens go
-      // now, before anyone is sent to consent; a client the board registered at another issuer goes too.
-      const name = connectionSecretName(row.id);
-      const kept = (await deps.store.get(name)) ?? {};
-      const keepSecret = !issuerChanged && kept.client_secret;
-      await deps.store.put(name, keepSecret ? { client_secret: kept.client_secret! } : {});
-      if (issuerChanged && registered) {
-        clientId = null;
-        registered = false;
-      }
+      // The row first, with its event: it names the new issuer, and no authorisation, so nothing the store
+      // still holds is sent from here on. Then the store keeps no token, and the client secret only of an
+      // issuer that did not change, Authorise abandoned or not.
+      await save(at(clientId, registered));
+      const kept = entryFor(await deps.store.get(name), as.issuer);
+      await deps.store.put(name, {
+        issuer: as.issuer,
+        ...(clientId && kept?.client_secret ? { client_secret: kept.client_secret } : {}),
+      });
     }
     if (!clientId) {
       const reg = await registerClient(as, input.redirectUri, oauth, tokenAuth);
       clientId = reg.clientId;
       registered = true;
-      const name = connectionSecretName(row.id);
-      const { client_secret: _old, ...rest } = (await deps.store.get(name)) ?? {};
-      await deps.store.put(name, reg.clientSecret ? { ...rest, client_secret: reg.clientSecret } : rest);
-    }
-    const scopes = meta.scopes.length ? meta.scopes : (scopesHint ?? []);
-    const next: ConnectionOAuth = {
-      ...meta,
-      authorizationServer: as.issuer,
-      tokenEndpoint: as.token_endpoint,
-      clientId,
-      registered,
-      scopes,
-      resource: declared,
-      tokenAuth,
-      ...(replaced ? { authorizedAt: null } : {}),
-    };
-    if (JSON.stringify(next) !== JSON.stringify(meta)) {
-      await saveOAuth(db, row, input.actor, next, {
-        authorizationServer: as.issuer,
-        clientId,
-        registered,
+      await deps.store.put(name, {
+        issuer: as.issuer,
+        ...(reg.clientSecret ? { client_secret: reg.clientSecret } : {}),
       });
-      meta = next;
     }
+    await save(at(clientId, registered));
     const state = randomToken(24);
     const verifier = randomToken(48);
     await db.query("DELETE FROM oauth_starts WHERE expires_at < now()");
@@ -261,7 +281,8 @@ export async function finishAuthorization(
   if (!row?.oauth?.tokenEndpoint || !row.oauth.clientId || !row.url)
     throw new OAuthError("state", "the connection changed while it was being authorised");
   const name = connectionSecretName(row.id);
-  const existing = await deps.store.get(name);
+  // Only the row's issuer's client secret goes to the row's token endpoint.
+  const existing = entryFor(await deps.store.get(name), row.oauth.authorizationServer);
   const set = await exchangeCode(
     row.oauth.tokenEndpoint,
     {
@@ -275,7 +296,7 @@ export async function finishAuthorization(
     },
     { ...deps.oauth, egress: companyEgress(deps.oauth.egress, row.company_id) },
   );
-  await deps.store.put(name, tokenData(existing, set));
+  await deps.store.put(name, tokenData(existing, set, row.oauth.authorizationServer));
   const authorizedAt = new Date(deps.oauth.now?.() ?? Date.now()).toISOString();
   await saveOAuth(db, row, input.actor, { ...row.oauth, authorizedAt }, { authorized: true, authorizedAt });
   return { companyId: row.company_id, connectionId: row.id, name: row.name, returnTo: pending.return_to };

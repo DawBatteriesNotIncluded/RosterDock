@@ -24,7 +24,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { sha256Hex, type StdioCommand } from "@rosterdock/shared";
 import { stdioRefusal } from "../operator.js";
 import { notSetForCompany } from "../secrets/company.js";
-import type { SecretStore } from "../secrets/store.js";
+import { entryFor, type SecretStore } from "../secrets/store.js";
 import { isExpiring, refreshTokens, resourceAllowed, type TokenAuth } from "./oauth.js";
 import { defaultEgress, egressFetch, READ_NO_FURTHER, readBudget, type Egress } from "../web/egress.js";
 import type { WebReader } from "../web/transport.js";
@@ -37,6 +37,10 @@ export const MCP_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
 export const MCP_CALL_MAX_BYTES = 16 * 1024 * 1024;
 /** The most requests one call makes: a tools/list paged a few at a time fits; a stream resumed for ever does not. */
 export const MCP_CALL_MAX_REQUESTS = 2000;
+/** The longest a whole tools list takes, every page together: each page has the call's timeout, the list this. */
+export const MCP_DISCOVER_MAX_MS = 3 * 60_000;
+/** Empty pages in a row after which a tools list is not going anywhere. */
+export const MCP_EMPTY_PAGES_MAX = 20;
 
 export interface McpTarget {
   transport: "http" | "stdio";
@@ -53,6 +57,10 @@ export interface McpTarget {
 
 export interface McpOAuthTarget {
   secretName: string;
+  /** The issuer the row names: only a store entry of its own is read (entryFor). */
+  authorizationServer: string | null;
+  /** When a person last authorised it; null while an Authorise that replaced its issuer or resource is unfinished. */
+  authorizedAt: string | null;
   tokenEndpoint: string | null;
   clientId: string | null;
   /** The MCP server URL, the resource the tokens were issued for. */
@@ -85,6 +93,8 @@ export interface McpClientDeps {
   poolScope?: string;
   /** What the web connection reads pages with (web/transport.ts). Null or absent: the board is kept off the web. */
   web?: WebReader | null;
+  /** The longest a whole tools list takes. Default: MCP_DISCOVER_MAX_MS. */
+  discoverMaxMs?: number;
 }
 
 export const MCP_POOL_IDLE_MS = 5 * 60_000;
@@ -202,8 +212,9 @@ async function resolveCredential(target: McpTarget, deps: McpClientDeps): Promis
     const store = deps.secrets;
     if (!store)
       throw new McpTargetError("the board has no secret store, so an OAuth connection cannot be called");
-    const data = await store.get(target.oauth.secretName);
-    if (!data?.access_token)
+    // Only what the row's issuer issued, and only once a person finished authorising it.
+    const data = entryFor(await store.get(target.oauth.secretName), target.oauth.authorizationServer);
+    if (!data?.access_token || !target.oauth.authorizedAt)
       throw new McpTargetError(
         "the connection is not authorised (press Authorise on its card); nothing was called",
       );
@@ -244,7 +255,12 @@ async function resolveCredential(target: McpTarget, deps: McpClientDeps): Promis
     if (data.client_secret) next.client_secret = data.client_secret;
     if (set.refreshToken) next.refresh_token = set.refreshToken;
     if (set.expiresAt) next.expires_at = set.expiresAt;
-    await store.put(target.oauth.secretName, next);
+    if (target.oauth.authorizationServer) next.issuer = target.oauth.authorizationServer;
+    // Written back only over the entry it refreshed: an Authorise meanwhile (a new issuer, its tokens wiped)
+    // or another refresh wins, and this answer serves this call alone.
+    const stored = await store.get(target.oauth.secretName);
+    if (stored?.refresh_token === data.refresh_token && stored?.issuer === data.issuer)
+      await store.put(target.oauth.secretName, next);
     return set.accessToken;
   }
   if (!target.authEnvName) return null;
@@ -365,14 +381,34 @@ export async function withMcpClient<T>(
 }
 
 /** tools/list, with the annotations a server sends. */
+function durationPhrase(ms: number): string {
+  const [n, unit] = ms >= 60_000 && ms % 60_000 === 0 ? [ms / 60_000, "minute"] : [ms / 1000, "second"];
+  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+}
+
 export async function discoverTools(target: McpTarget, deps: McpClientDeps = {}): Promise<DiscoveredTool[]> {
+  const most = deps.discoverMaxMs ?? MCP_DISCOVER_MAX_MS;
+  const until = Date.now() + most;
   return withMcpClient(target, deps, async (client) => {
     const out: DiscoveredTool[] = [];
     let cursor: string | undefined;
+    let empty = 0;
     do {
-      const page = await client.listTools(cursor ? { cursor } : undefined, {
-        timeout: deps.timeoutMs ?? MCP_CALL_TIMEOUT_MS,
-      });
+      const late = () => new Error(`the server's tool list took longer than ${durationPhrase(most)}`);
+      const left = until - Date.now();
+      if (left <= 0) throw late();
+      const page = await client
+        .listTools(cursor ? { cursor } : undefined, {
+          timeout: Math.min(deps.timeoutMs ?? MCP_CALL_TIMEOUT_MS, left),
+        })
+        .catch((err: unknown) => {
+          throw Date.now() >= until ? late() : err;
+        });
+      empty = page.tools.length ? 0 : empty + 1;
+      if (empty >= MCP_EMPTY_PAGES_MAX)
+        throw new Error(
+          `the server answered ${MCP_EMPTY_PAGES_MAX} pages of its tool list in a row with no tool`,
+        );
       for (const t of page.tools) {
         out.push({
           name: t.name,

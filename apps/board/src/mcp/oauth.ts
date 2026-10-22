@@ -90,6 +90,16 @@ export class OAuthError extends Error {
   }
 }
 
+/**
+ * An issuer the board refuses (its address, or an endpoint its metadata names), or one that answers that it
+ * publishes no metadata: not one that is down or answering 5xx, which may answer later.
+ */
+export class IssuerUnusable extends OAuthError {
+  constructor(message: string) {
+    super("server", message);
+  }
+}
+
 export interface AuthorizationServer {
   issuer: string;
   authorization_endpoint: string;
@@ -181,7 +191,13 @@ function wellKnown(base: string, suffix: string): string[] {
 export async function discoverResource(
   mcpUrl: string,
   deps: OAuthDeps,
-): Promise<{ authorizationServer: string; scopes: string[] | null; resource: string | null }> {
+): Promise<{
+  authorizationServer: string;
+  scopes: string[] | null;
+  resource: string | null;
+  /** Whether the server's own document named the authorization server; false: its origin, by default. */
+  named: boolean;
+}> {
   for (const url of wellKnown(mcpUrl, "oauth-protected-resource")) {
     const { status, json } = await getJson(url, deps);
     if (status === 200 && json) {
@@ -199,11 +215,11 @@ export async function discoverResource(
         // the board ask for that server's token and send it here.
         if (resource !== null && !resourceAllowed(resource, mcpUrl))
           throw new OAuthError("server", `${host} declares itself a resource that is not this server`);
-        return { authorizationServer: first, scopes, resource };
+        return { authorizationServer: first, scopes, resource, named: true };
       }
     }
   }
-  return { authorizationServer: new URL(mcpUrl).origin, scopes: null, resource: null };
+  return { authorizationServer: new URL(mcpUrl).origin, scopes: null, resource: null, named: false };
 }
 
 /** The authorization server's endpoints, cached ten minutes. */
@@ -214,7 +230,7 @@ export async function discoverAuthorizationServer(
   const key = trimTrailingSlashes(issuer);
   // An issuer kept from before these checks is held to them too.
   const issuerRefused = await endpointRefusal(key, deps.egress);
-  if (issuerRefused) throw new OAuthError("server", `the authorization server's address ${issuerRefused}`);
+  if (issuerRefused) throw new IssuerUnusable(`the authorization server's address ${issuerRefused}`);
   const now = deps.now?.() ?? Date.now();
   // Kept per list of private destinations, as well as per issuer: a document read for one company, through
   // what the operator gave it alone, is never handed to a company that may not reach that server.
@@ -226,8 +242,11 @@ export async function discoverAuthorizationServer(
     `${key}/.well-known/openid-configuration`,
     ...wellKnown(key, "openid-configuration"),
   ];
+  // A server that is down, busy or slow may publish its metadata later; one that answered every URL is unusable.
+  let down: number | null = null;
   for (const url of candidates) {
     const { status, json } = await getJson(url, deps);
+    if (status >= 500 || status === 408 || status === 429) down ??= status;
     if (status !== 200 || !json) continue;
     if (typeof json.authorization_endpoint !== "string" || typeof json.token_endpoint !== "string") continue;
     const doc: AuthorizationServer = {
@@ -262,12 +281,17 @@ export async function discoverAuthorizationServer(
       ["registration_endpoint", "a registration endpoint"],
     ] as const) {
       const why = doc[field] === undefined ? null : await endpointRefusal(doc[field], deps.egress);
-      if (why) throw new OAuthError("server", `${new URL(key).host} names ${label} that ${why}`);
+      if (why) throw new IssuerUnusable(`${new URL(key).host} names ${label} that ${why}`);
     }
     servers.set(slot, { at: now, doc });
     return doc;
   }
-  throw new OAuthError("server", `${new URL(key).host} publishes no authorization server metadata`);
+  if (down !== null)
+    throw new OAuthError(
+      "server",
+      `${new URL(key).host} answered HTTP ${down} for its authorization server metadata`,
+    );
+  throw new IssuerUnusable(`${new URL(key).host} publishes no authorization server metadata`);
 }
 
 /** Register the board as a client (RFC 7591). The secret, when one is issued, is the caller's to keep. */

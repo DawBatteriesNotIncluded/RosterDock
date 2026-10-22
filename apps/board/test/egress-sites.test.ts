@@ -95,6 +95,8 @@ const documents: Record<string, unknown> = {
     code_challenge_methods_supported: ["S256"],
   },
 };
+/** Answered 500, by URL: a step a test makes fail. */
+const failing = new Set<string>();
 /** Every URL the transport was asked for: what the board sent. */
 const sent: string[] = [];
 const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -104,7 +106,10 @@ const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (moved) return new Response(null, { status: moved[0], headers: { location: moved[1] } });
   if (url in documents)
     return new Response(JSON.stringify(documents[url]), { headers: { "content-type": "application/json" } });
+  if (failing.has(url)) return new Response("{}", { status: 500 });
   const host = new URL(url).hostname;
+  // An authorization server that is down.
+  if (host === "auth.down.test") return new Response(null, { status: 503 });
   if (host.startsWith("crm.")) return crm.fetch(input, init);
   if (host.startsWith("hooks.")) return new Response("ok", { status: 200 });
   if (host === "raw.githubusercontent.com") return new Response("not the pinned file", { status: 200 });
@@ -210,6 +215,8 @@ describe("a company's MCP server over HTTP", () => {
         url: "https://mcp.hostile.test/mcp",
         oauth: {
           secretName: "rosterdock-connection-kept",
+          authorizationServer: "https://auth.real.test",
+          authorizedAt: "2026-10-01T00:00:00.000Z",
           tokenEndpoint: "https://auth.real.test/token",
           clientId: "c",
           resource: "https://api.real.test/mcp",
@@ -227,6 +234,64 @@ describe("a company's MCP server over HTTP", () => {
         "the connection's authorisation names a resource this server may not speak for (press Authorise on its card); nothing was called",
     });
     expect(sent).toEqual([]);
+  });
+
+  it("sends nothing another issuer issued, and a refresh that lost a race to Authorise writes nothing back", async () => {
+    const store = fileSecretStore(dir);
+    const secretName = "rosterdock-connection-race";
+    const target = {
+      transport: "http" as const,
+      url: "https://mcp.race.test/mcp",
+      oauth: {
+        secretName,
+        authorizationServer: "https://auth.race.test",
+        authorizedAt: "2026-10-01T00:00:00.000Z",
+        tokenEndpoint: "https://auth.race.test/token",
+        clientId: "c",
+        resource: "https://mcp.race.test/mcp",
+        tokenAuth: null,
+        clientSecretEnvName: null,
+      },
+    };
+    // An entry another issuer's, as a late write leaves one: neither sent nor refreshed.
+    sent.length = 0;
+    await store.put(secretName, {
+      issuer: "https://auth.other.test",
+      access_token: "other-access-0000",
+      refresh_token: "other-refresh-0000",
+    });
+    expect(
+      await callMcpTool(target, { egress: testEgress(transport, { resolve }), secrets: store }, "whoami", {}),
+    ).toEqual({
+      ok: false,
+      error: "the connection is not authorised (press Authorise on its card); nothing was called",
+    });
+    expect(sent).toEqual([]);
+    // A refresh in flight while Authorise moves the connection: its answer serves this call, and the store
+    // keeps what Authorise left, not the old issuer's secret and tokens.
+    await store.put(secretName, {
+      issuer: "https://auth.race.test",
+      client_secret: "race-secret-0000",
+      access_token: "race-access-0000",
+      refresh_token: "race-refresh-0000",
+      expires_at: "2026-01-01T00:00:00.000Z",
+    });
+    const racing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== "https://auth.race.test/token") return transport(input, init);
+      await store.put(secretName, { issuer: "https://auth.new.test" });
+      return new Response(
+        JSON.stringify({
+          access_token: "race-access-0001",
+          refresh_token: "race-refresh-0001",
+          expires_in: 3600,
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    expect(
+      await callMcpTool(target, { egress: testEgress(racing, { resolve }), secrets: store }, "whoami", {}),
+    ).toMatchObject({ ok: true });
+    expect(await store.get(secretName)).toEqual({ issuer: "https://auth.new.test" });
   });
 
   it("reaches what the operator lists, a name or a range, and nothing beside it; a tool call is held to the same", async () => {
@@ -540,7 +605,10 @@ describe("OAuth for a company's connection", () => {
     // Before anyone consents, the old tokens are gone and the row is not authorised: nothing old is sent if the
     // person never comes back. The client the board registered there stays.
     expect((await row()).authorizedAt).toBeNull();
-    expect(await store.get(name)).toEqual(registeredSecret ? { client_secret: registeredSecret } : {});
+    expect(await store.get(name)).toEqual({
+      issuer: "https://auth.reauth.test",
+      ...(registeredSecret ? { client_secret: registeredSecret } : {}),
+    });
     // A row that kept an issuer that is refused now (the document's own word, from before the board kept the one
     // it asked for): found again from the server's document, its tokens gone, its client registered there anew.
     const clientBefore = (await row()).clientId;
@@ -551,6 +619,94 @@ describe("OAuth for a company's connection", () => {
     expect((await row()).authorizedAt).toBeNull();
     expect((await row()).clientId).not.toBe(clientBefore);
     expect((await store.get(name))?.access_token).toBeUndefined();
+  });
+
+  it("moves a connection to another issuer only when its own is refused or publishes nothing, the row first, never a person's client", async () => {
+    resetOAuthCaches();
+    const { api, base, companyId } = await seedCompany(board, "egress-oauth-moved@example.com");
+    const created = await api.post(`${base}/connections`, {
+      name: "moved",
+      url: "https://mcp.reauth.test/mcp",
+      oauth: {},
+    });
+    const start = () => api.post(`${base}/connections/${created.body.id}/oauth/start`, {});
+    expect((await start()).status).toBe(200);
+    const store = fileSecretStore(dir);
+    const name = connectionSecretName(created.body.id);
+    const row = async () =>
+      (
+        await board.db.query<{ oauth: Record<string, unknown> }>(
+          "SELECT oauth FROM connections WHERE id = $1",
+          [created.body.id],
+        )
+      ).rows[0]!.oauth;
+    // What a row kept from another issuer: its client, its secret and its tokens.
+    const old = {
+      client_secret: "old-client-secret-0000",
+      access_token: "old-access-000000",
+      refresh_token: "old-refresh-000000",
+    };
+    const kept = async (patch: Record<string, unknown>) => {
+      await store.put(name, old);
+      await board.db.query(
+        "UPDATE connections SET oauth = oauth || $3::jsonb WHERE id = $1 AND company_id = $2",
+        [
+          created.body.id,
+          companyId,
+          JSON.stringify({ authorizedAt: "2026-10-01T00:00:00.000Z", clientId: "old-client", ...patch }),
+        ],
+      );
+    };
+    // An issuer that is down is the answer for now: nothing moves and nothing goes.
+    await kept({ authorizationServer: "https://auth.down.test", registered: true });
+    const down = await start();
+    expect(down.status).toBe(502);
+    expect(down.body.error).toBe("auth.down.test answered HTTP 503 for its authorization server metadata");
+    expect(await row()).toMatchObject({
+      authorizationServer: "https://auth.down.test",
+      clientId: "old-client",
+    });
+    expect(await store.get(name)).toEqual(old);
+    // A refused issuer moves to the one the server names. The row and its event come first, so when
+    // registering there fails the connection is left with no client and no authorisation, not stranded,
+    // and the store with neither the old secret nor a token.
+    const refused = "http://keycloak.internal:8080/realms/x";
+    await kept({ authorizationServer: refused, registered: true });
+    failing.add("https://auth.reauth.test/register");
+    const half = await start();
+    failing.clear();
+    expect(half.status).toBe(502);
+    expect(await row()).toMatchObject({
+      authorizationServer: "https://auth.reauth.test",
+      clientId: null,
+      registered: false,
+      authorizedAt: null,
+    });
+    expect(await store.get(name)).toEqual({ issuer: "https://auth.reauth.test" });
+    const moved = (await api.get(`${base}/events`)).body as EventRecord[];
+    expect(
+      moved.some(
+        (e) =>
+          e.type === "connection.updated" &&
+          e.subject?.id === created.body.id &&
+          e.payload.authorizationServer === "https://auth.reauth.test" &&
+          e.payload.authorized === false,
+      ),
+    ).toBe(true);
+    // The next Authorise registers there and goes on.
+    expect((await start()).status).toBe(200);
+    expect(await row()).toMatchObject({ authorizationServer: "https://auth.reauth.test", registered: true });
+    expect((await row()).clientId).not.toBeNull();
+    expect((await store.get(name))?.issuer).toBe("https://auth.reauth.test");
+    // A client a person gave was registered at the issuer it was given for: neither it nor its secret moves.
+    await kept({ authorizationServer: refused, registered: false });
+    const given = await start();
+    expect(given.status).toBe(409);
+    expect(given.body.error).toBe(
+      "moved's server now names auth.reauth.test as its authorization server; give the connection a client id registered there",
+    );
+    expect(await row()).toMatchObject({ authorizationServer: refused, clientId: "old-client" });
+    expect(await store.get(name)).toEqual(old);
   });
 
   it("follows discovery's redirects with every hop checked, follows none for registration or a token, and reaches a listed server", async () => {

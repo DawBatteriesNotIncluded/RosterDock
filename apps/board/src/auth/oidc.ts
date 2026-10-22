@@ -431,12 +431,18 @@ export function safeReturnTo(value: unknown): string {
   )
     return "/";
   // A Location header carries no character past Latin-1, so what the browser has not encoded already is
-  // encoded here; a lone surrogate encodes to nothing and is refused. The cut never leaves half an escape.
-  let encoded: string;
-  try {
-    encoded = value.replace(/[^ -~]+/g, encodeURIComponent);
-  } catch {
-    return "/";
+  // encoded here, a character at a time, and a lone surrogate, which encodes to nothing, is refused. A path
+  // past 500 is cut between characters, and never in the middle of an escape.
+  let out = "";
+  for (const c of value) {
+    let piece: string;
+    try {
+      piece = c >= " " && c <= "~" ? c : encodeURIComponent(c);
+    } catch {
+      return "/";
+    }
+    if (out.length + piece.length > 500) return out.replace(/%[0-9A-Fa-f]?$/, "");
+    out += piece;
   }
-  return encoded.slice(0, 500).replace(/%[0-9A-F]?$/, "");
+  return out;
 }

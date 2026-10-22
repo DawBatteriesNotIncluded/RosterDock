@@ -334,6 +334,9 @@ describe("where a sign-in or an authorisation returns to", () => {
     expect(safeReturnTo("/tasks?q=café ☕")).toBe("/tasks?q=caf%C3%A9 %E2%98%95");
     expect(safeReturnTo("/tasks?q=%C3%A9")).toBe("/tasks?q=%C3%A9");
     expect(safeReturnTo("/" + "é".repeat(400))).toBe("/" + "%C3%A9".repeat(83));
+    // Only a cut drops half an escape; a path that ends in one is kept as written.
+    expect(safeReturnTo("/x?q=100%")).toBe("/x?q=100%");
+    expect(safeReturnTo("/" + "a".repeat(497) + "%C3%A9")).toBe("/" + "a".repeat(497));
     expect(safeReturnTo("/x\ud800")).toBe("/");
     for (const off of [
       "//evil.example/x",

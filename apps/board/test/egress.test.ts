@@ -496,6 +496,27 @@ describe("the pinned transport for a company's destinations", () => {
                 };
           res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "session-1" });
           res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+        } else if (req.url === "/mcp-empty-pages" || req.url === "/mcp-slow-pages") {
+          // tools/list for ever: no tool on a page, or one tool a page, each 150 ms late.
+          if (req.method !== "POST") return void res.writeHead(405).end();
+          const msg = JSON.parse(body) as { id?: number; method: string; params?: { cursor?: string } };
+          if (msg.id === undefined) return void res.writeHead(202).end();
+          const at = Number(msg.params?.cursor ?? 0);
+          const slow = req.url === "/mcp-slow-pages";
+          const result =
+            msg.method === "initialize"
+              ? fixture("initialize.json").result
+              : {
+                  tools: slow ? [{ name: `t${at}`, inputSchema: { type: "object" } }] : [],
+                  nextCursor: String(at + 1),
+                };
+          setTimeout(
+            () => {
+              res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "session-1" });
+              res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+            },
+            slow && msg.method !== "initialize" ? 150 : 0,
+          );
         } else if (req.url === "/mcp-empty") {
           // Never an answer and never a byte of one: a priming event, then the end, every time.
           res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
@@ -756,6 +777,26 @@ describe("the pinned transport for a company's destinations", () => {
     expect(Date.now() - started).toBeLessThan(15_000);
     await new Promise((r) => setTimeout(r, 300));
     expect(seen.filter((s) => s.endsWith("/mcp-empty")).length).toBeLessThanOrEqual(2000);
+  });
+
+  it("ends a tools list that pages empty, or slowly, for ever", async () => {
+    const egress = boardEgress(parsePrivateDestinations("*.cluster.test"), toServer);
+    seen.length = 0;
+    await expect(
+      discoverTools(
+        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-empty-pages` },
+        { egress },
+      ),
+    ).rejects.toThrow("the server answered 20 pages of its tool list in a row with no tool");
+    expect(seen.filter((s) => s.startsWith("POST ") && s.endsWith(" /mcp-empty-pages")).length).toBe(22);
+    const started = Date.now();
+    await expect(
+      discoverTools(
+        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-slow-pages` },
+        { egress, discoverMaxMs: 1000 },
+      ),
+    ).rejects.toThrow("the server's tool list took longer than 1 second");
+    expect(Date.now() - started).toBeLessThan(3000);
   });
 
   it("reads a tools list paged two at a time, 600 tools, whole", async () => {
