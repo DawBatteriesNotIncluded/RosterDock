@@ -70,14 +70,16 @@ export async function reachableAddresses(
 ): Promise<string[]> {
   const addresses = await resolved(resolve, host);
   if (nameListed(host, allow)) {
-    // A listed name is trusted with its addresses, except one in a range the operator gave another company
-    // alone, unless this company may reach that address itself.
+    // A name given to this company is trusted with whatever it resolves to. A name listed for every company
+    // is too, except into a private range the operator gave another company alone; refused in the words any
+    // private address gets, which say nothing of whose range it is.
+    if (nameListed(host, { ...allow, names: allow.ownNames ?? [] })) return addresses;
     const reserved = { names: [], ranges: reservedFor(allow), entries: [] };
-    for (const a of addresses)
-      if (addressListed(a, reserved) && !addressListed(a, allow))
-        throw new RefusedAddress(
-          `refused: ${host} resolves to an address this board's operator gave another company alone`,
-        );
+    for (const a of addresses) {
+      const why = refuseAddress(a);
+      if (why && addressListed(a, reserved) && !addressListed(a, allow))
+        throw new RefusedAddress(`refused: ${host} resolves to ${why}, ${NOT_ALLOWED}`);
+    }
     return addresses;
   }
   // The kind of address, not the address: a company learns nothing of the network behind the board.

@@ -240,22 +240,42 @@ function deepRedact(value: unknown, depth = 0): unknown {
   return value;
 }
 
-/** The credential as it may appear in an answer: as it is, and as JSON escapes it (a slash too, as PHP does). */
-function secretForms(secret: string): string[] {
-  const json = JSON.stringify(secret).slice(1, -1);
-  return [...new Set([secret, json, json.replaceAll("/", "\\/")])].filter((f) => f.length >= 6);
+// How JSON may write a character besides \uXXXX: the short escapes, and a slash escaped as PHP writes it.
+const SHORT_ESCAPES: Record<string, string> = {
+  '"': '\\"',
+  "\\": "\\\\",
+  "/": "\\/",
+  "\n": "\\n",
+  "\r": "\\r",
+  "\t": "\\t",
+  "\b": "\\b",
+  "\f": "\\f",
+};
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The credential as an answer may hold it: each character as it is or as JSON escapes it (\uXXXX in either
+ * case, or a short escape), so an encoder that escapes `+` or `/` hides nothing.
+ */
+function secretPattern(secret: string): RegExp {
+  const char = (c: string) => {
+    const hex = [...c.charCodeAt(0).toString(16).padStart(4, "0")]
+      .map((d) => (/[a-f]/.test(d) ? `[${d}${d.toUpperCase()}]` : d))
+      .join("");
+    const short = SHORT_ESCAPES[c];
+    return `(?:${escapeRe(c)}|\\\\u${hex}${short ? `|${escapeRe(short)}` : ""})`;
+  };
+  return new RegExp(secret.split("").map(char).join(""), "g");
 }
 
 function scrub(text: string, secret: string | null): string {
-  if (!secret || secret.length < 6) return text;
-  let out = text;
-  for (const form of secretForms(secret)) out = out.split(form).join("[redacted]");
-  return out;
+  return secret && secret.length >= 6 ? text.replace(secretPattern(secret), "[redacted]") : text;
 }
 
-/** How much of a cut answer's end is dropped: enough for any credential to have begun there, at least 255. */
+/** How much of a cut answer's end is dropped: room for the whole credential at its longest escaped, 256 at least. */
 function cutTail(secret: string | null): number {
-  return Math.max(255, ...(secret ? secretForms(secret).map((f) => f.length - 1) : []));
+  return Math.max(256, secret ? secret.length * 6 : 0);
 }
 
 /**
@@ -268,14 +288,17 @@ function scrubCut(text: string, secret: string | null): string {
   return whole.slice(0, Math.max(0, whole.length - cutTail(secret)));
 }
 
-/** The credential out of every string in a parsed answer, where JSON escapes no longer hide it. */
+/** The credential out of every string in a parsed answer, keys and values, where JSON escapes no longer hide it. */
 function deepScrub(value: unknown, secret: string | null, depth = 0): unknown {
   if (!secret || secret.length < 6 || depth > 12) return value;
-  if (typeof value === "string") return value.split(secret).join("[redacted]");
+  if (typeof value === "string") return scrub(value, secret);
   if (Array.isArray(value)) return value.map((v) => deepScrub(v, secret, depth + 1));
   if (value && typeof value === "object")
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, deepScrub(v, secret, depth + 1)]),
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        scrub(k, secret),
+        deepScrub(v, secret, depth + 1),
+      ]),
     );
   return value;
 }

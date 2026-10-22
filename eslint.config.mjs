@@ -32,6 +32,14 @@ export default tseslint.config(
     // and a value imported from it left the page blank. Browser-safe modules have entries of their own.
     files: ["apps/web/src/**"],
     rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "ImportExpression[source.value=/^@rosterdock\\/shared(\\/(?!(events|text|web|address)$).*)?$/]",
+          message: "Only events, text, web and address are kept browser-safe, loaded late or not.",
+        },
+      ],
       "@typescript-eslint/no-restricted-imports": [
         "error",
         {
@@ -57,7 +65,7 @@ export default tseslint.config(
                 "Only events, text, web and address are kept browser-safe; take types only from the rest.",
             },
             {
-              group: ["**/packages/shared/**"],
+              group: ["**/packages/shared/**", "**/node_modules/@rosterdock/**"],
               message: "Import the shared package by its name, @rosterdock/shared/<entry>.",
             },
           ],
@@ -97,18 +105,45 @@ export default tseslint.config(
       ],
       "no-restricted-globals": [
         "error",
-        ...["Buffer", "process", "require", "setImmediate", "__dirname", "__filename"].map((name) => ({
-          name,
-          message: "This module runs in the browser too.",
-        })),
+        ...[
+          "Buffer",
+          "process",
+          "require",
+          "global",
+          "setImmediate",
+          "clearImmediate",
+          "__dirname",
+          "__filename",
+        ].map((name) => ({ name, message: "This module runs in the browser too." })),
       ],
       "no-restricted-properties": [
         "error",
-        ...["Buffer", "process", "require", "setImmediate"].map((property) => ({
+        ...["Buffer", "process", "require", "setImmediate", "clearImmediate"].map((property) => ({
           object: "globalThis",
           property,
           message: "This module runs in the browser too.",
         })),
+      ],
+      // What the two rules above cannot see: a module loaded later, globalThis behind a cast or a name of
+      // its own, and node's import.meta.
+      "no-restricted-syntax": [
+        "error",
+        { selector: "ImportExpression", message: "This module runs in the browser too: no dynamic import." },
+        {
+          selector:
+            "TSAsExpression[expression.name='globalThis'], TSNonNullExpression[expression.name='globalThis']",
+          message: "This module runs in the browser too: globalThis as it is.",
+        },
+        {
+          selector:
+            "VariableDeclarator[init.name='globalThis'], CallExpression[callee.object.name='Reflect'] > Identifier[name='globalThis']",
+          message: "This module runs in the browser too: globalThis as it is.",
+        },
+        {
+          selector:
+            "MemberExpression[object.type='MetaProperty'][property.name=/^(dirname|filename|resolve)$/]",
+          message: "This module runs in the browser too: no node import.meta.",
+        },
       ],
     },
   },

@@ -227,7 +227,8 @@ networkPolicy:
 - A name is matched as the connection's URL writes it, without the pod's search domains: list
   `playwright-mcp.tools.svc.cluster.local` and use that name in the URL. The short `playwright-mcp` is
   another name, refused until it is listed too. A range is matched by address, whatever the name.
-- A listed name is trusted with whatever it resolves to. Never list a wildcard over the cluster's domain
+- A listed name is trusted with whatever it resolves to (except that one listed for every company never leads
+  into a private range given to one company alone, below). Never list a wildcard over the cluster's domain
   (`*.cluster.local`, `*.svc.cluster.local`, `*.pod.cluster.local`): cluster DNS answers
   `169-254-169-254.<namespace>.pod.cluster.local` with that address (CoreDNS's `pods insecure`, the default on
   kubeadm, kind and EKS), and an ExternalName service is a CNAME to anywhere, so the wildcard would hand
@@ -241,8 +242,9 @@ networkPolicy:
   makes it every company's: a range inside a listed range, a name under a listed `*.` name (the board warns
   at start about both, and Settings does not mark them), or a name whose address is in a range listed for
   every company, which nothing can see before the name resolves. Keep a company's own services out of the
-  ranges you list for every company. The other way round holds: a range you give one company stays its own,
-  and a name listed for every company that resolves into it is refused for the others. The board warns at start about an id that names no company, whose
+  ranges you list for every company. The other way round holds: a private range you give one company stays
+  its own, and a name listed for every company that resolves into it is refused for the others (a name you
+  give a company alone is trusted wherever it leads). The board warns at start about an id that names no company, whose
   entries allow nothing. In the chart, a plain string that holds a company's entry and a comma is refused:
   one entry per item. A stdio command you list with free arguments (a final `*`) runs inside the board pod, where no
   list applies: one that fetches or proxies lets any company's admins point it at that destination too.

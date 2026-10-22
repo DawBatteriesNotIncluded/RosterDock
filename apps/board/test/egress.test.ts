@@ -481,7 +481,11 @@ describe("the pinned transport for a company's destinations", () => {
         } else if (req.url === "/mcp") mcpServer(req.method!, body, res);
         else if (req.url === "/mcp-huge") mcpServer(req.method!, body, res, "tools/list");
         else if (req.url === "/mcp-huge-init") mcpServer(req.method!, body, res, "initialize");
-        else if (req.url === "/mcp-resume") {
+        else if (req.url === "/mcp-empty") {
+          // Never an answer and never a byte of one: a priming event, then the end, every time.
+          res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
+          res.end(`id: ${seen.length}\nretry: 0\ndata: \n\n`);
+        } else if (req.url === "/mcp-resume") {
           // Never an answer: a priming event, 7 MB of progress, then the end of the stream, every time, so
           // the SDK resumes it again and again. No answer reaches the 8 MB cap.
           res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
@@ -662,8 +666,8 @@ describe("the pinned transport for a company's destinations", () => {
       );
     const board = boardEgress(parsePrivateDestinations(`*.cluster.test,${a}=127.0.0.0/8`), toServer);
     expect((await get(companyEgress(board, a))).status).toBe(200);
-    const refused =
-      "refused: ollama.acme.cluster.test resolves to an address this board's operator gave another company alone";
+    // In the words any private address gets: nothing says whose range it is.
+    const refused = `refused: ollama.acme.cluster.test resolves to a loopback address, ${NOT_ALLOWED}`;
     await expect(get(companyEgress(board, b))).rejects.toThrow(refused);
     await expect(get(board)).rejects.toThrow(refused);
     // Where every company may reach the range too, the name is every company's way in.
@@ -672,6 +676,12 @@ describe("the pinned transport for a company's destinations", () => {
       toServer,
     );
     expect((await get(companyEgress(shared, b))).status).toBe(200);
+    // A name the operator gave B alone is trusted with whatever it resolves to, A's range included.
+    const given = boardEgress(
+      parsePrivateDestinations(`*.cluster.test,${a}=127.0.0.0/8,${b}=ollama.acme.cluster.test`),
+      toServer,
+    );
+    expect((await get(companyEgress(given, b))).status).toBe(200);
   });
 
   it("ends an MCP call whose event stream passes the cap with the cut, not its timeout", async () => {
@@ -715,6 +725,23 @@ describe("the pinned transport for a company's destinations", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
     await new Promise((r) => setTimeout(r, 300));
     expect(seen.filter((s) => s.endsWith("/mcp-resume")).length).toBeLessThanOrEqual(3);
+  });
+
+  it("ends an MCP call whose stream the SDK resumes empty again and again, every request costing the budget", async () => {
+    seen.length = 0;
+    const started = Date.now();
+    await expect(
+      discoverTools(
+        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-empty` },
+        { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
+      ),
+    ).rejects.toThrow(
+      `mcp.cluster.test:${port} answered more than 16 MB in all for one call; the board read no further`,
+    );
+    expect(Date.now() - started).toBeLessThan(10_000);
+    await new Promise((r) => setTimeout(r, 300));
+    // 16 MB at 64 KB a request: 256 at most.
+    expect(seen.filter((s) => s.endsWith("/mcp-empty")).length).toBeLessThanOrEqual(256);
   });
 
   it("carries MCP's streamable HTTP, its answers as event streams, to a listed name and to no other", async () => {

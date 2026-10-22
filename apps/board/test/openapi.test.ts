@@ -153,7 +153,7 @@ describe("the OpenAPI runtime", () => {
     const cut = await call(`${head}${secret}","more":"${"x".repeat(200)}"}`, head.length + 9);
     expect(cut).toMatchObject({ ok: true, result: { truncated: true } });
     const text = (cut as { result: { text: string } }).result.text;
-    expect(text.length).toBe(head.length + 9 - 255);
+    expect(text.length).toBe(head.length + 9 - 256);
     expect(text).not.toContain(secret.slice(0, 4));
     // A teammate that pads its guess at the credential to the cut learns nothing: right or wrong, the same text.
     const guess = (g: string) =>
@@ -163,6 +163,14 @@ describe("the OpenAPI runtime", () => {
     const slashed = { CRM_API_TOKEN: "ab/cd/ef/gh/ij" };
     const escaped = await call('{"auth":"ab\\/cd\\/ef\\/gh\\/ij","n":1}', 4096, slashed);
     expect(escaped).toEqual({ ok: true, result: { auth: "[redacted]", n: 1 } });
+    // Escaped as .NET writes `+`, cut or whole, and as a key.
+    const plus = { CRM_API_TOKEN: "AbC+dEf+GhI/jKl=" };
+    const unicode = "AbC\\u002BdEf\\u002bGhI\\/jKl=";
+    const cutPlus = await call(`{"echo":"${unicode}","more":"${"x".repeat(600)}"}`, 400, plus);
+    expect(JSON.stringify(cutPlus)).not.toMatch(/AbC|dEf|GhI/);
+    expect(JSON.stringify(cutPlus)).toContain("[redacted]");
+    const keyed = await call(`{"${unicode}":1,"AbC+dEf+GhI/jKl=":2}`, 4096, plus);
+    expect(keyed).toEqual({ ok: true, result: { "[redacted]": 2 } });
   });
 
   it("calls an operation with path and query parameters, the credential by name, and redacts the answer", async () => {

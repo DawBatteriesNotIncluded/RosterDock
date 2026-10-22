@@ -353,7 +353,8 @@ their own, each with its own database and workers.
   headers that say what is wanted (no credential, whatever it is called).
 - **Size.** The board reads no more of an answer than its call site's cap, decoded, so a small compressed
   body cannot fill the board's memory: an MCP answer 8 MB (an event stream counts every event on it) and
-  every answer of one MCP call 16 MB together (a stream the SDK resumes again and again included),
+  every answer of one MCP call 16 MB together, each request counting 64 KB at least (a stream the SDK
+  resumes again and again included, empty or not),
   OAuth metadata and token answers 256 KB, an OpenAPI operation its manifest's response cap (the answer is
   cut there and read no further), a style pack 256 KB, an SMTP reply's line 1,000 characters and a reply
   100 lines. A webhook's answer and an OpenAPI check's body are never read.
@@ -366,7 +367,8 @@ their own, each with its own database and workers.
   private destinations companies may use: host names (`*.tools.svc.cluster.local` for the names under
   one), addresses and ranges (`10.20.0.0/16`). A name is matched as the connection's URL writes it, without
   search domains. A listed address or range is reached whatever name led to it; a listed name is trusted
-  with whatever it resolves to, so list only names whose DNS you control. Not a wildcard over the cluster's
+  with whatever it resolves to (one listed for every company short of a private range given to one company
+  alone, below), so list only names whose DNS you control. Not a wildcard over the cluster's
   domain: cluster DNS answers `a-b-c-d.<namespace>.pod.cluster.local` with the address a.b.c.d (CoreDNS's
   `pods insecure`, the kubeadm, kind and EKS default), so `*.cluster.local` or `*.pod.cluster.local` hands
   every company `169-254-169-254.default.pod.cluster.local`, the cloud's metadata; and an ExternalName
@@ -376,8 +378,10 @@ their own, each with its own database and workers.
   range or a name under a listed `*.` name, which the board warns about at start and Settings does not show
   as the company's own; or a name whose address falls in a range listed for every company, which nothing
   can see before the name resolves, so keep a company's own services out of the ranges you list for every
-  company). A range given to one company stays its own even behind a name listed for every company: such a
-  name that resolves into it is refused for the others. It goes through a lookup and kept connections of
+  company). A private range given to one company stays its own even behind a name listed for every
+  company: such a name that resolves into it is refused for the others, in the words any private address
+  gets, which say nothing of whose range it is (a name given to one company alone is trusted wherever it
+  leads). It goes through a lookup and kept connections of
   the company's own, so another company's
   request never rides a connection opened for it or a name that answers differently between the check and
   the socket; and only that company's owners and admins see it in Settings. A stdio server is not held to

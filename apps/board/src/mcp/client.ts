@@ -345,7 +345,8 @@ export async function withMcpClient<T>(
   const watch = (c: Client) => {
     c.onerror = (err) => {
       if (!err.message.includes(READ_NO_FURTHER)) return;
-      cut(new Error(err.message.replace(/^SSE stream disconnected: (Error: )?/, "")));
+      // Without the SDK's own words in front ("SSE stream disconnected: Error: ...").
+      cut(new Error(err.message.replace(/^(?:[A-Za-z ]+: )*(?:Error: )?/, "")));
       void c.close().catch(() => {});
     };
   };
