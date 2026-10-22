@@ -170,7 +170,7 @@ describe("runRepoTests", () => {
       env: { PATH: process.env.PATH ?? "" },
       timeoutMs: 10_000,
     });
-    expect(res.code).toBe(0);
+    expect(res.code, res.output.slice(-2000)).toBe(0);
     expect(res.output.includes("\ufffd")).toBe(false);
     expect(res.output.endsWith("— ✅ 😀 ")).toBe(true);
   });
