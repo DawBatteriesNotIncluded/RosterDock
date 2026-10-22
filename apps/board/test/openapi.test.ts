@@ -230,6 +230,39 @@ describe("the OpenAPI runtime", () => {
     });
   });
 
+  it("reads JSON so that nothing a credential left in it is lost: written into it unescaped, or a number", async () => {
+    const manifest = buildOpenApiManifest(spec, { allow: ["listContacts"] }).manifest!;
+    const call = (body: string, secret: string) =>
+      callOpenApiOperation(
+        { url: "https://crm.example.test/v1", authEnvName: "CRM_API_TOKEN" },
+        manifest,
+        {
+          egress: testEgress(
+            (async () =>
+              new Response(body, {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              })) as typeof fetch,
+          ),
+          env: { CRM_API_TOKEN: secret },
+        },
+        "list_contacts",
+        {},
+      );
+    // A credential holding escapes of its own, which a script wrote into JSON as it is: parsed first, JSON
+    // would read them away and nothing would match.
+    expect(await call('{"echo":"Bearer tok\\n\\"en-12345","n":1}', 'tok\\n\\"en-12345')).toEqual({
+      ok: true,
+      result: { echo: "Bearer [redacted]", n: 1 },
+    });
+    // A credential of digits inside one number and equal to another without its leading zeros: scrubbing the
+    // text breaks the JSON, so the answer as it came is parsed and both numbers go.
+    expect(await call('{"id":90012345678,"pin":12345678,"n":7}', "0012345678")).toEqual({
+      ok: true,
+      result: { id: "[redacted]", pin: "[redacted]", n: 7 },
+    });
+  });
+
   it("never repeats a reason phrase", async () => {
     const manifest = buildOpenApiManifest(spec, { allow: ["listContacts"] }).manifest!;
     const secret = "AbC+dEf+GhI/jKl=";
@@ -279,24 +312,24 @@ describe("the OpenAPI runtime", () => {
     // Half a megabyte of empty strings, and a credential of backslashes in a run of escaped backslashes: a
     // pattern built per string held the board's event loop 2.3 s for the first, a backtracking one 5.3 s for
     // the second. A few tens of milliseconds now. What is held is the work, characters searched at every
-    // level: at most nine passes over the answer; the clock only backs it up, at two seconds, for a shared
-    // CI runner that swings by ten times.
+    // level: the answer read as text (nine passes at most), then its strings as values (nine more at most);
+    // the clock only backs it up, at two seconds, for a shared CI runner that swings by ten times.
     const empties = await call(
       `[${Array.from({ length: 170_000 }, () => '""').join(",")}]`,
       env.CRM_API_TOKEN!,
     );
     expect(empties.outcome.ok).toBe(true);
-    expect(empties.chars).toBe(0);
+    expect(empties.chars).toBe(170_000 * 3 + 1);
     expect(empties.ms).toBeLessThan(2000);
     const backslashes = await call(`{"v":"${"\\\\".repeat(120_000)}"}`, `${"\\".repeat(24)}tail00`);
     expect(backslashes.outcome.ok).toBe(true);
-    expect(backslashes.chars).toBeLessThanOrEqual(9 * 240_000);
+    expect(backslashes.chars).toBeLessThanOrEqual(18 * 240_008);
     expect(backslashes.ms).toBeLessThan(2000);
     // A long credential of one character over and over but one, in a megabyte of that character: indexOf
     // took 730 ms for it, comparing the credential afresh at every place; this search is one pass.
     const nearly = await call(`{"v":"${"a".repeat(1_000_000)}"}`, `${"a".repeat(2048)}b${"a".repeat(2047)}`);
     expect(nearly.outcome.ok).toBe(true);
-    expect(nearly.chars).toBe(1_000_000);
+    expect(nearly.chars).toBe(1_000_008 + 1_000_000);
     expect(nearly.ms).toBeLessThan(2000);
     // And the scan finds what the pattern found: escaped or not, wherever it starts.
     const mixed = await call(

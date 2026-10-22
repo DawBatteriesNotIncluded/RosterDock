@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { automataBuilt, scrubbedChars, scrubber, scrubText } from "../src/mcp/scrub.js";
+import { automataBuilt, scrubbedChars, scrubber, scrubSteps, scrubText } from "../src/mcp/scrub.js";
 
 const secret = "AbC+dEf+GhI/jKl=";
 
@@ -161,6 +161,22 @@ describe("scrubbing a credential", () => {
     expect(scrubber(shared).text(`x ${shared[7]} y`)).toBe("x [redacted] y");
   });
 
+  it("reads JSON so that nothing a credential left in it is lost", () => {
+    // A credential holding escapes of its own is searched for as JSON reads it too.
+    const odd = 'tok\\n\\"en-12345';
+    expect(scrubber([odd]).value({ echo: 'Bearer tok\n"en-12345' })).toEqual({ echo: "Bearer [redacted]" });
+    expect(scrubber([odd]).json('{"echo":"Bearer tok\\n\\"en-12345"}')).toEqual({
+      value: { echo: "Bearer [redacted]" },
+      numbers: [],
+    });
+    // A number past what a double keeps, whose digits hold a credential: its token in the text says so.
+    const digits = scrubber(["123456789012345678901234"]);
+    const read = digits.json('{"id":91234567890123456789012345,"n":7}')!;
+    expect(read.numbers).toEqual([91234567890123456789012345]);
+    expect(digits.value(read.value, read.numbers)).toEqual({ id: "[redacted]", n: 7 });
+    expect(digits.json("not json")).toBeUndefined();
+  });
+
   it("walks a parsed value within a budget, keeping what fits and saying it cut the rest", () => {
     const clean = scrubber([secret]);
     const rows = Array.from({ length: 1000 }, (_, i) => ({ i, note: `${secret} ${"n".repeat(90)}` }));
@@ -192,6 +208,11 @@ describe("scrubbing a credential", () => {
       cut: true,
     });
     expect(clean.bounded({ abc: 1 }, 4)).toEqual({ value: {}, cut: true });
+    // An object far wider than the budget: what is past it is never read.
+    const wide = Object.fromEntries(Array.from({ length: 100_000 }, (_, i) => [`k${i}`, "v".repeat(20)]));
+    const before = scrubbedChars();
+    expect(clean.bounded(wide, 1000).cut).toBe(true);
+    expect(scrubbedChars() - before).toBeLessThan(1000);
   });
 
   it("does work linear in what it reads: one automaton for every credential, one pass a level", () => {
@@ -223,6 +244,11 @@ describe("scrubbing a credential", () => {
     let out = "";
     expect(work(() => (out = scrubber([secret]).text(echo))).chars).toBeLessThanOrEqual(9 * echo.length);
     expect(out).not.toContain("AbC");
+    // The search follows a failure link at most once for each character it reads: a credential that matches
+    // all but its last character at every place costs no more.
+    const [steps, chars] = [scrubSteps(), scrubbedChars()];
+    scrubber([`${"a".repeat(2048)}b${"a".repeat(2047)}`, "aaaaaaaaab"]).text("a".repeat(1_000_000));
+    expect(scrubSteps() - steps).toBeLessThanOrEqual(2 * (scrubbedChars() - chars));
     // Fifty credentials of 8 KB: one automaton, built in a few tens of milliseconds here.
     const big = Array.from(
       { length: 50 },
@@ -299,7 +325,21 @@ const SHORT: Record<string, string> = {
   t: "\t",
 };
 function reference(text: string, creds: string[]): string {
-  const good = [...new Set(creds.filter((c) => c.length >= 6))];
+  const given = creds.filter((c) => c.length >= 6);
+  // And what JSON reads a credential's own escapes as, level by level.
+  const decoded = given.flatMap((c) => {
+    const out: string[] = [];
+    for (let i = 0, read = c; i < 8 && read.includes("\\"); i++) {
+      try {
+        read = JSON.parse(`"${read}"`) as string;
+      } catch {
+        break;
+      }
+      if (read.length >= 6) out.push(read);
+    }
+    return out;
+  });
+  const good = [...new Set([...given, ...decoded])];
   if (!good.length) return text;
   const covered = new Uint8Array(text.length);
   let level = text;

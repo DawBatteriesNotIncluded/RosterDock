@@ -404,8 +404,10 @@ export async function discoverTools(target: McpTarget, deps: McpClientDeps = {})
         throw new Error(
           `the server answered ${MCP_EMPTY_PAGES_MAX} pages of its tool list in a row with no tool`,
         );
-      // A page past the thousandth tool is read no further: its fields are never scrubbed.
-      for (const t of page.tools.slice(0, 1000 - out.length)) {
+      // A page past the thousandth tool is read no further: its fields are never scrubbed. Every 200 tools
+      // the board's other work gets a turn.
+      for (const [i, t] of page.tools.slice(0, 1000 - out.length).entries()) {
+        if (i && i % 200 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
         // Kept on the row and shown to every teammate: what the server says of its tools is scrubbed too.
         out.push({
           name: clean.prefix(t.name, 2000),
@@ -447,27 +449,22 @@ export async function callMcpTool(
         .join("\n");
       if (res.isError)
         return { ok: false, error: clean.head(text, MCP_RESULT_MAX_CHARS) || `${name} returned an error` };
-      // Text that is JSON is read as a value before anything is scrubbed, so a number in it is looked at as a
-      // number; structured content is one already. Levels past 12 are "[depth]", as the broker keeps them,
+      // Text that is JSON is read as a value, so a number in it is looked at as a number; structured content
+      // is one already. Only a text within the budget is parsed: one past it is cut as text, so what the
+      // server sent never sets what the board holds. Levels past 12 are "[depth]", as the broker keeps them,
       // and what is past the budget is left out, the result saying so.
-      const parsed = res.structuredContent != null ? res.structuredContent : jsonOf(text);
+      const parsed =
+        res.structuredContent != null
+          ? { value: res.structuredContent, numbers: [] }
+          : text.length <= MCP_RESULT_MAX_CHARS + clean.tail && /^\s*[[{]/.test(text)
+            ? clean.json(text)
+            : undefined;
       if (parsed === undefined)
         return { ok: true, result: text.trim() ? clean.head(text, MCP_RESULT_MAX_CHARS) : null };
-      const { value, cut } = clean.bounded(parsed, MCP_RESULT_MAX_CHARS);
+      const { value, cut } = clean.bounded(parsed.value, MCP_RESULT_MAX_CHARS, parsed.numbers);
       return { ok: true, result: cut ? { truncated: true, value } : value };
     });
   } catch (err) {
     return { ok: false, error: (err as Error).message.slice(0, 2000) };
-  }
-}
-
-/** The value a text that is one JSON object or array holds; undefined for any other text. */
-function jsonOf(text: string): unknown {
-  const t = text.trim();
-  if (!t.startsWith("{") && !t.startsWith("[")) return undefined;
-  try {
-    return JSON.parse(t) as unknown;
-  } catch {
-    return undefined;
   }
 }

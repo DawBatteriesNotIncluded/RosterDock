@@ -365,6 +365,11 @@ describe("a company's MCP server over HTTP", () => {
       if (tool === "huge-key") return shaped(JSON.stringify(echoed), JSON.stringify({ [mb(3.6)]: 1 }));
       if (tool === "huge-error") return shaped(JSON.stringify(mb(3.6)), null);
       if (tool === "digits") return shaped(JSON.stringify('{"id":90012345678,"pin":12345678,"n":7}'), null);
+      // 7.8 MB of JSON as text, nested millions deep; and the credential written into JSON as it is.
+      if (tool === "nested-text")
+        return shaped(JSON.stringify(`${"[".repeat(3_900_000)}${"]".repeat(3_900_000)}`), null);
+      if (tool === "interpolated")
+        return shaped(JSON.stringify('{"echo":"Bearer tok\\n\\"en-12345","n":1}'), null);
       if (tool === "large")
         return shaped(
           JSON.stringify(echoed),
@@ -430,7 +435,7 @@ describe("a company's MCP server over HTTP", () => {
     // A tools page of 1,801, the first with fields of a megabyte: a thousand read, each field to 2,000.
     const before = scrubbedChars();
     const wide = await discoverTools({ ...target, url: "https://mcp.echo.test/mcp-wide" }, deps);
-    expect(scrubbedChars() - before).toBeLessThan(4_000_000);
+    expect(scrubbedChars() - before).toBeLessThan(1_600_000);
     expect(wide).toHaveLength(1000);
     expect(wide[0]!.description.length).toBeLessThanOrEqual(2000);
     expect(JSON.stringify(wide)).not.toMatch(/AbC|dEf|GhI/);
@@ -443,6 +448,24 @@ describe("a company's MCP server over HTTP", () => {
       {},
     );
     expect(pin).toEqual({ ok: true, result: { id: "[redacted]", pin: "[redacted]", n: 7 } });
+    // A credential holding escapes of its own, written into JSON as it is: JSON reads them away, so the text is
+    // scrubbed before it is parsed.
+    const interpolated = await callMcpTool(
+      { ...target, authEnvName: "ODD_TOKEN" },
+      { ...deps, env: { ODD_TOKEN: 'tok\\n\\"en-12345' } },
+      "interpolated",
+      {},
+    );
+    expect(interpolated).toEqual({ ok: true, result: { echo: "Bearer [redacted]", n: 1 } });
+    // JSON text past the budget is never parsed: nested millions deep, it took 645 MB to. It comes back cut,
+    // as text, and the board's peak memory barely moves.
+    const peak = process.resourceUsage().maxRSS;
+    const reads = scrubbedChars();
+    const nested = (await call("nested-text")) as { ok: true; result: unknown };
+    expect(typeof nested.result).toBe("string");
+    expect((nested.result as string).length).toBeLessThanOrEqual(200_000);
+    expect(scrubbedChars() - reads).toBeLessThan(3_000_000);
+    expect(process.resourceUsage().maxRSS - peak).toBeLessThan(300 * 1024);
     expect(((await call("huge-text")) as { result: string }).result.length).toBeLessThanOrEqual(200_000);
     const broken = await call("broken");
     expect(broken.ok).toBe(false);

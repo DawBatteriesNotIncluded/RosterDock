@@ -414,9 +414,13 @@ their own, each with its own database and workers.
   read: percent-encoding in a URL, HTML entities, a body in UTF-16 or Latin-1, an echo split across two of
   an MCP answer's text items. What is kept is bounded before it is scrubbed: an OpenAPI answer is cut at
   its manifest's cap, an MCP answer's text at 200,000 characters and an error at 2,000, and an MCP answer's
-  structured content, or its text when that is JSON, is read as a value before anything is scrubbed and
-  walked, levels past twelve written `[depth]`, as far as 200,000 characters of it go; what is past that is
-  left out (a key it would cut with its entry), and the result says it was cut. An answer at its 8 MB cap
+  structured content, or its text when that is JSON within that budget, is read as a value and walked,
+  levels past twelve written `[depth]`, as far as 200,000 characters of it go; what is past that is left out
+  (a key it would cut with its entry), and the result says it was cut. JSON text is scrubbed before it is
+  parsed, so a credential a server wrote into it unescaped goes even when JSON would read its own
+  backslashes away (each credential is also searched for as JSON reads it); when scrubbing breaks the JSON
+  (a credential of digits inside a number), the text as it came is parsed, and a number whose digits held
+  a credential goes. An answer at its 8 MB cap
   nested millions of levels deep can still take some hundreds of MB while the MCP SDK parses it, before
   any of this applies. A text cut where a
   teammate's words may be echoed drops its last 256 characters, or sixteen times the credential's length

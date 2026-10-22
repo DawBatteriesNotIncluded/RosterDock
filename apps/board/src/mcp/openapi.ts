@@ -398,27 +398,23 @@ export async function callOpenApiOperation(
 }
 
 /** A parsed value with secret-looking keys redacted and the credential out of every string. */
-function cleaned(value: unknown, clean: Scrubber): unknown {
-  return clean.value(deepRedact(value));
+function cleaned(read: { value: unknown; numbers: number[] }, clean: Scrubber): unknown {
+  return clean.value(deepRedact(read.value), read.numbers);
 }
 
 /**
- * A whole answer as the teammate reads it, parsed before anything is scrubbed, so a number in it is looked
- * at as a number: JSON cleaned; newline-delimited JSON (a log, an export) cleaned line by line and written
+ * A whole answer as the teammate reads it, read as JSON so a number in it is looked at as a number
+ * (`Scrubber.json`): JSON cleaned; newline-delimited JSON (a log, an export) cleaned line by line and written
  * back as lines; anything else the scrubbed text.
  */
 function readAnswer(raw: string, clean: Scrubber): unknown {
-  try {
-    return cleaned(JSON.parse(raw), clean);
-  } catch {
-    // not one JSON value
-  }
+  const whole = clean.json(raw);
+  if (whole) return cleaned(whole, clean);
   const lines = raw.split("\n");
-  if (lines.filter((l) => l.trim()).length >= 2)
-    try {
-      return lines.map((l) => (l.trim() ? JSON.stringify(cleaned(JSON.parse(l), clean)) : l)).join("\n");
-    } catch {
-      // not JSON line by line
-    }
+  if (lines.filter((l) => l.trim()).length >= 2) {
+    const read = lines.map((l) => (l.trim() ? clean.json(l) : null));
+    if (read.every((r) => r !== undefined))
+      return read.map((r, i) => (r ? JSON.stringify(cleaned(r, clean)) : lines[i])).join("\n");
+  }
   return clean.text(raw);
 }
