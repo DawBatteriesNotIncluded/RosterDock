@@ -10,7 +10,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { WorkerCheckInput } from "@rosterdock/shared";
-import { killTree } from "./kill.js";
+import { inJob, killTree } from "./kill.js";
 import { tail } from "./text.js";
 import type { Workspace } from "./workspace.js";
 
@@ -62,22 +62,29 @@ export function testEnvironment(env: Record<string, string | undefined>): Record
 }
 
 /**
- * Run a package-manager command, capturing interleaved stdout and stderr. Past the time limit, or when the run
- * stops, it is ended: on Windows with every process under it, since there it runs under cmd.exe, which would
- * go alone and leave npm running. A process it started that is still alive may hold its output open; the step
- * waits for that STOP_GRACE_MS at most, then ends the command for good and reads no more of it.
+ * Run a package-manager command, capturing interleaved stdout and stderr. Everything the command starts ends
+ * with the step: past the time limit, when the run stops, and when the command ends by itself and leaves a
+ * process running (a server, a watcher), which would hold its output open and outlive the run. Elsewhere the
+ * command leads a process group of its own and the group is ended; on Windows it runs in a job (inJob), and
+ * taskkill ends the tree on top, where no job could be made. The group gets SIGTERM, and STOP_GRACE_MS later
+ * SIGKILL: past that the step reads no more of its output.
  */
 export const execCommand: Exec = (command, args, opts) =>
   new Promise((resolve) => {
     if (opts.signal?.aborted) return resolve({ code: null, output: "", timedOut: false });
     const win = process.platform === "win32";
-    const child = spawn(command, args, {
-      cwd: opts.cwd,
-      env: { ...opts.env, CI: "1" },
-      // npm, pnpm and yarn are .cmd shims on Windows; the arguments are fixed strings.
-      shell: win,
-      windowsHide: true,
-    });
+    const job = win ? inJob(command, args) : null;
+    const env = { ...opts.env, CI: "1" };
+    const child = job
+      ? spawn(job.file, job.args, { cwd: opts.cwd, env, windowsHide: true })
+      : spawn(command, args, {
+          cwd: opts.cwd,
+          env,
+          // npm, pnpm and yarn are .cmd shims on Windows; the arguments are fixed strings.
+          shell: win,
+          windowsHide: true,
+          detached: !win,
+        });
     let output = "";
     let timedOut = false;
     const keep = (chunk: string) => {
@@ -88,6 +95,18 @@ export const execCommand: Exec = (command, args, opts) =>
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", keep);
     child.stderr.on("data", keep);
+    const signalAll = (signal: "SIGTERM" | "SIGKILL") => {
+      if (win) {
+        if (signal === "SIGKILL") child.kill("SIGKILL");
+        else killTree(child);
+      } else if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, signal);
+        } catch {
+          // nothing left in the group
+        }
+      }
+    };
     let grace: NodeJS.Timeout | undefined;
     let settled = false;
     const settle = (code: number | null, more = "") => {
@@ -95,25 +114,25 @@ export const execCommand: Exec = (command, args, opts) =>
       settled = true;
       clearTimeout(timer);
       clearTimeout(grace);
-      opts.signal?.removeEventListener("abort", stop);
+      opts.signal?.removeEventListener("abort", end);
       child.stdout.destroy();
       child.stderr.destroy();
       resolve({ code, output: output + more, timedOut });
     };
-    const stop = () => {
+    const end = () => {
       if (grace) return;
-      if (win) killTree(child);
-      else child.kill();
+      signalAll("SIGTERM");
       grace = setTimeout(() => {
-        child.kill("SIGKILL");
+        signalAll("SIGKILL");
         settle(child.exitCode);
       }, STOP_GRACE_MS);
     };
     const timer = setTimeout(() => {
       timedOut = true;
-      stop();
+      end();
     }, opts.timeoutMs);
-    opts.signal?.addEventListener("abort", stop, { once: true });
+    opts.signal?.addEventListener("abort", end, { once: true });
+    child.on("exit", end);
     child.on("error", (err) => settle(null, `\n${err.message}`));
     child.on("close", (code) => settle(code));
   });

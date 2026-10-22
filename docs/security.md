@@ -232,7 +232,10 @@ their own, each with its own database and workers.
   locale and `CI=1`, and no model key, board token or git token. It still runs as the worker's user in
   the worker's pod, so it reaches what that user reaches, the worker process's own environment under
   `/proc` included, and its output becomes the review's tests check as written. Turn the step off on a
-  fleet that runs repositories you would not run yourself.
+  fleet that runs repositories you would not run yourself. The script leads a process group of its own,
+  which the step ends (SIGTERM, then SIGKILL two seconds later) past its time limit, on Stop and when the
+  script ends by itself, so a server or a watcher it starts does not outlive the step; a process that
+  leaves the group (`setsid`, a daemon) is not reached.
 - The engine reaches no external MCP server. Every tool call goes to the board (`board_tool_call`),
   where the broker decides: run a read, propose a write, or refuse. A tool is a read only when the
   connector's catalog lists it as one, a person classified it so, or its name starts with a reading verb
@@ -266,8 +269,10 @@ their own, each with its own database and workers.
   the real one. Windows has no `O_NOFOLLOW`: a symbolic link or a junction anywhere on a file's way is
   refused, and the file is read only when the one opened has the file id of the one checked, compared whole
   (a file without one is refused), on the workspace's volume as a handle reads it (by path, Node 22.12 to
-  22.16 misread the volume there). A stopped git ends with the helpers it started (`taskkill /t`, where
-  Linux has the process group), and a test past its time limit with everything cmd.exe started for it. File
+  22.16 misread the volume there). A stopped git ends with the helpers it started that still run
+  (`taskkill /t`, where Linux has the process group). The repository's tests run in a job object, which
+  ends every process they started, one whose parent has already ended included; where Windows PowerShell
+  cannot make the job (a policy refuses it), taskkill ends what it can still walk to. File
   modes do nothing there: the MCP config that carries the run token is private because the temp directory
   is, as a user's profile is. What does not carry over is the pod: the engine, its shell and the
   repository's tests run as your Windows user, with your files, your credentials and your other programs
