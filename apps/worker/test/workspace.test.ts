@@ -98,6 +98,24 @@ describe("workspace", () => {
     expect(existsSync(ws.dir)).toBe(false);
   });
 
+  it("fails a run whose diff carries two names a reviewer cannot tell apart, whatever it declared", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-lookalike",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "notes.md"), "n\n", "utf8");
+    await writeFile(path.join(ws.dir, "README.md"), "# demo, changed\n", "utf8");
+    await writeFile(path.join(ws.dir, "\ufeffREADME.md"), "other\n", "utf8");
+    const h = await harvestWorkspace(ws, ["notes.md"]);
+    expect(h.filesWritten).toEqual(["notes.md"]);
+    expect(h.unreadable).toBe(
+      'the run\'s changes could not be read back for review (two files\' names differ only by spaces or a U+FEFF at an end: "README.md" and "\\ufeffREADME.md")',
+    );
+    await cleanupWorkspace(ws);
+  });
+
   it("without declared outputs, harvests new and modified files; without a repo, top-level files", async () => {
     const ws = await prepareWorkspace(
       path.join(root, "work"),
@@ -168,6 +186,10 @@ describe("workspace", () => {
       await writeFile(path.join(odd.dir, "report.md "), "other\n", "utf8");
       expect((await harvestWorkspace(odd, [])).unreadable).toMatch(
         /"report.md" and "report.md "|"report.md " and "report.md"/,
+      );
+      // However a declared output spells it.
+      expect((await harvestWorkspace(odd, ["./report.md ", "report.md"])).unreadable).toMatch(
+        /"report.md " and "report.md"/,
       );
       await rm(path.join(odd.dir, "report.md "));
     }
@@ -806,13 +828,17 @@ describe("removing a run's directory", () => {
     expect(calls).toBe(1);
   });
 
-  /** A remover that finds the folder busy, as a file a taskkilled git holds on Windows, until `ms` in. */
+  /**
+   * A remover that finds the folder busy, as a file a taskkilled git holds on Windows, for `ms` from the
+   * removal after the failed clone, however long the clone took to fail. The first call, before the clone,
+   * finds nothing there and goes.
+   */
   const heldFor = (ms: number): typeof rm => {
-    const started = Date.now();
     let calls = 0;
-    // The first call, before the clone, finds nothing there and goes.
+    let until = 0;
     return async (p, o) => {
-      if (++calls > 1 && Date.now() - started < ms) throw busy();
+      if (++calls === 2) until = Date.now() + ms;
+      if (calls > 1 && Date.now() < until) throw busy();
       return rm(p, o);
     };
   };
@@ -826,6 +852,20 @@ describe("removing a run's directory", () => {
     expect(existsSync(path.join(workRoot, "run-held"))).toBe(true);
     await removalsDone();
     expect(existsSync(path.join(workRoot, "run-held"))).toBe(false);
+  });
+
+  it("lets a stopping worker wait for a removal that starts while it waits", async () => {
+    const workRoot = await mkdtemp(path.join(root, "removals-"));
+    await expect(
+      prepareWorkspace(workRoot, "run-a", noSuchRepo(), null, undefined, heldFor(6000)),
+    ).rejects.toThrow(/git clone failed/);
+    // run-b's clone fails while the worker already waits for run-a's folder; its own outlasts that.
+    const b = prepareWorkspace(workRoot, "run-b", noSuchRepo(), null, undefined, heldFor(6000));
+    const done = removalsDone();
+    await expect(b).rejects.toThrow(/git clone failed/);
+    await done;
+    expect(existsSync(path.join(workRoot, "run-a"))).toBe(false);
+    expect(existsSync(path.join(workRoot, "run-b"))).toBe(false);
   });
 
   it("prepares a run again in a folder still being removed only once the removal is done, so it takes nothing new", async () => {

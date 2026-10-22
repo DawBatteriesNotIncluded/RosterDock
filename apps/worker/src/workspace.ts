@@ -264,9 +264,12 @@ export const CLONE_LOW_SPEED = { bytesPerSecond: 1000, seconds: 60 };
  */
 const removing = new Map<string, Promise<void>>();
 
-/** Every stopped clone's removal still going on, settled: each folder gone, or given up after half a minute. */
+/**
+ * Every stopped clone's removal still going on, settled: each folder gone, or given up after half a minute.
+ * One a run still ending starts meanwhile is waited for too.
+ */
 export async function removalsDone(): Promise<void> {
-  await Promise.all(removing.values());
+  while (removing.size) await Promise.all([...removing.values()]);
 }
 
 /**
@@ -681,6 +684,8 @@ export async function harvestWorkspace(
   // rename detection so every hunk applies to one path. Without: a diff that
   // adds every harvested text file, so the review looks the same.
   let diffText = "";
+  // The names the diff carries, as git spells them.
+  let diffNames: string[] = [];
   if (ws.repo) {
     const head = await git(["rev-parse", "HEAD"], ws.dir);
     if (head.code === 0) out.baseSha = head.stdout.trim() || null;
@@ -693,11 +698,12 @@ export async function harvestWorkspace(
     const skipped = /^warning: could not open directory .*$/m.exec(add.stderr)?.[0];
     const staged = add.code === 0 && !skipped;
     // Every name the diff will carry, read as bytes: one that is not UTF-8 is no name the review can hold.
-    const notUtf8 = staged
+    const { names, notUtf8 } = staged
       ? decodeNames(
           (await gitBytes(["diff", "--cached", "--name-only", "-z", "--no-renames"], ws.dir)).stdout,
-        ).notUtf8
-      : [];
+        )
+      : { names: [], notUtf8: [] };
+    diffNames = names;
     if (notUtf8.length)
       out.unreadable = `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
     else {
@@ -751,11 +757,13 @@ export async function harvestWorkspace(
         return [a.encoding === "base64" ? renderBinaryFileDiff(name) : renderNewFileDiff(name, a.content)];
       })
       .join("");
+    diffNames = [...rendered];
   }
   // Two files whose names are the same but for spaces or a U+FEFF at either end, which a reviewer cannot tell
-  // apart: a run that would complete fails, naming both.
+  // apart: a run that would complete fails, naming both. Every name it delivers or its diff carries, as git
+  // spells it (a declared `./report.md ` is `report.md `).
   const trimmed = new Map<string, string>();
-  for (const name of out.filesWritten) {
+  for (const name of new Set([...out.filesWritten.map((f) => path.posix.normalize(f)), ...diffNames])) {
     const other = trimmed.get(name.trim());
     if (other !== undefined && other !== name) {
       out.unreadable ??= `the run's changes could not be read back for review (two files' names differ only by spaces or a U+FEFF at an end: ${spellName(other)} and ${spellName(name)})`;
