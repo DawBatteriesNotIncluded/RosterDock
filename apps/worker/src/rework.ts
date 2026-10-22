@@ -14,7 +14,7 @@
 
 import { lstat, mkdir, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseUnifiedDiff, sha256Hex, type RunCompleteInput } from "@rosterdock/shared";
+import { sha256Hex, type RunCompleteInput } from "@rosterdock/shared";
 import { clip } from "./text.js";
 import { git, redactGit, type Workspace } from "./workspace.js";
 
@@ -192,13 +192,12 @@ async function caseFold(ws: Workspace): Promise<(p: string) => string> {
   return ignorecase.stdout.trim() === "true" ? (p) => p.toLowerCase() : (p) => p;
 }
 
-/** How many files the round's diff names; 0 where the parser cannot read it (git applied it all the same). */
+/**
+ * How many files the round's diff names: a stanza each, by its `diff --git` line (a line of a hunk starts with its
+ * +, - or space). Counted so, not parsed: git applies what the parser would refuse a line of.
+ */
 function countFiles(diff: string): number {
-  try {
-    return parseUnifiedDiff(diff).length;
-  } catch {
-    return 0;
-  }
+  return diff.split("\n").filter((l) => l.startsWith("diff --git ")).length;
 }
 
 /** Where a diff copies or renames files to (or from, where it names no destination). */

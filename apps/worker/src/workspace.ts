@@ -13,6 +13,7 @@ import { lstat, mkdir, open, readdir, readFile, realpath, rm, writeFile } from "
 import os from "node:os";
 import path from "node:path";
 import {
+  isTreePath,
   parseUnifiedDiff,
   renderBinaryFileDiff,
   renderNewFileDiff,
@@ -181,7 +182,8 @@ export function gitBytes(
  * its bytes were, and collide with the others.
  */
 export function decodeNames(out: Buffer): { names: string[]; notUtf8: string[] } {
-  const strict = new TextDecoder("utf-8", { fatal: true });
+  // ignoreBOM: a name that starts with U+FEFF keeps it, as another without it is another file.
+  const strict = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const decoded = { names: [] as string[], notUtf8: [] as string[] };
   for (let at = 0, end = out.indexOf(0); end >= 0; at = end + 1, end = out.indexOf(0, at)) {
     const entry = out.subarray(at, end);
@@ -701,11 +703,17 @@ export async function harvestWorkspace(
       }
     }
   } else {
+    // Each file once, under the name git would give it (a declared `./report.md` is report.md); one no tree
+    // holds (a file named .git) is not in it.
+    const rendered = new Set<string>();
     diffText = out.artifacts
       .filter((a) => a.kind !== "handover" && a.kind !== "diff")
-      .map((a) =>
-        a.encoding === "base64" ? renderBinaryFileDiff(a.path) : renderNewFileDiff(a.path, a.content),
-      )
+      .flatMap((a) => {
+        const name = path.posix.normalize(a.path);
+        if (rendered.has(name) || !isTreePath(name)) return [];
+        rendered.add(name);
+        return [a.encoding === "base64" ? renderBinaryFileDiff(name) : renderNewFileDiff(name, a.content)];
+      })
       .join("");
   }
   const fitted = fitDiff(diffText, maxBytes);

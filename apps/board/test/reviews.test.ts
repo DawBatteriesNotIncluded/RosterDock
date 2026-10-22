@@ -771,7 +771,7 @@ describe("reviews", () => {
     expect(github.requests).toEqual([]);
   });
 
-  it("opens a pull request from the review's diff read again, never from rows an older parser stored, and not from a changed one", async () => {
+  it("opens a pull request only from the files the review showed, as its diff still reads them", async () => {
     const { api, base } = await seedCompany(board, "rv-reread@example.com");
     const cody = await addTeammate(api, base, "Cody");
     const project = (
@@ -794,28 +794,46 @@ describe("reviews", () => {
       await completeTaskRun(api, base, task.id, textOnly, { baseSha: BASE_SHA });
       return (await api.get(`${base}/tasks/${task.id}/review`)).body;
     };
-    // Rows as a review opened before the upgrade may hold them: another file's name.
-    const old = await open("Opened before the upgrade");
-    await board.db.query("UPDATE review_files SET path = 'elsewhere/' || path WHERE review_id = $1", [
-      old.id,
-    ]);
+    const approve = async (id: string) =>
+      (await api.post(`${base}/reviews/${id}/approve`, { summary: "Ship it." })).body.pullRequests[0];
     github.requests.length = 0;
-    const approved = await api.post(`${base}/reviews/${old.id}/approve`, { summary: "Ship it." });
-    expect(approved.body.pullRequests[0]).toMatchObject({ status: "opened", error: null });
-    const sent = JSON.stringify(github.requests);
-    expect(sent).toContain("workflows/vms-digest.json");
-    expect(sent).not.toContain("elsewhere/");
+    // Rows as a review opened before the upgrade may hold them: the diff reads otherwise now, so neither the
+    // rows nor the diff is what the review showed and its secrets check scanned. Nothing is merged.
+    const old = await open("Opened before the upgrade");
+    await board.db.query(
+      "UPDATE review_files SET hunks = hunks #- '{0,lines,0}', additions = additions - 1 WHERE review_id = $1 AND position = 0",
+      [old.id],
+    );
+    expect(await approve(old.id)).toMatchObject({
+      status: "failed",
+      error:
+        "the review's diff reads otherwise than the files the review showed (an older board read it): request changes for a round that reads it again",
+    });
     // A diff that no longer hashes to what the review was opened with opens nothing.
     const changed = await open("Its diff changed since");
     await board.db.query(
       "UPDATE artifacts SET content = content || ' ' WHERE kind = 'diff' AND run_id = (SELECT run_id FROM reviews WHERE id = $1)",
       [changed.id],
     );
-    const refused = await api.post(`${base}/reviews/${changed.id}/approve`, { summary: "Ship it." });
-    expect(refused.body.pullRequests[0]).toMatchObject({
+    expect(await approve(changed.id)).toMatchObject({
       status: "failed",
       error: "the review's diff no longer matches the sha256 it was opened with",
     });
+    // Nor does one in a store this board cannot read: the rows alone are not the diff.
+    const stored = await open("Its diff is in a store this board has not");
+    await board.db.query(
+      "UPDATE artifacts SET content = NULL, object_key = 'companies/x/runs/y/z' WHERE kind = 'diff' AND run_id = (SELECT run_id FROM reviews WHERE id = $1)",
+      [stored.id],
+    );
+    expect(await approve(stored.id)).toMatchObject({
+      status: "failed",
+      error: "the review's diff could not be read from the object store",
+    });
+    expect(github.requests).toEqual([]);
+    // As stored, it opens.
+    const fresh = await open("Opened after the upgrade");
+    expect(await approve(fresh.id)).toMatchObject({ status: "opened", error: null });
+    expect(JSON.stringify(github.requests)).toContain("workflows/vms-digest.json");
   });
 
   it("sends the author back on a repository with the round's diff to start from, and says on the task when it did not carry over", async () => {

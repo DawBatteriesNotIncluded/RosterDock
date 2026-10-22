@@ -133,9 +133,10 @@ install built from that tree changes each of these:
   changed or deleted, or a mode change) in a folder whose name ends in ` b` took another file's name, and a
   quoted name with an emoji in it another's spelling. The board now reads a diff by its hunks' counts, opens a
   review of a diff git would not write with none of it and a failing secrets check, and builds a pull request
-  from the review's diff read again, so a review open before the upgrade merges as its diff says. Files whose
-  names are not UTF-8 (Linux allows any bytes) shared one name in the review; a run that would complete now
-  fails, saying so.
+  only while the review's diff, read again, reads as the files the review showed. Upgrading: a review open
+  before the upgrade whose diff an older board misread fails its pull request on approval, saying so; request
+  changes for a round that reads it again. Files whose names are not UTF-8 (Linux allows any bytes) shared one
+  name in the review; a run that would complete now fails, saying so.
 - On Windows, 0.1.0-rc.1 and 0.1.0-rc.2 ran the repository's tests without the job object: Windows
   PowerShell never made it (kernel32's functions were declared without PreserveSig), so what the tests left
   running when they ended by themselves carried on, as without one. The worker now makes it, and its log

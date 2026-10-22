@@ -3,7 +3,14 @@
 // section). Kept apart from the service so the routes and the board tools
 // share one path.
 
-import { parseUnifiedDiff, payloadSha256, sha256Hex, type ActorRef, type DiffFile } from "@rosterdock/shared";
+import {
+  canonicalJson,
+  parseUnifiedDiff,
+  payloadSha256,
+  sha256Hex,
+  type ActorRef,
+  type DiffFile,
+} from "@rosterdock/shared";
 import type { Db } from "../db/pool.js";
 import { openChange, type GitHosts } from "../git/hosts.js";
 import { artifactBytes, artifactText } from "../storage/artifacts.js";
@@ -21,32 +28,64 @@ export interface Restarted {
   reason: string | null;
 }
 
+/** A file as a review shows it and a pull request writes it. */
+function shown(f: DiffFile): DiffFile {
+  return {
+    path: f.path,
+    status: f.status,
+    binary: f.binary,
+    additions: f.additions,
+    deletions: f.deletions,
+    hunks: f.hunks,
+  };
+}
+
 /**
- * The files of the diff the review's current round was opened from, read again: its sha256 must be the one the
- * review recorded. Null without a diff artifact (the stored rows, empty, stand); an error where it does not
- * match or cannot be read.
+ * The files the review approved: the rows its round stored, which the round's diff, read again, must still read
+ * as. Where an older parser stored a diff otherwise than it reads, neither is what the review showed and the
+ * secrets check scanned whole, so nothing is merged: a new round reads it again. A reason where it is refused.
  */
-async function reviewDiff(
+async function approvedFiles(
   db: Db,
   store: ObjectStore | null,
   review: ReviewRow,
-): Promise<{ files: DiffFile[] } | { error: string } | null> {
-  if (!review.run_id) return null;
+  round: number,
+): Promise<DiffFile[] | string> {
+  if (review.round !== round)
+    return `the review has moved on to round ${review.round} since round ${round} was approved`;
+  const rows = (
+    await db.query<ReviewFileRow>(
+      "SELECT * FROM review_files WHERE review_id = $1 AND round = $2 ORDER BY position",
+      [review.id, round],
+    )
+  ).rows.map<DiffFile>((f) => ({
+    path: f.path,
+    status: f.status,
+    binary: f.is_binary,
+    additions: f.additions,
+    deletions: f.deletions,
+    hunks: f.hunks,
+  }));
   const art = (
     await db.query<{ content: string | null; object_key: string | null }>(
       "SELECT content, object_key FROM artifacts WHERE run_id = $1 AND kind = 'diff'",
       [review.run_id],
     )
   ).rows[0];
-  const text = await artifactText(store, art ?? null);
-  if (text === null) return null;
+  // A round opened from no diff shows nothing, and hashes as the empty one.
+  const text = art ? await artifactText(store, art) : "";
+  if (text === null) return "the review's diff could not be read from the object store";
   if (sha256Hex(text) !== review.diff_sha256)
-    return { error: "the review's diff no longer matches the sha256 it was opened with" };
+    return "the review's diff no longer matches the sha256 it was opened with";
+  let files: DiffFile[];
   try {
-    return { files: parseUnifiedDiff(text) };
+    files = parseUnifiedDiff(text);
   } catch (err) {
-    return { error: `the review's diff could not be read: ${(err as Error).message}` };
+    return `the review's diff could not be read: ${(err as Error).message}`;
   }
+  if (canonicalJson(files.map(shown)) !== canonicalJson(rows))
+    return "the review's diff reads otherwise than the files the review showed (an older board read it): request changes for a round that reads it again";
+  return rows;
 }
 
 /**
@@ -94,49 +133,37 @@ export async function executePullRequest(
       : actor;
   let outcome: { number: number; url: string } | null = null;
   let error: string | null = null;
-  // The round's files as its diff reads now, where the review still holds that round: one opened before the
-  // parser read every diff right is merged as its diff says, not as the rows it stored then.
-  const reread = review?.round === payload.round ? await reviewDiff(db, store, review) : null;
   if (payloadSha256(row.payload) !== row.payload_sha256) {
     error = "the pull request payload no longer matches the sha256 it was approved with";
-  } else if (reread && "error" in reread) {
-    error = reread.error;
+  } else if (!review) {
+    error = "the review this pull request was approved in is gone";
   } else {
-    const files =
-      reread?.files ??
-      (
-        await db.query<ReviewFileRow>(
-          "SELECT * FROM review_files WHERE review_id = $1 AND round = $2 ORDER BY position",
-          [row.review_id, payload.round],
-        )
-      ).rows.map<DiffFile>((f) => ({
-        path: f.path,
-        status: f.status,
-        binary: f.is_binary,
-        additions: f.additions,
-        deletions: f.deletions,
-        hunks: f.hunks,
-      }));
-    // A binary file in the diff travels as the bytes the run reported under that path.
-    const binaries: Record<string, string> = {};
-    for (const f of files) {
-      if (!f.binary || f.status === "deleted" || !review?.run_id) continue;
-      const art = (
-        await db.query<{ content: string | null; object_key: string | null; encoding: string | null }>(
-          "SELECT content, object_key, encoding FROM artifacts WHERE run_id = $1 AND path = $2",
-          [review.run_id, f.path],
-        )
-      ).rows[0];
-      const bytes = art ? await artifactBytes(store, art) : null;
-      if (bytes) binaries[f.path] = bytes.toString("base64");
-    }
+    // Whatever fails from here, the store included, fails the pull request and says why.
     try {
-      outcome = await openChange(
-        hosts,
-        payload.provider ?? row.provider,
-        payload.path ?? `${payload.owner}/${payload.repo}`,
-        { ...payload, files, binaries },
-      );
+      const files = await approvedFiles(db, store, review, payload.round);
+      if (typeof files === "string") {
+        error = files;
+      } else {
+        // A binary file in the diff travels as the bytes the run reported under that path.
+        const binaries: Record<string, string> = {};
+        for (const f of files) {
+          if (!f.binary || f.status === "deleted") continue;
+          const art = (
+            await db.query<{ content: string | null; object_key: string | null; encoding: string | null }>(
+              "SELECT content, object_key, encoding FROM artifacts WHERE run_id = $1 AND path = $2",
+              [review.run_id, f.path],
+            )
+          ).rows[0];
+          const bytes = art ? await artifactBytes(store, art) : null;
+          if (bytes) binaries[f.path] = bytes.toString("base64");
+        }
+        outcome = await openChange(
+          hosts,
+          payload.provider ?? row.provider,
+          payload.path ?? `${payload.owner}/${payload.repo}`,
+          { ...payload, files, binaries },
+        );
+      }
     } catch (err) {
       error = (err as Error).message.slice(0, 2000);
     }

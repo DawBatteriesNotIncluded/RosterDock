@@ -146,11 +146,20 @@ describe("artifacts over the inline limit", () => {
     await without.destroy();
   });
 
-  async function setup(board: TestBoard, email: string) {
+  async function setup(board: TestBoard, email: string, repoUrl?: string) {
     const c = await seedCompany(board, email);
     const cody = await addTeammate(c.api, c.base, "Cody");
     await addTeammate(c.api, c.base, "Verifier", "reviewer");
-    const project = await addProject(c.api, c.base);
+    const project = repoUrl
+      ? (
+          await c.api.post(`${c.base}/projects`, {
+            name: "Account export",
+            client: "Globex",
+            repoUrl,
+            defaultBranch: "main",
+          })
+        ).body
+      : await addProject(c.api, c.base);
     const task = (
       await c.api.post(`${c.base}/tasks`, {
         projectId: project.id,
@@ -247,6 +256,36 @@ describe("artifacts over the inline limit", () => {
     const spec = JSON.parse(claimed.body).spec;
     expect(spec.review.diff).toContain("+row 0: ");
     expect(spec.review.files[0].additions).toBe(24_000);
+  });
+
+  it("a store that fails while a pull request is opened fails the pull request and says why, not the approval", async () => {
+    const { api, base, task, run, asRun } = await setup(
+      withStore,
+      "s4@example.com",
+      "https://github.com/acme/accounts.git",
+    );
+    await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
+      path: "changes.diff",
+      kind: "diff",
+      content: bigDiff(24_000),
+    });
+    await asRun.post(`/api/worker/runs/${run.id}/complete`, {
+      status: "completed",
+      summary: "Exported the accounts.",
+      baseSha: "a".repeat(40),
+    });
+    const review = (await api.get(`${base}/tasks/${task.id}/review`)).body;
+    s3.failWith = 503;
+    try {
+      const approved = await api.post(`${base}/reviews/${review.id}/approve`, { summary: "Ship it." });
+      expect(approved.status).toBe(200);
+      expect(approved.body.pullRequests[0]).toMatchObject({
+        status: "failed",
+        error: "object store get answered 503 (InternalError)",
+      });
+    } finally {
+      s3.failWith = null;
+    }
   });
 
   it("without an object store the board refuses an artifact over 512 KB and says why; the spec says so too", async () => {

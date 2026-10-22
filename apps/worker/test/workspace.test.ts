@@ -133,6 +133,28 @@ describe("workspace", () => {
     expect(synthetic.content).toContain("+a");
     expect(synthetic.content).not.toContain("blocked.md");
     await cleanupWorkspace(empty);
+
+    // Each file once, under the name git would give it; a file no tree holds (.git) is not in the diff, and one
+    // whose name starts with U+FEFF is another than the one without.
+    const odd = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-3b",
+      { repoUrl: null, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(odd.dir, "report.md"), "r\n", "utf8");
+    await writeFile(path.join(odd.dir, "\ufeffreport.md"), "b\n", "utf8");
+    await writeFile(path.join(odd.dir, ".GIT"), "gitdir: elsewhere\n", "utf8");
+    const listed = await harvestWorkspace(odd, []);
+    expect([...listed.filesWritten].sort()).toEqual([".GIT", "report.md", "\ufeffreport.md"]);
+    const read = (h: typeof listed) =>
+      parseUnifiedDiff(h.artifacts.find((a) => a.kind === "diff")!.content).map((f) => f.path);
+    expect(read(listed).sort()).toEqual(["report.md", "\ufeffreport.md"]);
+    expect(read(await harvestWorkspace(odd, ["./report.md"]))).toEqual(["report.md"]);
+    const declared = await harvestWorkspace(odd, ["./report.md", "report.md"]);
+    expect(declared.filesWritten).toEqual(["./report.md", "report.md"]);
+    expect(read(declared)).toEqual(["report.md"]);
+    await cleanupWorkspace(odd);
   });
 
   it("skips a file over the cap and cuts the diff at it; the board's cap from the run spec raises both", async () => {
@@ -300,6 +322,11 @@ describe("workspace", () => {
     });
     // A backslash doubled: `\\x82` the characters is not `\x82` the byte.
     expect(decodeNames(names("?? a\\x82", [0x82, 0]))).toEqual({ names: [], notUtf8: ["?? a\\\\x82\\x82"] });
+    // A name that starts with U+FEFF keeps it: without, it is another file's.
+    expect(decodeNames(names("\ufeffreport.md", [0], "report.md", [0]))).toEqual({
+      names: ["\ufeffreport.md", "report.md"],
+      notUtf8: [],
+    });
   });
 
   it.runIf(process.platform === "linux")(

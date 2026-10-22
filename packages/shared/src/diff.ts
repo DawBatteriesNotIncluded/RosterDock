@@ -153,7 +153,7 @@ const METADATA = [
 ];
 
 /** A path in the tree as git names one: not empty, not absolute, no `.`, `..` or `.git` part. */
-function treePath(p: string): boolean {
+export function isTreePath(p: string): boolean {
   return (
     p !== "" &&
     !p.startsWith("/") &&
@@ -191,7 +191,7 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
     if (!file) return;
     if (file.status !== "deleted" && newPath && newPath !== "/dev/null") file.path = newPath;
     else if (file.status === "deleted" && oldPath && oldPath !== "/dev/null") file.path = oldPath;
-    if (!treePath(file.path))
+    if (!isTreePath(file.path))
       throw new DiffError(`a path that is not in the repository: ${JSON.stringify(file.path)}`);
     files.push(file);
     file = null;

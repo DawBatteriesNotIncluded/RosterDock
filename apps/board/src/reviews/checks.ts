@@ -42,7 +42,7 @@ export function secretsCheck(files: DiffFile[], unread?: string): CheckResult {
     return {
       kind: "secrets",
       ok: false,
-      title: "The run's diff could not be read, so it was not scanned and nothing of it is shown",
+      title: "The run's diff could not be read, so it was not scanned and the review shows none of its files",
       detail: { unread },
     };
   const lines: { path: string; line: number }[] = [];
