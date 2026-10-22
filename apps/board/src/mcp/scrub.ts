@@ -3,24 +3,28 @@
 // is or as JSON escapes it, and a string in its answer may carry JSON of its own (a request log, echoed
 // headers), escaped again for every level it is nested.
 //
-// The text is searched as it is, then read one level of escapes at a time and searched again, eight levels
-// at most. A deeper level is read only around the escapes of the one above (a credential found there and
-// not above holds one), so plain stretches are read once. The search is Knuth-Morris-Pratt with each
-// credential's table built once per scrubber, and a text or a stretch shorter than the shortest credential
-// is not searched (reading escapes only shortens it). The work is linear in the text: nine passes over it
-// at most, whatever it or the credential holds, and one pass when it has no escape.
+// A text is searched as it is, then read one level of escapes at a time, the whole text each time, and
+// searched again: nine levels at most, fewer once a level holds no escape. Every credential is searched at
+// once (Aho-Corasick, built once per scrubber), and every place one is found is marked in one array the
+// size of the text, so the work and the memory are linear in the text, however many credentials there are
+// and however often they occur. Callers bound the text first: an answer is cut before it is scrubbed.
 
 /** Credentials shorter than this are never scrubbed: taking them out would blank ordinary text. */
 export const SCRUB_MIN_CHARS = 6;
 /** The most levels of JSON escapes read: a credential nested deeper than this is not found. */
 export const SCRUB_MAX_DEPTH = 8;
+/** Levels of a parsed value walked: deeper is written "[depth]", as the broker does with every result. */
+export const SCRUB_MAX_NESTING = 12;
 /**
- * The most characters one character of a credential takes three levels deep, from an encoder that writes
- * every character as \uXXXX (`\u005Cu002B` for `+`): what a cut text's dropped end makes room for.
+ * How many characters a cut text drops per character of the longest credential: one character escaped
+ * four levels deep by JSON nesting, each level doubling the backslashes of the one inside it (a slash
+ * written `\/` takes 16 there, a `+` written `+` 13). An encoder that writes every character of an
+ * escape as \uXXXX again takes more than this from the second level on.
  */
 export const ESCAPED_CHAR_MAX = 16;
 
 const REDACTED = "[redacted]";
+const DEPTH = "[depth]";
 const BACKSLASH = 0x5c;
 const U = 0x75;
 // What a JSON escape of one character reads as, by the character after the backslash: the short escapes,
@@ -37,52 +41,6 @@ for (const [k, v] of Object.entries({
   t: "\t",
 }))
   SHORT[k.charCodeAt(0)] = v.charCodeAt(0);
-// The most characters one read character takes at the level above: \uXXXX.
-const ESCAPE_MAX = 6;
-const utf16 = new TextDecoder("utf-16le");
-
-/** A credential and its Knuth-Morris-Pratt table, built once. */
-interface Needle {
-  text: string;
-  fail: Int32Array;
-}
-
-function needle(text: string): Needle {
-  const fail = new Int32Array(text.length);
-  for (let i = 1, k = 0; i < text.length; i++) {
-    while (k > 0 && text.charCodeAt(i) !== text.charCodeAt(k)) k = fail[k - 1]!;
-    if (text.charCodeAt(i) === text.charCodeAt(k)) k++;
-    fail[i] = k;
-  }
-  return { text, fail };
-}
-
-/** Where the needle starts in `hay`, occurrences that do not overlap: O(hay). */
-function occurrences(hay: string, n: Needle): number[] {
-  const out: number[] = [];
-  const m = n.text.length;
-  for (let i = 0, k = 0; i < hay.length; i++) {
-    const c = hay.charCodeAt(i);
-    while (k > 0 && c !== n.text.charCodeAt(k)) k = n.fail[k - 1]!;
-    if (c === n.text.charCodeAt(k)) k++;
-    if (k === m) {
-      out.push(i - m + 1);
-      k = 0;
-    }
-  }
-  return out;
-}
-
-/** A stretch of one level: its text, and where each of its characters begins in the original (and its end). */
-interface Stretch {
-  s: string;
-  /** from[i]: where character i begins in the original text; from[s.length]: where the stretch ends. */
-  from: Uint32Array | null;
-  /** With no `from`: where the stretch begins in the original, character for character. */
-  base: number;
-}
-
-const origin = (st: Stretch, i: number) => (st.from ? st.from[i]! : st.base + i);
 
 function hex4(s: string, at: number): number {
   let v = 0;
@@ -95,18 +53,38 @@ function hex4(s: string, at: number): number {
   return v;
 }
 
-/** [from, to) of a stretch, one level of escapes read, each character keeping where it began in the original. */
-function readLevel(st: Stretch, from: number, to: number): Stretch {
-  const codes = new Uint16Array(to - from);
-  const starts = new Uint32Array(to - from + 1);
-  let n = 0;
-  for (let i = from; i < to;) {
-    let c = st.s.charCodeAt(i);
+/** UTF-16 code units as a string, unit for unit: a byte order mark and a lone surrogate kept as they are. */
+function fromCodes(codes: Uint16Array, n: number): string {
+  const parts: string[] = [];
+  for (let i = 0; i < n; i += 8192)
+    parts.push(
+      String.fromCharCode.apply(null, codes.subarray(i, Math.min(n, i + 8192)) as unknown as number[]),
+    );
+  return parts.join("");
+}
+
+/** A level: its text, and where each of its characters begins in the original (null: the same place). */
+interface Level {
+  s: string;
+  /** from[i]: where character i begins in the original; from[s.length]: the original's length. */
+  from: Uint32Array | null;
+}
+
+/** The next level: one level of escapes read, every character keeping where it began; null if none was an escape. */
+function readLevel(level: Level, end: number): Level | null {
+  const { s, from } = level;
+  const n = s.length;
+  const codes = new Uint16Array(n);
+  const starts = new Uint32Array(n + 1);
+  let k = 0;
+  let read = false;
+  for (let i = 0; i < n;) {
+    let c = s.charCodeAt(i);
     let width = 1;
-    if (c === BACKSLASH && i + 1 < to) {
-      const next = st.s.charCodeAt(i + 1);
+    if (c === BACKSLASH && i + 1 < n) {
+      const next = s.charCodeAt(i + 1);
+      const v = next === U && i + 6 <= n ? hex4(s, i + 2) : -1;
       const short = next < 128 ? SHORT[next]! : -1;
-      const v = next === U && i + 6 <= to ? hex4(st.s, i + 2) : -1;
       if (v >= 0) {
         c = v;
         width = 6;
@@ -115,102 +93,185 @@ function readLevel(st: Stretch, from: number, to: number): Stretch {
         width = 2;
       }
     }
-    codes[n] = c;
-    starts[n] = origin(st, i);
-    n++;
+    if (width > 1) read = true;
+    codes[k] = c;
+    starts[k] = from ? from[i]! : i;
+    k++;
     i += width;
   }
-  starts[n] = origin(st, to);
-  return { s: utf16.decode(codes.subarray(0, n)), from: starts.subarray(0, n + 1), base: 0 };
+  if (!read) return null;
+  starts[k] = end;
+  return { s: fromCodes(codes, k), from: starts.subarray(0, k + 1) };
 }
 
 /**
- * The stretches of a level worth reading one level deeper: around each backslash, as far as a credential
- * escaped there could reach, merged. None begins inside a run of backslashes, so pairs read as pairs.
+ * Every credential at once: a trie of them with failure links (Aho-Corasick). From the root an ASCII
+ * character goes through a table and any other through a map; below it a node keeps its first child inline
+ * and any others in a map. `longest[node]`: the longest credential that ends at this node's place in a
+ * text, 0 for none.
  */
-function aroundEscapes(s: string, longest: number): [number, number][] {
-  const reach = ESCAPE_MAX * (longest + 1);
-  const out: [number, number][] = [];
-  for (let i = s.indexOf("\\"); i >= 0; i = s.indexOf("\\", i + 1)) {
-    const to = Math.min(s.length, i + reach);
-    const last = out[out.length - 1];
-    const from = Math.max(0, i - reach);
-    if (last && from <= last[1]) last[1] = Math.max(last[1], to);
-    // A stretch starts afresh only with no backslash within reach before it, so never inside a run of them.
-    else out.push([from, to]);
+class Automaton {
+  private readonly rootAscii = new Int32Array(128);
+  private readonly rootOther = new Map<number, number>();
+  private readonly firsts: number[] = [];
+  private readonly char: number[] = [-1];
+  private readonly child: number[] = [0];
+  private readonly more: (Map<number, number> | undefined)[] = [undefined];
+  private readonly fail: number[] = [0];
+  private readonly longest: number[] = [0];
+
+  constructor(needles: readonly string[]) {
+    for (const text of needles) {
+      let node = 0;
+      for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i);
+        let next = this.step(node, c);
+        if (next <= 0) {
+          next = this.char.length;
+          this.char.push(-1);
+          this.child.push(0);
+          this.more.push(undefined);
+          this.fail.push(0);
+          this.longest.push(0);
+          if (node === 0) {
+            if (c < 128) this.rootAscii[c] = next;
+            else this.rootOther.set(c, next);
+            this.firsts.push(next);
+          } else if (this.char[node] === -1) {
+            this.char[node] = c;
+            this.child[node] = next;
+          } else (this.more[node] ??= new Map()).set(c, next);
+        }
+        node = next;
+      }
+      this.longest[node] = text.length;
+    }
+    // Failure links, breadth first: a node's is the longest proper suffix of its text that is in the trie.
+    const queue = [...this.firsts];
+    for (let q = 0; q < queue.length; q++) {
+      const u = queue[q]!;
+      for (const [c, v] of this.children(u)) {
+        let f = this.fail[u]!;
+        let to = this.step(f, c);
+        while (to < 0) {
+          f = this.fail[f]!;
+          to = this.step(f, c);
+        }
+        this.fail[v] = to;
+        this.longest[v] = Math.max(this.longest[v]!, this.longest[to]!);
+        queue.push(v);
+      }
+    }
   }
-  return out;
+
+  /** Where `c` leads from `node` in the trie: from the root always somewhere (0: the root); below it, -1 for nowhere. */
+  private step(node: number, c: number): number {
+    if (node === 0) return c < 128 ? this.rootAscii[c]! : (this.rootOther.get(c) ?? 0);
+    if (this.char[node] === c) return this.child[node]!;
+    return this.more[node]?.get(c) ?? -1;
+  }
+
+  private children(node: number): [number, number][] {
+    const out: [number, number][] = [];
+    if (this.char[node]! >= 0) out.push([this.char[node]!, this.child[node]!]);
+    for (const e of this.more[node] ?? []) out.push(e);
+    return out;
+  }
+
+  /** Every place a credential ends in `s`, with the longest that ends there: mark(start, end) in `s`. */
+  scan(s: string, mark: (start: number, end: number) => void): void {
+    let node = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      let to = this.step(node, c);
+      while (to < 0) {
+        node = this.fail[node]!;
+        to = this.step(node, c);
+      }
+      node = to;
+      const len = this.longest[node]!;
+      if (len) mark(i + 1 - len, i + 1);
+    }
+  }
 }
 
 export interface Scrubber {
   /** The credentials out of a text, as written or JSON-escaped up to SCRUB_MAX_DEPTH levels deep. */
   text(text: string): string;
-  /** The credentials out of every string, key and number in a parsed value, however deep. */
+  /**
+   * The credentials out of a parsed value: every string, every key, every number that holds one. Levels
+   * past SCRUB_MAX_NESTING are written "[depth]" and never read.
+   */
   value(value: unknown): unknown;
-  /** A text cut at a cap: scrubbed, and a fixed length of its end dropped whatever it holds. */
+  /** A text cut at a cap: scrubbed, and its last `tail` characters dropped whatever they hold. */
   cut(text: string): string;
+  /**
+   * At most `max` characters of a text, scrubbed. A longer one is cut to `max` and `tail` more before it is
+   * scrubbed, then cut as `cut` does: the work is bounded by `max`, whatever the text's length.
+   */
+  head(text: string, max: number): string;
+  /**
+   * What a cut drops: room for the longest credential escaped as ESCAPED_CHAR_MAX allows, 256 at least, so
+   * a credential the cut fell inside leaves nothing of itself, and what a teammate reads never depends on
+   * how much of a credential a guess of it matched. A caller cutting a text keeps this much more, scrubs,
+   * then cuts.
+   */
+  readonly tail: number;
 }
 
 /** A scrubber for these credentials: the ones set and long enough to tell from ordinary text. */
 export function scrubber(secrets: readonly (string | null | undefined)[]): Scrubber {
-  const needles = [...new Set(secrets.filter((s): s is string => !!s && s.length >= SCRUB_MIN_CHARS))].map(
-    needle,
-  );
-  const shortest = Math.min(...needles.map((n) => n.text.length));
-  const longest = Math.max(0, ...needles.map((n) => n.text.length));
-  // How much of a cut text's end is dropped: room for a whole credential escaped three levels deep, 256 at
-  // least, so a credential the cut fell inside leaves nothing of itself, and what a teammate reads never
-  // depends on how much of a credential a guess of it matched.
+  const needles = [...new Set(secrets.filter((s): s is string => !!s && s.length >= SCRUB_MIN_CHARS))];
+  const shortest = needles.length ? Math.min(...needles.map((n) => n.length)) : Infinity;
+  const longest = Math.max(0, ...needles.map((n) => n.length));
   const tail = Math.max(256, longest * ESCAPED_CHAR_MAX);
-
-  const spans = (text: string): [number, number][] => {
-    const found: [number, number][] = [];
-    let level: Stretch[] = [{ s: text, from: null, base: 0 }];
-    for (let depth = 0; level.length; depth++) {
-      const deeper: Stretch[] = [];
-      for (const st of level) {
-        for (const n of needles)
-          for (const at of occurrences(st.s, n)) found.push([origin(st, at), origin(st, at + n.text.length)]);
-        if (depth === SCRUB_MAX_DEPTH) continue;
-        for (const [from, to] of aroundEscapes(st.s, longest)) {
-          if (to - from < shortest) continue;
-          const read = readLevel(st, from, to);
-          // Nothing read was an escape, or too little is left to hold a credential: nothing deeper.
-          if (read.s.length < to - from && read.s.length >= shortest) deeper.push(read);
-        }
-      }
-      level = deeper;
-    }
-    return found;
-  };
+  const automaton = needles.length ? new Automaton(needles) : null;
+  // A credential of digits may come back as a JSON number: 007 as 7, twenty digits rounded.
+  const numeric = needles.filter((n) => /^\d+$/.test(n)).map(Number);
 
   const text = (t: string): string => {
-    if (!needles.length || t.length < shortest) return t;
-    const found = spans(t).sort((a, b) => a[0] - b[0]);
-    if (!found.length) return t;
-    let out = "";
-    let at = 0;
-    for (const [s, e] of found) {
-      if (e <= at) continue;
-      out += `${t.slice(at, Math.max(at, s))}${REDACTED}`;
-      at = Math.max(at, e);
+    if (!automaton || t.length < shortest) return t;
+    // +1 where a credential begins, -1 where it ends, in the original text; allocated at the first one found.
+    let marks: Int32Array | null = null;
+    let level: Level | null = { s: t, from: null };
+    for (let depth = 0; level && level.s.length >= shortest; depth++) {
+      const from = level.from;
+      automaton.scan(level.s, (start, end) => {
+        marks ??= new Int32Array(t.length + 1);
+        marks[from ? from[start]! : start]! += 1;
+        marks[from ? from[end]! : end]! -= 1;
+      });
+      if (depth === SCRUB_MAX_DEPTH || level.s.indexOf("\\") < 0) break;
+      level = readLevel(level, t.length);
     }
-    return out + t.slice(at);
+    if (!marks) return t;
+    // The text with every marked stretch written once as "[redacted]": counted, then written, in typed arrays.
+    const covered: Int32Array = marks;
+    let length = 0;
+    for (let i = 0, open = 0; i < t.length; i++) {
+      const was = open;
+      open += covered[i]!;
+      length += open ? (was ? 0 : REDACTED.length) : 1;
+    }
+    const codes = new Uint16Array(length);
+    let k = 0;
+    for (let i = 0, open = 0; i < t.length; i++) {
+      const was = open;
+      open += covered[i]!;
+      if (!open) codes[k++] = t.charCodeAt(i);
+      else if (!was) for (let j = 0; j < REDACTED.length; j++) codes[k++] = REDACTED.charCodeAt(j);
+    }
+    return fromCodes(codes, k);
   };
 
-  const holds = (t: string) => text(t) !== t;
   const walk = (v: unknown, depth: number): unknown => {
+    if (depth > SCRUB_MAX_NESTING) return DEPTH;
     if (typeof v === "string") return text(v);
-    // A credential of digits, echoed as a number.
-    if (typeof v === "number" || typeof v === "bigint") return holds(String(v)) ? REDACTED : v;
-    // Deeper than this, the rest is scrubbed as its JSON text, escapes read, and read back.
-    if (depth > 12)
-      try {
-        const json = JSON.stringify(v);
-        return json === undefined ? v : (JSON.parse(text(json)) as unknown);
-      } catch {
-        return REDACTED;
-      }
+    if (typeof v === "number" || typeof v === "bigint") {
+      if (typeof v === "number" && numeric.includes(v)) return REDACTED;
+      const written = String(v);
+      return text(written) === written ? v : REDACTED;
+    }
     if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
     if (v && typeof v === "object")
       return Object.fromEntries(
@@ -219,17 +280,64 @@ export function scrubber(secrets: readonly (string | null | undefined)[]): Scrub
     return v;
   };
 
+  const cut = (t: string): string => {
+    const whole = text(t);
+    return whole.slice(0, Math.max(0, whole.length - tail));
+  };
+
   return {
     text,
-    value: (v) => (needles.length ? walk(v, 0) : v),
-    cut: (t) => {
-      const whole = text(t);
-      return whole.slice(0, Math.max(0, whole.length - tail));
-    },
+    value: (v) => (automaton ? walk(v, 0) : v),
+    cut,
+    head: (t, max) => (t.length <= max ? text(t) : cut(t.slice(0, max + tail))),
+    tail,
   };
 }
 
 /** One text, once: scrubber(secrets).text(text). */
 export function scrubText(text: string, secrets: readonly (string | null | undefined)[]): string {
   return scrubber(secrets).text(text);
+}
+
+/**
+ * A parsed value as JSON, levels past SCRUB_MAX_NESTING written "[depth]", and no longer than `limit`: the
+ * whole of it when it fits, else its first `limit` characters. Never stringifies a deep subtree whole.
+ */
+export function jsonPrefix(value: unknown, limit: number): string {
+  const parts: string[] = [];
+  let length = 0;
+  const put = (s: string) => {
+    parts.push(s);
+    length += s.length;
+  };
+  const write = (v: unknown, depth: number): void => {
+    if (length >= limit) return;
+    if (depth > SCRUB_MAX_NESTING) return put(JSON.stringify(DEPTH));
+    if (Array.isArray(v)) {
+      put("[");
+      for (let i = 0; i < v.length && length < limit; i++) {
+        if (i) put(",");
+        write(v[i] ?? null, depth + 1);
+      }
+      return put("]");
+    }
+    if (v && typeof v === "object") {
+      put("{");
+      let first = true;
+      for (const k of Object.keys(v)) {
+        if (length >= limit) break;
+        const x = (v as Record<string, unknown>)[k];
+        if (x === undefined || typeof x === "function") continue;
+        if (!first) put(",");
+        first = false;
+        put(`${JSON.stringify(k)}:`);
+        write(x, depth + 1);
+      }
+      return put("}");
+    }
+    put(JSON.stringify(v) ?? "null");
+  };
+  write(value, 0);
+  const json = parts.join("");
+  return json.length > limit ? json.slice(0, limit) : json;
 }

@@ -324,10 +324,19 @@ describe("a company's MCP server over HTTP", () => {
       if (body?.method !== "tools/call") return transport(input, init);
       // A server error whose body the SDK repeats in its own words.
       if (body.params?.name === "broken") return json(500, { error: echoed });
+      // Structured content past what a teammate reads, and nested past what the broker keeps.
+      let structured: unknown = undefined;
+      if (body.params?.name === "large")
+        structured = { log: Array.from({ length: 4000 }, (_, i) => ({ i, echoed })) };
+      if (body.params?.name === "deep") {
+        structured = echoed;
+        for (let i = 0; i < 100_000; i++) structured = [structured];
+      }
       const result = {
         ...error.result,
         content: [{ type: "text", text: echoed }],
         isError: body.params?.name === "failing",
+        ...(structured === undefined ? {} : { structuredContent: { nested: structured } }),
       };
       return json(200, { ...error, id: body.id, result });
     }) as typeof fetch;
@@ -341,6 +350,16 @@ describe("a company's MCP server over HTTP", () => {
     expect((await discoverTools(target, deps))[0]!.description).toBe(clean);
     expect(await call("failing")).toEqual({ ok: false, error: clean });
     expect(await call("answering")).toEqual({ ok: true, result: clean });
+    // Larger than a teammate reads: its JSON, cut, as an OpenAPI answer past its cap, the credential out.
+    const large = (await call("large")) as { ok: true; result: { truncated: boolean; text: string } };
+    expect(large.result.truncated).toBe(true);
+    expect(large.result.text.length).toBeLessThanOrEqual(200_000);
+    expect(large.result.text).toContain("[redacted]");
+    expect(large.result.text).not.toMatch(/AbC|dEf|GhI/);
+    // Nested past twelve levels: written "[depth]" there, as the broker would, never read whole.
+    let deep = ((await call("deep")) as { ok: true; result: { nested: unknown } }).result.nested;
+    for (let i = 0; i < 12; i++) deep = (deep as unknown[])[0];
+    expect(deep).toBe("[depth]");
     const broken = await call("broken");
     expect(broken.ok).toBe(false);
     expect(JSON.stringify(broken)).toContain("[redacted]");

@@ -27,7 +27,7 @@ import { notSetForCompany } from "../secrets/company.js";
 import { entryFor, type SecretStore } from "../secrets/store.js";
 import { isExpiring, refreshTokens, resourceAllowed, type TokenAuth } from "./oauth.js";
 import { defaultEgress, egressFetch, READ_NO_FURTHER, readBudget, type Egress } from "../web/egress.js";
-import { scrubber, type Scrubber } from "./scrub.js";
+import { jsonPrefix, scrubber, type Scrubber } from "./scrub.js";
 import type { WebReader } from "../web/transport.js";
 
 export const MCP_CALL_TIMEOUT_MS = 30_000;
@@ -327,7 +327,7 @@ export async function withMcpClient<T>(
       transport = buildTransport(target, deps, secret);
     } catch (err) {
       if (err instanceof McpTargetError) throw err;
-      throw new Error(clean.text((err as Error).message));
+      throw new Error(clean.head((err as Error).message, 2000));
     }
     await client.connect(transport, { timeout });
     return client;
@@ -340,13 +340,13 @@ export async function withMcpClient<T>(
       client = await pool.acquire(key, connect);
     } catch (err) {
       if (err instanceof McpTargetError) throw err;
-      throw new Error(clean.text((err as Error).message ?? String(err)));
+      throw new Error(clean.head((err as Error).message ?? String(err), 2000));
     }
     try {
       return await fn(client, clean);
     } catch (err) {
       await pool.evict(key, client);
-      throw new Error(clean.text((err as Error).message ?? String(err)));
+      throw new Error(clean.head((err as Error).message ?? String(err), 2000));
     }
   }
   // An answer cut at its cap inside an event stream reaches the SDK's onerror, not the call waiting on it,
@@ -369,7 +369,7 @@ export async function withMcpClient<T>(
     return await Promise.race([fn(client, clean), tooBig]);
   } catch (err) {
     if (err instanceof McpTargetError) throw err;
-    throw new Error(clean.text((err as Error).message ?? String(err)));
+    throw new Error(clean.head((err as Error).message ?? String(err), 2000));
   } finally {
     await client?.close().catch(() => {});
   }
@@ -407,8 +407,8 @@ export async function discoverTools(target: McpTarget, deps: McpClientDeps = {})
       for (const t of page.tools) {
         // Kept on the row and shown to every teammate: what the server says of its tools is scrubbed too.
         out.push({
-          name: clean.text(t.name),
-          description: clean.text(t.description ?? "").slice(0, 2000),
+          name: clean.head(t.name, 2000),
+          description: clean.head(t.description ?? "", 2000),
           annotations: t.annotations
             ? { readOnlyHint: t.annotations.readOnlyHint, destructiveHint: t.annotations.destructiveHint }
             : null,
@@ -437,19 +437,29 @@ export async function callMcpTool(
         structuredContent?: unknown;
         isError?: boolean;
       };
-      // What the server says, an error included, never repeats the credential: scrubbed whole, then cut.
-      const text = clean
-        .text(
-          (res.content ?? [])
-            .filter((c) => c.type === "text" && typeof c.text === "string")
-            .map((c) => c.text as string)
-            .join("\n"),
-        )
-        .slice(0, MCP_RESULT_MAX_CHARS);
+      // What the server says, an error included, never repeats the credential. What is kept is cut first,
+      // then scrubbed: the work is bounded by what a teammate reads, not by what the server sent.
+      const text = clean.head(
+        (res.content ?? [])
+          .filter((c) => c.type === "text" && typeof c.text === "string")
+          .map((c) => c.text as string)
+          .join("\n"),
+        MCP_RESULT_MAX_CHARS,
+      );
       if (res.isError) return { ok: false, error: text || `${name} returned an error` };
+      if (res.structuredContent == null) return { ok: true, result: parseMaybeJson(text) };
+      // Structured content as the broker keeps it (levels past 12 are "[depth]"), and no larger than the text
+      // would be; a larger one comes back as its JSON, cut, as an OpenAPI answer past its cap does.
+      const json = jsonPrefix(res.structuredContent, MCP_RESULT_MAX_CHARS + 1);
       return {
         ok: true,
-        result: res.structuredContent != null ? clean.value(res.structuredContent) : parseMaybeJson(text),
+        result:
+          json.length <= MCP_RESULT_MAX_CHARS
+            ? clean.value(JSON.parse(json))
+            : {
+                truncated: true,
+                text: clean.cut(jsonPrefix(res.structuredContent, MCP_RESULT_MAX_CHARS + clean.tail)),
+              },
       };
     });
   } catch (err) {
