@@ -564,16 +564,12 @@ describe("removing a run's directory", () => {
   it("removes a directory a program ran from once it ends, and on Windows gives up in time while it runs", async () => {
     const dir = await mkdtemp(path.join(root, "held-"));
     await writeFile(path.join(dir, "f.md"), "f\n", "utf8");
-    // A program running from the directory, as a run's dev server would be. Windows removes no file a process
-    // holds, and a running program's own file is one; elsewhere it goes like any other.
-    let child;
-    if (process.platform === "win32") {
-      const program = path.join(dir, "held.exe");
-      await copyFile(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "PING.EXE"), program);
-      child = spawn(program, ["-n", "60", "127.0.0.1"], { cwd: dir, stdio: "ignore" });
-    } else {
-      child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { cwd: dir, stdio: "ignore" });
-    }
+    // A program running from the directory, as a run's dev server would be. On Windows a copy of this Node:
+    // Windows removes no file a process holds, and a running program's own file is one. Elsewhere this Node,
+    // with the directory as its cwd, which goes like any other.
+    const program = process.platform === "win32" ? path.join(dir, "held.exe") : process.execPath;
+    if (program !== process.execPath) await copyFile(process.execPath, program);
+    const child = spawn(program, ["-e", "setTimeout(() => {}, 60000)"], { cwd: dir, stdio: "ignore" });
     await new Promise((resolve) => child.once("spawn", resolve));
     try {
       if (process.platform === "win32") {
