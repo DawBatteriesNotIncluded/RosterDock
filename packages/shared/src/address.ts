@@ -144,6 +144,8 @@ export interface PrivateDestinations {
   entries: string[];
   /** One company's own entries, by the company's id. */
   companies?: Record<string, PrivateDestinations>;
+  /** Set once the list is narrowed to a company (forCompany): whose list it is now. */
+  narrowedTo?: string;
 }
 
 export const NO_PRIVATE_DESTINATIONS: PrivateDestinations = { names: [], ranges: [], entries: [] };
@@ -226,13 +228,23 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
 /** A company's id, as the board writes one. */
 const COMPANY_ID_RE = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/;
 
-/** The list as one company has it: what every company may reach, and what the operator gave that company alone. */
+/**
+ * The list as one company has it: what every company may reach, and what the operator gave that company
+ * alone. A list already narrowed is that company's only; narrowing it to another throws, since it carries
+ * the first company's entries.
+ */
 export function forCompany(allow: PrivateDestinations, companyId: string): PrivateDestinations {
-  const own = allow.companies?.[companyId.toLowerCase()];
+  const id = companyId.toLowerCase();
+  if (allow.narrowedTo !== undefined) {
+    if (allow.narrowedTo === id) return allow;
+    throw new Error("a list of private destinations narrowed to one company was narrowed to another");
+  }
+  const own = allow.companies?.[id];
   return {
     names: [...allow.names, ...(own?.names ?? [])],
     ranges: [...allow.ranges, ...(own?.ranges ?? [])],
-    entries: [...allow.entries, ...(own?.entries ?? [])],
+    entries: [...allow.entries, ...(own?.entries.filter((e) => !allow.entries.includes(e)) ?? [])],
+    narrowedTo: id,
   };
 }
 

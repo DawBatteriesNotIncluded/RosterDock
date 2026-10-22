@@ -85,9 +85,14 @@ describe("addresses without node", () => {
     const forB = forCompany(allow, b.toUpperCase());
     expect(hostListed("ollama.ai.svc.cluster.local", forB)).toBe(false);
     expect(refuseDestination("192.168.5.5", forB)).toBeNull();
-    // A narrowed list has no companies left in it, so narrowing it again adds no one's.
+    // A narrowed list is that company's: narrowing it to another refuses rather than hand over its entries.
     expect(forA.companies).toBeUndefined();
-    expect(forCompany(forA, b).entries).toEqual(forA.entries);
+    expect(forCompany(forA, a.toUpperCase())).toBe(forA);
+    expect(() => forCompany(forA, b)).toThrow("narrowed to one company was narrowed to another");
+    // An entry the operator gave a company and every company is listed once.
+    expect(forCompany(parsePrivateDestinations(`10.20.0.0/16,${a}=10.20.0.0/16`), a).entries).toEqual([
+      "10.20.0.0/16",
+    ]);
     expect(forCompany(allow, "1b2c3d4e-0000-4000-8000-000000000000").entries).toEqual(["10.20.0.0/16"]);
     for (const bad of [
       `acme=ollama.internal`,

@@ -188,7 +188,10 @@ export async function discoverAuthorizationServer(
 ): Promise<AuthorizationServer> {
   const key = trimTrailingSlashes(issuer);
   const now = deps.now?.() ?? Date.now();
-  const cached = servers.get(key);
+  // Kept per list of private destinations, as well as per issuer: a document read for one company, through
+  // what the operator gave it alone, is never handed to a company that may not reach that server.
+  const slot = `${key}\n${deps.egress.allow.entries.join(",")}`;
+  const cached = servers.get(slot);
   if (cached && now - cached.at < DISCOVERY_TTL_MS) return cached.doc;
   const candidates = [
     ...wellKnown(key, "oauth-authorization-server"),
@@ -231,7 +234,7 @@ export async function discoverAuthorizationServer(
       const why = doc[field] === undefined ? null : endpointRefusal(doc[field], deps.egress.allow);
       if (why) throw new OAuthError("server", `${new URL(key).host} names ${label} that ${why}`);
     }
-    servers.set(key, { at: now, doc });
+    servers.set(slot, { at: now, doc });
     return doc;
   }
   throw new OAuthError("server", `${new URL(key).host} publishes no authorization server metadata`);
