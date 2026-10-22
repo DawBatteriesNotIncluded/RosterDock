@@ -7,6 +7,7 @@ import {
   looksLikeRawSecret,
   RawSecretError,
   redactRawSecrets,
+  secretLines,
 } from "../src/index.js";
 
 describe("looksLikeRawSecret", () => {
@@ -189,5 +190,58 @@ describe("redactRawSecrets", () => {
       expect(containsRawSecret(text), text).toBe(true);
       expect(redactRawSecrets(text), text).not.toContain("eyJhbGci");
     }
+  });
+});
+
+describe("secretLines", () => {
+  // Lines that hold a key and lines that do not, from the cases above.
+  const keyed = [
+    "OPENAI_API_KEY=sk-proj-FAKE0123456789abcdefghij",
+    'const key = "sk-ant-api03-FAKE0123456789abcdef";',
+    "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+    "  token: ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+    "aws_access_key_id = AKIAIOSFODNN7EXAMPLE",
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "DB_PASSWORD=hunter2hunter2",
+    "sk-ant",
+    'api_key = "not-a-real-value-123"',
+  ];
+  const plain = [
+    "",
+    "x",
+    "const apiKey = process.env.OPENAI_API_KEY;",
+    "GITHUB_TOKEN=$GITHUB_TOKEN",
+    "Bearer tokens are sent in the Authorization header.",
+    "pip install scikit-learn; the task-runner moved",
+    "if (password === confirmPassword) {",
+  ];
+  const assigned = /(?:api[_-]?key|password)["']?\s*[:=]\s*["'][^"'\s]{8,}["']/i;
+  const alone = (line: string) =>
+    findRawSecrets({ text: line }).length > 0 || containsRawSecret(line) || assigned.test(line);
+
+  it("finds the same lines as each line scanned alone, in one pass of each pattern over the text", () => {
+    let seed = 7;
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648);
+    for (let round = 0; round < 300; round++) {
+      const lines = Array.from({ length: 1 + (next() % 12) }, () => {
+        const pool = next() % 3 === 0 ? keyed : plain;
+        return pool[next() % pool.length]!;
+      });
+      const text = lines.join(next() % 4 === 0 ? "\r\n" : "\n");
+      const expected = text.split("\n").flatMap((line, i) => (alone(line) ? [i + 1] : []));
+      expect(secretLines(text, [assigned]), JSON.stringify(text)).toEqual(expected);
+    }
+  });
+
+  it("counts a key after any character as on its line, and stops at the most it reports", () => {
+    expect(secretLines("a\nb\n\u3000ghp_0123456789abcdefghijklmnopqrstuvwxyz\n")).toEqual([3]);
+    expect(secretLines("DB_PASSWORD=hunter2hunter2\n".repeat(50), [], 10)).toHaveLength(10);
+  });
+
+  it("reads megabytes of newlines or keys in one pass each", () => {
+    const started = Date.now();
+    expect(secretLines("\n".repeat(8 * 1024 * 1024))).toEqual([]);
+    expect(secretLines("sk-ant-api03-FAKE0123456789abcdef\n".repeat(200_000))).toHaveLength(1000);
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 });

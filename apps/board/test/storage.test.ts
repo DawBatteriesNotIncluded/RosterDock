@@ -269,6 +269,7 @@ describe("artifacts over the inline limit", () => {
       kind: "diff",
       content: bigDiff(24_000),
     });
+    await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: "a".repeat(40) });
     await asRun.post(`/api/worker/runs/${run.id}/complete`, {
       status: "completed",
       summary: "Exported the accounts.",

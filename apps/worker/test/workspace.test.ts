@@ -495,6 +495,74 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
+  it("reads a run's changes back only against the commit its clone was at", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-moved-head",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    expect(ws.clonedSha).toMatch(/^[0-9a-f]{40}$/);
+    // A commit moves HEAD: its changes would ride into a pull request that no review showed.
+    const id = {
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.com",
+    };
+    await writeFile(path.join(ws.dir, "leaked.env"), 'api_key = "not-a-real-value-123"\n', "utf8");
+    await git(["add", "leaked.env"], ws.dir, id);
+    expect((await git(["commit", "-m", "hide"], ws.dir, id)).code).toBe(0);
+    await writeFile(path.join(ws.dir, "small.txt"), "small\n", "utf8");
+    const h = await harvestWorkspace(ws, []);
+    expect(h.unreadable).toBe(
+      `the run's changes could not be read back for review (the clone is no longer at ${ws.clonedSha!.slice(0, 12)}, the commit it was cloned at: a checkout or a commit moved it)`,
+    );
+    await cleanupWorkspace(ws);
+  });
+
+  it("delivers no declared output git leaves out of the diff, and fails the run naming it", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-ignored-output",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, ".gitignore"), "*.log\n", "utf8");
+    await writeFile(path.join(ws.dir, "run.log"), 'api_key = "not-a-real-value-123"\n', "utf8");
+    await writeFile(path.join(ws.dir, "notes.md"), "n\n", "utf8");
+    // README.md is the repository's own, unchanged: delivered as it is.
+    const h = await harvestWorkspace(ws, ["README.md", "notes.md", "run.log", ".git/description"]);
+    expect(h.unreadable).toBe(
+      'the run\'s changes could not be read back for review (a declared output git leaves out of the diff, which the review would not show: "run.log")',
+    );
+    expect(h.filesWritten).toEqual(["README.md", "notes.md"]);
+    expect(h.artifacts.map((a) => a.path)).toEqual(["README.md", "notes.md", "changes.diff"]);
+    // Under .git too.
+    expect((await harvestWorkspace(ws, ["notes.md", ".git/description"])).unreadable).toMatch(
+      /leaves out of the diff, which the review would not show: "\.git\/description"/,
+    );
+    await cleanupWorkspace(ws);
+  });
+
+  it("says a run's changes cannot be read back where a file git reads as text holds a NUL byte", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-late-nul",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    // git looks for a NUL byte in a file's first 8000 bytes only: past them, the file is text to it.
+    await writeFile(path.join(ws.dir, "late.txt"), `${"x".repeat(9000)}\n\0 tail\n`, "utf8");
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    const h = await harvestWorkspace(ws, []);
+    expect(h.unreadable).toBe(
+      'the run\'s changes could not be read back for review (a file git read as text holds a NUL byte: "late.txt")',
+    );
+    expect(h.artifacts.find((a) => a.kind === "diff")).toBeUndefined();
+    await cleanupWorkspace(ws);
+  });
+
   it("shows a text file as text whatever attributes the run gave the clone alone in .git/info", async () => {
     const ws = await prepareWorkspace(
       path.join(root, "work"),

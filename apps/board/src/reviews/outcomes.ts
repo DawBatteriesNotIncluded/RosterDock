@@ -197,7 +197,20 @@ export async function executePullRequest(
   } else {
     // Whatever fails from here, the store included, fails the pull request and says why.
     try {
-      const files = await approvedFiles(db, store, review, payload.round);
+      // On the commit the run's clone was at, and no other: one the run checked out, or committed, would carry
+      // into the pull request what its review never showed.
+      const cloned =
+        (
+          await db.query<{ cloned_sha: string | null }>("SELECT cloned_sha FROM runs WHERE id = $1", [
+            review.run_id,
+          ])
+        ).rows[0]?.cloned_sha ?? null;
+      const files =
+        cloned === null
+          ? "the run recorded no commit its clone was at (an older worker ran it): veto the approval and request changes, for a round this board reads"
+          : cloned !== payload.baseSha
+            ? `the run's changes stand on ${payload.baseSha.slice(0, 12)}, not on ${cloned.slice(0, 12)}, the commit it was cloned at: the pull request would carry commits its review never showed`
+            : await approvedFiles(db, store, review, payload.round);
       if (typeof files === "string") {
         error = files;
       } else {

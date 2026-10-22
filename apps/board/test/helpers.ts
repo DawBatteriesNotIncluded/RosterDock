@@ -295,6 +295,9 @@ export async function workerComplete(
   runId: string,
   body: Record<string, unknown> = { status: "completed", summary: "done" },
 ) {
+  // As the worker does right after cloning: the commit the run's changes stand on.
+  if (typeof body.baseSha === "string")
+    await board.api(token).post(`/api/worker/runs/${runId}/cloned`, { sha: body.baseSha });
   const res = await board.api(token).post(`/api/worker/runs/${runId}/complete`, { usage: {}, ...body });
   if (res.status !== 200) throw new Error(`complete failed: ${res.status} ${JSON.stringify(res.body)}`);
   return res.body;

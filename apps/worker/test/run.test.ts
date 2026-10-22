@@ -34,6 +34,8 @@ interface FakeBoard extends BoardClient {
   artifacts: RunArtifactInput[];
   completion: RunCompleteInput | null;
   checkpoints: Record<string, unknown>[];
+  /** The commits the worker said its clone was at. */
+  clonedShas: string[];
   heartbeats: number;
   stopAfterHeartbeats: number | null;
 }
@@ -84,6 +86,7 @@ function fakeBoard(
     artifacts: [],
     completion: null,
     checkpoints: [],
+    clonedShas: [],
     heartbeats: 0,
     stopAfterHeartbeats: opts.stopAfterHeartbeats ?? null,
     async claim() {
@@ -106,6 +109,9 @@ function fakeBoard(
     },
     async checkpoint(_t, _r, cp) {
       board.checkpoints.push(cp);
+    },
+    async cloned(_t, _r, sha) {
+      board.clonedShas.push(sha);
     },
     async artifact(_t, _r, a) {
       if (a.content.includes("ghp_")) throw new BoardError(422, "secret-shaped");
@@ -168,6 +174,30 @@ describe("executeRun", () => {
     expect(board.shipped.every((e) => typeof e.at === "string")).toBe(true);
     const { existsSync } = await import("node:fs");
     expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
+  });
+
+  it("fails a run whose diff the board refuses, rather than leave its review without one", async () => {
+    const leaking: EngineAdapter = {
+      id: "stub",
+      async run(ctx) {
+        const result = await stubEngine.run(ctx);
+        await writeFile(
+          path.join(ctx.workdir, "notes.md"),
+          "ghp_0123456789abcdefghijklmnopqrstuvwxyz\n",
+          "utf8",
+        );
+        return result;
+      },
+    };
+    const board = fakeBoard(PACK(), ["vms-architecture.md", "notes.md"]);
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board, { engines: { stub: leaking } }));
+    expect(board.artifacts.map((a) => a.kind)).not.toContain("diff");
+    expect(board.completion).toMatchObject({
+      status: "failed",
+      error: expect.stringMatching(
+        /^the run's changes could not be sent for review: the board refused the diff \(/,
+      ),
+    });
   });
 
   it("reports missing declared outputs in the summary", async () => {
@@ -492,6 +522,39 @@ describe("a stalled clone", () => {
     }
   });
 
+  it("never clones when the worker began stopping while its claim was out", async () => {
+    const host = await silentHost();
+    try {
+      const { port } = new URL(host.url);
+      const shutdown = new AbortController();
+      const board = fakeBoard(PACK(), [], {
+        repoUrl: `https://127.0.0.1:${port}/stalled.git`,
+        runId: "run-stall-claim",
+      });
+      const claimNow = board.claim.bind(board);
+      board.claim = async (...args) => {
+        const claimed = await claimNow(...args);
+        shutdown.abort();
+        return claimed;
+      };
+      const started = Date.now();
+      await expect(
+        executeRun(
+          { runId: "run-stall-claim", jobId: "job-1" },
+          deps(board, {
+            shutdown: shutdown.signal,
+            gitCredential: { token: "claim-race-token", hosts: [`127.0.0.1:${port}`] },
+          }),
+        ),
+      ).rejects.toBeInstanceOf(RunInterrupted);
+      expect(Date.now() - started).toBeLessThan(4000);
+      await removalsDone();
+      expect(existsSync(path.join(workRoot, "run-stall-claim"))).toBe(false);
+    } finally {
+      await host.close();
+    }
+  });
+
   it("counts against the run's time limit", async () => {
     const host = await silentHost();
     try {
@@ -595,6 +658,8 @@ describe("repository tests", () => {
     );
     expect(board.completion?.status).toBe("completed");
     expect(board.completion?.baseSha).toMatch(/^[0-9a-f]{40}$/);
+    // The board heard the commit the clone was at, and it is the one the changes stand on.
+    expect(board.clonedShas).toEqual([board.completion?.baseSha]);
     expect(board.completion?.checks).toEqual([
       { kind: "tests", ok: true, title: "npm test passed", detail: "1 passing\n" },
     ]);
@@ -604,6 +669,22 @@ describe("repository tests", () => {
     // The diff was captured before the tests ran.
     expect(board.artifacts.find((a) => a.kind === "diff")?.content).toContain("+++ b/notes.md");
     expect(board.shipped.some((e) => e.type === "check")).toBe(true);
+  });
+
+  it("tells the board the commit its clone is at before the engine runs", async () => {
+    const bare = await repoWithTests("cloned-first");
+    const board = fakeBoard(PACK(), ["notes.md"], { repoUrl: bare });
+    let heardBefore: string[] | null = null;
+    const watching: EngineAdapter = {
+      id: "stub",
+      async run(ctx) {
+        heardBefore = [...board.clonedShas];
+        return stubEngine.run(ctx);
+      },
+    };
+    await executeRun({ runId: "run-1", jobId: "job-1" }, deps(board, { engines: { stub: watching } }));
+    expect(heardBefore).toHaveLength(1);
+    expect(heardBefore![0]).toMatch(/^[0-9a-f]{40}$/);
   });
 
   it("fails a run whose changes git could not read back for review, and keeps a blocked run blocked", async () => {

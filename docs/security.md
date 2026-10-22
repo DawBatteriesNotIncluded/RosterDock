@@ -189,12 +189,12 @@ their own, each with its own database and workers.
 - The git token (`worker.gitSecret`) goes into a clone's URL only over https and only to the hosts it is for
   (`worker.gitSecret.hosts`, `ROSTERDOCK_GIT_TOKEN_HOSTS`; github.com by default), and the clone's remote is
   set back without it. A clone that fails, or that Stop, the time limit or a shutdown ends part-way, is
-  removed at once, so no `.git/config` with the token in its URL stays on disk. On Windows, where a git ended
+  removed at once, so no `.git/config` with the token in its URL stays on disk; a shutdown that comes while
+  the worker is claiming a run stops it before it clones. On Windows, where a git ended
   by taskkill can hold its files a moment longer, it goes as soon as git lets go, tried for half a minute,
   which a worker shutting down waits out; a file held past that keeps the folder until a run is prepared in it
-  again. A project
-  whose repository is on any other host is cloned with no token, so whoever sets a project's repository cannot
-  send the fleet's token somewhere else.
+  again. A project whose repository is on any other host is cloned with no token, so whoever sets a project's
+  repository cannot send the fleet's token somewhere else.
 - An artifact over 512 KB goes to the object store as bytes the board has already scanned for raw
   secrets, under a key of the company, the run and its hash; the board signs each request itself with a
   key pair it reads by name, and the worker never holds that pair.
@@ -263,16 +263,27 @@ their own, each with its own database and workers.
   store, fails and says why.
 - A file the diff calls binary has no lines to show, whatever made git call it so (an attribute, a NUL byte,
   real binary data), and the review shows none of its bytes. The secrets check scans the bytes the run sent for
-  it all the same, as text and again without NUL bytes (UTF-16), by the same rules, and records their sha256;
-  a pull request writes those bytes and no others. The scan reads text only: a compressed or encoded file's
-  content is not read, so for binary files the person who approves is the control. A binary file goes into a
-  pull request only where a person approved: a teammate's approval that would open one with a binary file in
-  it is refused, a person's records the files, and the pull request, which carries who approved it under its
-  sha256, refuses a binary file a teammate approved all the same. A repository whose `.gitattributes` marks
-  files `-diff` or `binary` (a lock file) therefore needs a person for each change to them. Where approving
-  opens no pull request (research, a project without a repository), a teammate approves as before. A pull
-  request opens only for a review still approved, so a veto before it opens stops it. A review an older board
-  opened recorded no bytes, so its pull request refuses its binary files.
+  it all the same, by the same rules, as UTF-8 and, where a NUL byte says it may be UTF-16, as UTF-16 in both
+  byte orders, and records their sha256; a pull request writes those bytes and no others. The scan runs before
+  the transaction that opens the review, a file at a time, over 64 MB of a run's binary files at most: past
+  that a file is only hashed, and the check fails so a person approves it. The scan reads text only: a
+  compressed or encoded file's content is not read, so for binary files the person who approves is the
+  control. A binary file goes into a pull request only where a person approved: a teammate's approval that
+  would open one with a binary file in it is refused, and the review goes to people, who are told (a needs-you
+  sentence; the reviewer's own brief says so first); a person's approval records the files, and the pull
+  request, which carries who approved it under its sha256, refuses a binary file a teammate approved all the
+  same. A repository whose `.gitattributes` marks files `-diff` or `binary` (a lock file) therefore needs a
+  person for each change to them. Where approving opens no pull request (research, a project without a
+  repository), a teammate approves as before. A pull request starts opening only for a review still approved,
+  so a veto before then stops it; one that lands while the host is opening it leaves the change open there,
+  for the person who vetoed to close. A review an older board opened recorded no bytes, so its pull request
+  refuses its binary files.
+- A pull request is built on the commit the run's clone was at, and on no other. The worker reports that
+  commit to the board right after cloning, before the engine (which holds the same run token) starts, and the
+  board keeps the first report of each attempt. A run whose changes stand on another commit (it checked out
+  another ref, or committed) fails at the read-back, and a pull request on any other base is refused, so it
+  never carries commits its review did not show. A run an older worker did reported none, and its pull
+  request is refused.
 - A run delivers files, never links. The worker reads a declared output, a changed file, the handover and
   `blocked.md` only as a regular file inside the run's directory, reached without a symbolic link. A link
   (`report.md -> /proc/self/environ`, a linked directory on the way) or a path out of the directory is never
@@ -285,8 +296,12 @@ their own, each with its own database and workers.
   not UTF-8, which the review could not tell from another), a run that would complete fails rather than send
   part of them for review; one that is blocked or failed says so as it would. It fails as well on two names
   that differ only by spaces or a U+FEFF at an end, which a reviewer could not tell apart, and, without a
-  repository, on a file named `.git`, which no diff can show and which is not delivered. An artifact keeps
-  its name as the run gave it, never trimmed into another's.
+  repository, on a file named `.git`, which no diff can show and which is not delivered. In a repository, a
+  declared output git leaves out of the diff (one `.gitignore` matches, or under `.git`) is not delivered and
+  fails the run the same way; one the repository holds unchanged is its own, and is delivered. So does a file
+  git reads as text with a NUL byte in it (it looks in the first 8000 bytes only), and a diff the board
+  refuses: no review opens without its diff. An artifact keeps its name as the run gave it, never trimmed into
+  another's.
 - A run sent back with changes requested starts from that round only as its diff, checked against the
   sha256 the review recorded and applied with `git apply`, which writes nothing outside the clone, into
   `.git` or through a link. A round that would leave a link in the clone is undone, and the run starts

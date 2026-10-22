@@ -41,6 +41,7 @@ import {
   listFiles,
   openReviewRound,
   reviewForTask,
+  scanRunBinaries,
   type OpenedReview,
 } from "../reviews/service.js";
 import {
@@ -98,6 +99,8 @@ export interface RunRow {
   trigger_message_id: string | null;
   /** HEAD of the clone the diff was taken against. */
   base_sha: string | null;
+  /** The commit its clone was at, reported before the engine ran (saveClonedSha). */
+  cloned_sha: string | null;
   /** The worker pod's last sample: {cpuMillis, memoryBytes} (M6). */
   resources: { cpuMillis: number; memoryBytes: number } | null;
   /** The pg-boss queue the job is on: runs, or runs.<pool> for a department with a worker pool (M6). */
@@ -715,6 +718,10 @@ export async function buildRunSpec(
         resolved: c.resolved,
       })),
       checks: checks.map((c) => ({ kind: c.kind, ok: c.ok, title: c.title })),
+      binaryFiles: (
+        (checks.find((c) => c.kind === "secrets")?.detail as { binaries?: { path: string }[] } | undefined)
+          ?.binaries ?? []
+      ).map((b) => b.path),
       sources:
         (checks.find((c) => c.kind === "sources")?.detail as { sources?: FetchedSource[] } | undefined)
           ?.sources ?? [],
@@ -900,7 +907,7 @@ export async function claimRun(
       const hash = runSpecHash(spec);
       const updated = await ctx.client.query<RunRow>(
         `UPDATE runs SET status = 'running', attempt = $2, job_id = COALESCE(job_id, $3), worker_id = $4, started_at = COALESCE(started_at, now()),
-         heartbeat_at = now(), run_spec_hash = $5, current_step = 'claimed', updated_at = now()
+         heartbeat_at = now(), run_spec_hash = $5, current_step = 'claimed', cloned_sha = NULL, updated_at = now()
        WHERE id = $1 RETURNING *`,
         [run.id, attempt, input.jobId, input.workerId, hash],
       );
@@ -1028,6 +1035,21 @@ export async function saveCheckpoint(
     [runId, JSON.stringify(checkpoint)],
   );
   if (!res.rowCount) throw new HttpError(409, "run is not running");
+}
+
+/**
+ * The commit the run's clone is at, as the worker reports it right after cloning, before the engine runs (which
+ * holds the same token): kept once per attempt, the same again is no change, another is refused.
+ */
+export async function saveClonedSha(db: Db, runId: string, sha: string): Promise<void> {
+  const res = await db.query<{ cloned_sha: string | null }>(
+    `UPDATE runs SET cloned_sha = COALESCE(cloned_sha, $2), updated_at = now() WHERE id = $1 AND status = 'running'
+     RETURNING cloned_sha`,
+    [runId, sha],
+  );
+  if (!res.rowCount) throw new HttpError(409, "run is not running");
+  if (res.rows[0]!.cloned_sha !== sha)
+    throw new HttpError(409, "the run's clone is recorded at another commit");
 }
 
 export interface ArtifactRow {
@@ -1222,6 +1244,11 @@ export async function completeRun(
 ): Promise<RunRow> {
   const first = await loadRun(db, runId);
   const actor = actorOverride ?? { kind: "teammate" as const, id: first.teammate_id };
+  // A completed task run's binary files are scanned for its review before the transaction, which stays short.
+  const scanned =
+    first.kind === "task" && input.status === "completed"
+      ? await scanRunBinaries(db, store, runId)
+      : undefined;
   let opened: OpenedReview | null = null;
   const { result } = await mutate(db, first.company_id, actor, async (ctx) => {
     const run = await loadRun(ctx.client, runId, true);
@@ -1421,7 +1448,15 @@ export async function completeRun(
     }
     // The diff is in: open (or advance) the task's review in the same transaction.
     if (run.kind === "task" && status === "completed" && !waitingOnApproval && !cancelled) {
-      opened = await openReviewRound(ctx, { ...row, base_sha: row.base_sha }, task, input, store, sources);
+      opened = await openReviewRound(
+        ctx,
+        { ...row, base_sha: row.base_sha },
+        task,
+        input,
+        store,
+        sources,
+        scanned,
+      );
     }
     return row;
   });

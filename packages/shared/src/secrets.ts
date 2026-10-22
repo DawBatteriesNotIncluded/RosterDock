@@ -33,6 +33,38 @@ const TEXT_SECRET_RES: RegExp[] = [
   /(?:^|\s)[A-Za-z0-9_]*(?:api[_-]?key|secret(?:[_-]?key)?|private[_-]?key|password|passwd|token)=[A-Za-z0-9._~+/:@%^*!#-]{8,}/i,
 ];
 
+// Both sets again, global and multiline, for secretLines: `^` and `$` at each line's ends, as on a line alone.
+const LINE_SECRET_RES = [...RAW_SECRET_RES, ...TEXT_SECRET_RES].map(lineWise);
+
+function lineWise(re: RegExp): RegExp {
+  return new RegExp(re.source, `${re.flags.replace(/[gm]/g, "")}gm`);
+}
+
+/**
+ * The lines (1-based, ascending) of a text that hold a secret-shaped string: each line findRawSecrets or
+ * containsRawSecret would flag alone, or that one of `also` matches. Each pattern runs over the whole text once
+ * and lines are counted from where it matched, so a long text costs its length times the patterns, never a
+ * scan per line. A match that runs on past its line's end counts at its first line. At most `max` lines.
+ */
+export function secretLines(text: string, also: RegExp[] = [], max = 1000): number[] {
+  const found = new Set<number>();
+  for (const re of [...LINE_SECRET_RES, ...also.map(lineWise)]) {
+    let line = 1;
+    let counted = 0;
+    for (const m of text.matchAll(re)) {
+      // Where the match starts with the line break before it (`(?:^|\s)`), at the line after.
+      const at = m.index + /^[\r\n]*/.exec(m[0])![0].length;
+      for (let nl = text.indexOf("\n", counted); nl !== -1 && nl < at; nl = text.indexOf("\n", nl + 1))
+        line++;
+      counted = at;
+      found.add(line);
+      if (found.size >= max) break;
+    }
+    if (found.size >= max) break;
+  }
+  return [...found].sort((a, b) => a - b);
+}
+
 export function isEnvVarName(value: string): boolean {
   return ENV_VAR_NAME_RE.test(value);
 }

@@ -8,6 +8,7 @@ import {
   addedText,
   containsRawSecret,
   findRawSecrets,
+  secretLines,
   sha256Hex,
   type Criterion,
   type DiffFile,
@@ -54,23 +55,32 @@ export interface ScannedBinary {
   sha256: string | null;
   lines: number[];
   chars: number;
+  /** False where its bytes were not read for secrets: past what the board scans in one run. */
+  scanned: boolean;
 }
 
 /**
- * Scan the bytes a pull request would write for a file the diff calls binary, as lines of text: a file git calls
- * binary (an attribute, a NUL byte) may be text all the same. Again without its NUL bytes, so UTF-16 text reads
- * too. Kept to the result, so a round's files are read one at a time.
+ * Scan the bytes a pull request would write for a file the diff calls binary, as text: a file git calls binary
+ * (an attribute, a NUL byte) may be text all the same. As UTF-8, and where a NUL byte says it may be UTF-16, as
+ * UTF-16 in both byte orders too. Each pattern runs over each reading once (secretLines). `scan` false: only
+ * the sha256, where the run's binary files are past what the board scans.
  */
-export function scanBinary(path: string, bytes: Buffer | null): ScannedBinary {
-  if (!bytes) return { path, sha256: null, lines: [], chars: 0 };
+export function scanBinary(path: string, bytes: Buffer | null, scan = true): ScannedBinary {
+  if (!bytes) return { path, sha256: null, lines: [], chars: 0, scanned: true };
+  const sha256 = sha256Hex(bytes);
+  if (!scan) return { path, sha256, lines: [], chars: 0, scanned: false };
+  const readings = [bytes.toString("utf8")];
+  if (bytes.includes(0)) {
+    const even = bytes.subarray(0, bytes.length - (bytes.length % 2));
+    readings.push(even.toString("utf16le"), Buffer.from(even).swap16().toString("utf16le"));
+  }
   const lines = new Set<number>();
   let chars = 0;
-  for (const view of bytes.includes(0) ? [bytes, bytes.filter((b) => b !== 0)] : [bytes]) {
-    const text = Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString("utf8");
+  for (const text of readings) {
     chars += text.length;
-    for (const [i, line] of text.split("\n").entries()) if (secretShaped(line)) lines.add(i + 1);
+    for (const line of secretLines(text, [ASSIGNED_SECRET_RE])) lines.add(line);
   }
-  return { path, sha256: sha256Hex(bytes), lines: [...lines], chars };
+  return { path, sha256, lines: [...lines].sort((a, b) => a - b), chars, scanned: true };
 }
 
 /**
@@ -101,13 +111,17 @@ export function secretsCheck(
   }
   let scanned = addedText(files).length;
   const bound: BinaryDetail = { binaries: [], unshown: [] };
+  const unscanned: string[] = [];
   for (const b of binaries) {
     bound.unshown.push(b.path);
     if (b.sha256) bound.binaries.push({ path: b.path, sha256: b.sha256 });
+    if (!b.scanned) unscanned.push(b.path);
     scanned += b.chars;
     for (const line of b.lines) lines.push({ path: b.path, line });
   }
   const detail = binaries.length ? { scannedChars: scanned, ...bound } : { scannedChars: scanned };
+  const listed = (paths: string[]) =>
+    paths.slice(0, 5).join(", ") + (paths.length > 5 ? ` and ${paths.length - 5} more` : "");
   if (lines.length) {
     return {
       kind: "secrets",
@@ -116,17 +130,29 @@ export function secretsCheck(
       detail: { ...detail, lines: lines.slice(0, 20) },
     };
   }
+  if (unscanned.length) {
+    const n = unscanned.length;
+    return {
+      kind: "secrets",
+      ok: false,
+      title: `${n} binary ${n === 1 ? "file was" : "files were"} not scanned, past the ${BINARY_SCAN_BYTES / 1024 / 1024} MB the board scans in a run: a person approves ${n === 1 ? "it" : "them"}: ${listed(unscanned)}`,
+      detail: { ...detail, unscanned },
+    };
+  }
+  // A binary file passes with what the scan could read of it as text, which is not all a file can hold.
   const n = bound.unshown.length;
-  const named = bound.unshown.slice(0, 5).join(", ") + (n > 5 ? ` and ${n - 5} more` : "");
   return {
     kind: "secrets",
     ok: true,
     title: n
-      ? `No credential values in the diff; the review cannot show ${n} binary ${n === 1 ? "file" : "files"}, which a pull request takes only with a person's approval: ${named}`
+      ? `No credential values in the diff's text; the review cannot show ${n} binary ${n === 1 ? "file" : "files"}, read only as text, which a pull request takes only with a person's approval: ${listed(bound.unshown)}`
       : "No credential values in the diff",
     detail,
   };
 }
+
+/** The bytes of binary files the board scans in one run's review, all told; past it, a person approves. */
+export const BINARY_SCAN_BYTES = 64 * 1024 * 1024;
 
 /** Every declared output is in the diff or among the run's artifacts. */
 export function outputsCheck(declared: string[], artifactPaths: string[], files: DiffFile[]): CheckResult {

@@ -10,6 +10,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { renderBinaryFileDiff, renderNewFileDiff } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { GitHosts } from "../src/git/hosts.js";
+import { needsYouText } from "../src/notify/notify.js";
 import { executePullRequest } from "../src/reviews/outcomes.js";
 import { approveReview, vetoReview } from "../src/reviews/service.js";
 import { fakeGitHub } from "./github-fake.js";
@@ -121,6 +122,8 @@ async function completeTaskRun(
     kind: "diff",
     content: diff,
   });
+  // As the worker does right after cloning: the commit the run's changes stand on.
+  if (opts.baseSha) await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: opts.baseSha });
   const done = await asRun.post(`/api/worker/runs/${run.id}/complete`, {
     status: "completed",
     summary: "Mapped the workflow.",
@@ -841,6 +844,80 @@ describe("reviews", () => {
     expect(JSON.stringify(github.requests)).toContain("workflows/vms-digest.json");
   });
 
+  it("opens a pull request only on the commit the run's clone was at, which the worker reports once per attempt", async () => {
+    const { api, base } = await seedCompany(board, "rv-cloned@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const project = (
+      await api.post(`${base}/projects`, {
+        name: "gtm-automations",
+        client: "Globex",
+        repoUrl: "https://github.com/acme/gtm-automations.git",
+        defaultBranch: "main",
+      })
+    ).body;
+    const textOnly = TEXT_DIFF;
+    const OTHER = "b".repeat(40);
+    const open = async (title: string, cloned: string | null, baseSha: string) => {
+      const task = (
+        await api.post(`${base}/tasks`, {
+          projectId: project.id,
+          title,
+          assignee: { kind: "teammate", id: cody.id },
+        })
+      ).body;
+      const run = (await api.post(`${base}/tasks/${task.id}/runs`, {})).body;
+      const asRun = board.api((await claim(run.id)).token);
+      if (cloned) {
+        expect((await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: cloned })).status).toBe(200);
+        // The same again is no change; another is refused: the engine holds this token too.
+        expect((await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: cloned })).status).toBe(200);
+        expect((await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: OTHER })).status).toBe(409);
+      }
+      await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
+        path: "changes.diff",
+        kind: "diff",
+        content: textOnly,
+      });
+      await asRun.post(`/api/worker/runs/${run.id}/complete`, {
+        status: "completed",
+        summary: "Done.",
+        baseSha,
+      });
+      return (await api.get(`${base}/tasks/${task.id}/review`)).body;
+    };
+    const approve = async (id: string) =>
+      (await api.post(`${base}/reviews/${id}/approve`, { summary: "Ship it." })).body.pullRequests[0];
+    github.requests.length = 0;
+    // Changes that stand on another commit than the clone's (a checkout, a commit in the run) open nothing.
+    const moved = await open("Moved", BASE_SHA, OTHER);
+    expect(await approve(moved.id)).toMatchObject({
+      status: "failed",
+      error: `the run's changes stand on ${OTHER.slice(0, 12)}, not on ${BASE_SHA.slice(0, 12)}, the commit it was cloned at: the pull request would carry commits its review never showed`,
+    });
+    // Nor does a run that reported no clone (an older worker).
+    const unreported = await open("Unreported", null, BASE_SHA);
+    expect(await approve(unreported.id)).toMatchObject({
+      status: "failed",
+      error:
+        "the run recorded no commit its clone was at (an older worker ran it): veto the approval and request changes, for a round this board reads",
+    });
+    expect(github.requests).toEqual([]);
+    // A new attempt clones afresh, and reports its own.
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Retried",
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    const run = (await api.post(`${base}/tasks/${task.id}/runs`, {})).body;
+    const first = board.api((await claim(run.id)).token);
+    await first.post(`/api/worker/runs/${run.id}/cloned`, { sha: OTHER });
+    await board.db.query("UPDATE runs SET status = 'interrupted' WHERE id = $1", [run.id]);
+    const second = board.api((await claim(run.id)).token);
+    expect((await second.post(`/api/worker/runs/${run.id}/cloned`, { sha: BASE_SHA })).status).toBe(200);
+  });
+
   it("sends the author back on a repository with the round's diff to start from, and says on the task when it did not carry over", async () => {
     const { api, base } = await seedCompany(board, "rv-rework@example.com");
     const wren = await addTeammate(api, base, "Wren");
@@ -1100,6 +1177,7 @@ describe("reviews", () => {
         kind: "diff",
         content: [...files.map((f) => f.path), ...without].map(stanza).join(""),
       });
+      await asRun.post(`/api/worker/runs/${run.id}/cloned`, { sha: BASE_SHA });
       await asRun.post(`/api/worker/runs/${run.id}/complete`, {
         status: "completed",
         summary: "Done.",
@@ -1141,7 +1219,7 @@ describe("reviews", () => {
     expect(clean.secrets).toMatchObject({
       ok: true,
       title:
-        "No credential values in the diff; the review cannot show 1 binary file, which a pull request takes only with a person's approval: yarn.lock",
+        "No credential values in the diff's text; the review cannot show 1 binary file, read only as text, which a pull request takes only with a person's approval: yarn.lock",
     });
     github.requests.length = 0;
     expect(await approve(clean.review.id)).toMatchObject({ status: "opened" });
@@ -1172,15 +1250,34 @@ describe("reviews", () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]);
     const logo = await open("Logo", [{ path: "logo.png", bytes: png }]);
     expect(logo.secrets).toMatchObject({ ok: true, detail: { unshown: ["logo.png"] } });
-    const reviewerToken = async (taskId: string) => {
+    const reviewerClaim = async (taskId: string) => {
       const runs = (await api.get(`${base}/tasks/${taskId}/runs`)).body as { id: string; kind: string }[];
-      return (await claim(runs.find((r) => r.kind === "review")!.id)).token;
+      return claim(runs.find((r) => r.kind === "review")!.id);
     };
-    const asVerifier = board.api(await reviewerToken(logo.task.id));
+    const reviewerToken = async (taskId: string) => (await reviewerClaim(taskId)).token;
+    // The reviewer is told before it decides, and its approval hands the review to people, who are asked.
+    const logoClaim = await reviewerClaim(logo.task.id);
+    expect(logoClaim.pack).toContain(
+      "The diff has binary files the review cannot show: logo.png. Where approving opens a pull request, only a person approves them",
+    );
+    const asVerifier = board.api(logoClaim.token);
     const refused = await asVerifier.post(`${base}/reviews/${logo.review.id}/approve`, {});
     expect(refused.status).toBe(409);
     expect(refused.body.error).toBe(
-      `#${logo.task.number} would put binary files the review cannot show into a pull request (logo.png): leave the decision to a person`,
+      `#${logo.task.number} would put binary files the review cannot show into a pull request (logo.png): a person decides it now, and has been asked`,
+    );
+    const handed = (await api.get(`${base}/reviews/${logo.review.id}`)).body;
+    expect(handed).toMatchObject({ status: "open", reviewer: null });
+    const asked = (await api.get(`${base}/events?limit=200`)).body.find(
+      (e: any) => e.type === "review.needs_person" && e.subject.id === logo.review.id,
+    );
+    expect(asked.payload).toMatchObject({
+      number: logo.task.number,
+      files: ["logo.png"],
+      teammateName: "Verifier",
+    });
+    expect(needsYouText(asked, "GTM Studio")).toBe(
+      `#${logo.task.number} Logo carries binary files a review cannot show (logo.png): its pull request needs a person's approval in Reviews.`,
     );
     github.requests.length = 0;
     expect(await approve(logo.review.id)).toMatchObject({ status: "opened" });
@@ -1329,6 +1426,7 @@ describe("reviews", () => {
       kind: "diff",
       content: DIFF,
     });
+    await withBytes.asRun.post(`/api/worker/runs/${withBytes.run.id}/cloned`, { sha: BASE_SHA });
     await withBytes.asRun.post(`/api/worker/runs/${withBytes.run.id}/complete`, {
       status: "completed",
       summary: "Done.",
@@ -1350,6 +1448,7 @@ describe("reviews", () => {
       kind: "diff",
       content: DIFF,
     });
+    await without.asRun.post(`/api/worker/runs/${without.run.id}/cloned`, { sha: BASE_SHA });
     await without.asRun.post(`/api/worker/runs/${without.run.id}/complete`, {
       status: "completed",
       summary: "Done.",

@@ -33,6 +33,7 @@ import { extractSourceUrls, type SourceFetcher } from "./sources.js";
 import type { ObjectStore } from "../storage/s3.js";
 import { STATUS_LABEL, type TaskRow } from "../tasks/service.js";
 import {
+  BINARY_SCAN_BYTES,
   BLOCKING_CHECKS,
   evaluationCheck,
   outputsCheck,
@@ -448,6 +449,50 @@ export interface OpenedReview {
  * artifact; without one the review opens with no files, which the reviewer
  * can send back.
  */
+/**
+ * Scan a completed run's binary files for its review, before the transaction that opens it: the bytes a pull
+ * request would write for each file its diff calls binary, a file at a time, the board's other work let in
+ * between, and no more than BINARY_SCAN_BYTES of them (past it, only their sha256). Empty where the diff cannot
+ * be read; the review then shows none of it.
+ */
+export async function scanRunBinaries(
+  db: Queryable,
+  store: ObjectStore | null,
+  runId: string,
+  /** How many of their bytes are scanned; a test's is smaller. */
+  budget = BINARY_SCAN_BYTES,
+): Promise<Map<string, ScannedBinary>> {
+  const scanned = new Map<string, ScannedBinary>();
+  const diff = (
+    await db.query<{ content: string | null; object_key: string | null }>(
+      "SELECT content, object_key FROM artifacts WHERE run_id = $1 AND kind = 'diff'",
+      [runId],
+    )
+  ).rows[0];
+  const text = diff ? await artifactText(store, diff) : null;
+  let files: DiffFile[] = [];
+  try {
+    files = text ? parseUnifiedDiff(text) : [];
+  } catch (err) {
+    if (!(err instanceof DiffError)) throw err;
+  }
+  for (const f of files) {
+    if (!f.binary || f.status === "deleted" || scanned.has(f.path)) continue;
+    const row = (
+      await db.query<{ content: string | null; object_key: string | null; encoding: string | null }>(
+        "SELECT content, object_key, encoding FROM artifacts WHERE run_id = $1 AND path = $2",
+        [runId, f.path],
+      )
+    ).rows[0];
+    const bytes = row ? await artifactBytes(store, row) : null;
+    const scan = bytes === null || bytes.length <= budget;
+    if (bytes && scan) budget -= bytes.length;
+    scanned.set(f.path, scanBinary(f.path, bytes, scan));
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return scanned;
+}
+
 export async function openReviewRound(
   ctx: MutationContext,
   run: { id: string; task_id: string; teammate_id: string; base_sha: string | null },
@@ -458,6 +503,8 @@ export async function openReviewRound(
   store: ObjectStore | null = null,
   /** Fetches the sources a research document cites; null when the board does not reach the web. */
   sources: SourceFetcher | null = null,
+  /** The run's binary files, scanned before the transaction (scanRunBinaries), by path. */
+  scanned: Map<string, ScannedBinary> = new Map(),
 ): Promise<OpenedReview> {
   const rows = await ctx.client.query<{
     path: string;
@@ -545,19 +592,11 @@ export async function openReviewRound(
       ],
     );
   }
-  // A binary file's bytes, as a pull request would write them: the review cannot show them, so the secrets check
-  // scans them and binds their sha256. One file at a time.
-  const binaries: ScannedBinary[] = [];
-  for (const f of files) {
-    if (!f.binary || f.status === "deleted") continue;
-    const row = (
-      await ctx.client.query<{ content: string | null; object_key: string | null; encoding: string | null }>(
-        "SELECT content, object_key, encoding FROM artifacts WHERE run_id = $1 AND path = $2",
-        [run.id, f.path],
-      )
-    ).rows[0];
-    binaries.push(scanBinary(f.path, row ? await artifactBytes(store, row) : null));
-  }
+  // A binary file's bytes, as a pull request would write them, scanned before this transaction
+  // (scanRunBinaries): one it did not reach is not scanned, and has no sha256 a pull request could hold.
+  const binaries = files
+    .filter((f) => f.binary && f.status !== "deleted")
+    .map((f) => scanned.get(f.path) ?? { path: f.path, sha256: null, lines: [], chars: 0, scanned: false });
   const checks: CheckResult[] = [
     secretsCheck(files, unread, binaries),
     outputsCheck(
@@ -988,12 +1027,33 @@ export async function approveReview(
       (checks.find((c) => c.kind === "secrets")?.detail ?? {}) as Partial<BinaryDetail>
     ).binaries?.map((b) => b.path);
     const binaries = target && withBytes?.length ? withBytes : [];
-    if (binaries.length && actor.kind === "teammate")
-      throw new HttpError(
-        409,
-        `#${task.number} would put binary files the review cannot show into a pull request (${binaries.slice(0, 5).join(", ")}${binaries.length > 5 ? ` and ${binaries.length - 5} more` : ""}): leave the decision to a person`,
-      );
     const who = await describeActor(ctx.client, companyId, actor);
+    if (binaries.length && actor.kind === "teammate") {
+      // The teammate's approval is refused, and the review goes to people, who are told: no teammate reviews it
+      // from here, so it reads "Needs your review" until a person decides.
+      const named = `${binaries.slice(0, 5).join(", ")}${binaries.length > 5 ? ` and ${binaries.length - 5} more` : ""}`;
+      await ctx.client.query(
+        "UPDATE reviews SET reviewer_kind = NULL, reviewer_id = NULL, updated_at = now() WHERE id = $1",
+        [review.id],
+      );
+      await ctx.emit(
+        "review.needs_person",
+        { kind: "review", id: review.id },
+        {
+          taskId: review.task_id,
+          number: task.number,
+          title: task.title,
+          round: review.round,
+          files: binaries,
+          teammateName: who?.name ?? null,
+        },
+      );
+      return {
+        id: review.id,
+        pullRequestId: null,
+        refused: `#${task.number} would put binary files the review cannot show into a pull request (${named}): a person decides it now, and has been asked`,
+      };
+    }
     const updated = (
       await ctx.client.query<ReviewRow>(
         `UPDATE reviews SET status = 'approved', summary = $2, decided_at = now(), decided_by_kind = $3, decided_by_id = $4, updated_at = now()
@@ -1047,8 +1107,10 @@ export async function approveReview(
       input.summary ?? null,
       target,
     );
-    return { id: updated.id, pullRequestId };
+    return { id: updated.id, pullRequestId, refused: null };
   });
+  // Refused after the hand-over to people committed.
+  if (result.refused) throw new HttpError(409, result.refused);
   return { review: await loadReview(db, companyId, result.id), pullRequestId: result.pullRequestId };
 }
 

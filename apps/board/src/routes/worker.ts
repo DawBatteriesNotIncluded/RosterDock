@@ -6,6 +6,7 @@ import { timingSafeEqual } from "node:crypto";
 import {
   RunArtifactSchema,
   RunCheckpointSchema,
+  RunClonedSchema,
   RunCompleteSchema,
   RunEventsBatchSchema,
   RunHeartbeatSchema,
@@ -29,6 +30,7 @@ import {
   loadRun,
   runToJson,
   saveCheckpoint,
+  saveClonedSha,
 } from "../runs/service.js";
 import { renderRunPack } from "../runs/pack.js";
 import { parseBody, uuidParam } from "../validate.js";
@@ -100,6 +102,14 @@ export function registerWorkerRoutes(
     const runId = requireRunToken(req);
     const body = parseBody(RunCheckpointSchema, req.body);
     await saveCheckpoint(db, runId, body.checkpoint);
+    return { ok: true };
+  });
+
+  // The commit the clone is at, before the engine runs: a pull request is built on it and on no other.
+  app.post("/api/worker/runs/:runId/cloned", { config: {} }, async (req) => {
+    const runId = requireRunToken(req);
+    const body = parseBody(RunClonedSchema, req.body);
+    await saveClonedSha(db, runId, body.sha);
     return { ok: true };
   });
 

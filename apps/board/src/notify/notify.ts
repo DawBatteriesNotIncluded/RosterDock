@@ -31,6 +31,7 @@ import { sendMail, type SmtpOptions } from "./smtp.js";
 export const NEEDS_YOU_EVENTS: readonly EventType[] = [
   "approval.proposed",
   "approval.failed",
+  "review.needs_person",
   "goal.questions",
   "goal.escalated",
   "pr.opened",
@@ -121,6 +122,10 @@ export function needsYouText(ev: EventRecord, companyName: string): string | nul
       return `Budget alert: ${p.scopeKind} ${p.scopeName ?? ""} is at ${p.percent}% of its tokens.`;
     case "teammate.drift":
       return driftSentence(p);
+    case "review.needs_person": {
+      const files = (p.files as string[] | undefined) ?? [];
+      return `${n} ${p.title ?? ""} carries binary files a review cannot show (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}): its pull request needs a person's approval in Reviews.`;
+    }
     case "review.reassigned": {
       const r = p.reviewer as { kind: string; name: string | null } | null;
       return r?.kind === "user" ? `${n} ${p.title ?? ""} is ${r.name ?? "someone"}'s to review.` : null;

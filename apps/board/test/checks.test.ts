@@ -12,6 +12,7 @@ import {
   testsCheck,
   weightedScore,
 } from "../src/reviews/checks.js";
+import { scanRunBinaries } from "../src/reviews/service.js";
 import { extractSourceUrls, refuseSourceUrl, sourceFetcher, summarisePage } from "../src/reviews/sources.js";
 
 describe("sourcesCheck", () => {
@@ -272,11 +273,25 @@ describe("secretsCheck", () => {
         lines: [{ path: "config.json", line: 2 }],
       },
     });
-    // With a NUL byte in it, and as UTF-16, where every other byte is one: scanned all the same.
+    // With a NUL byte in it, and as UTF-16 in either byte order: scanned all the same, whatever character
+    // stands before the key (an ideographic space is 0x00 0x30 in UTF-16: read as bytes, a "0" would join it).
     const nul = Buffer.concat([Buffer.from([0]), Buffer.from('\napi_key = "not-a-real-value-123"\n')]);
     expect(scanBinary("data.bin", nul).lines).toEqual([2]);
     const utf16 = Buffer.from('\ufeffname: x\npassword = "not-a-real-value-123"\n', "utf16le");
     expect(scanBinary("notes.txt", utf16).lines).toEqual([2]);
+    for (const before of ["\u3000", "\u4100", "\u6100"]) {
+      const text = `\ufeffdeploy key:${before}ghp_0123456789abcdefghijklmnopqrstuvwxyz\n`;
+      const le = Buffer.from(text, "utf16le");
+      expect(scanBinary("key.txt", le).lines, `LE ${before}`).toEqual([1]);
+      expect(scanBinary("key.txt", Buffer.from(le).swap16()).lines, `BE ${before}`).toEqual([1]);
+    }
+    // Bytes past what the board scans in a run are only hashed, and the check leaves them to a person.
+    expect(secretsCheck(binary("big.bin"), undefined, [scanBinary("big.bin", text, false)])).toMatchObject({
+      ok: false,
+      title:
+        "1 binary file was not scanned, past the 64 MB the board scans in a run: a person approves it: big.bin",
+      detail: { binaries: [{ path: "big.bin", sha256: sha(text) }], unscanned: ["big.bin"] },
+    });
     // Clean bytes pass, named as files the review cannot show; one the run sent no bytes for is named too.
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]);
     expect(
@@ -287,9 +302,39 @@ describe("secretsCheck", () => {
     ).toMatchObject({
       ok: true,
       title:
-        "No credential values in the diff; the review cannot show 2 binary files, which a pull request takes only with a person's approval: logo.png, gone.bin",
+        "No credential values in the diff's text; the review cannot show 2 binary files, read only as text, which a pull request takes only with a person's approval: logo.png, gone.bin",
       detail: { binaries: [{ path: "logo.png", sha256: sha(png) }], unshown: ["logo.png", "gone.bin"] },
     });
+  });
+});
+
+describe("scanning a run's binary files", () => {
+  it("scans each before the review opens, up to the bytes the board scans in a run, then only hashes", async () => {
+    const stanza = (p: string) =>
+      `diff --git a/${p} b/${p}\nnew file mode 100644\nBinary files /dev/null and b/${p} differ\n`;
+    const bytes: Record<string, Buffer> = {
+      "a.bin": Buffer.from([0, ...Buffer.from('\napi_key = "not-a-real-value-123"\n')]),
+      "b.bin": Buffer.from([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+      ]),
+      "c.bin": Buffer.from([0, 1]),
+    };
+    const db = {
+      async query(sql: string, params: unknown[]) {
+        if (sql.includes("kind = 'diff'"))
+          return { rows: [{ content: Object.keys(bytes).map(stanza).join(""), object_key: null }] };
+        const b = bytes[params[1] as string];
+        return { rows: b ? [{ content: b.toString("base64"), object_key: null, encoding: "base64" }] : [] };
+      },
+    };
+    // 40 bytes: a.bin (34) is scanned, b.bin (24) would pass it and is only hashed, c.bin (2) still fits.
+    const scanned = await scanRunBinaries(db as never, null, "run-1", 40);
+    expect([...scanned.values()].map((b) => [b.path, b.scanned, b.lines])).toEqual([
+      ["a.bin", true, [2]],
+      ["b.bin", false, []],
+      ["c.bin", true, []],
+    ]);
+    expect(scanned.get("b.bin")!.sha256).toBe(createHash("sha256").update(bytes["b.bin"]!).digest("hex"));
   });
 });
 
