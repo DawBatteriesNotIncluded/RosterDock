@@ -191,7 +191,10 @@ describe("runRepoTests", () => {
       timeoutMs: 10_000,
     });
     expect(res.code, res.output).toBe(0);
-    expect(JSON.parse(res.output)).toEqual({ PATHEXT: null, PSModulePath: null, GIVEN: "yes" });
+    const seen = JSON.parse(res.output) as Record<string, string | null>;
+    expect(seen).toMatchObject({ PSModulePath: null, GIVEN: "yes" });
+    // cmd.exe sets its own PATHEXT where it is given none; PowerShell's .CPL is not in it.
+    expect(seen.PATHEXT ?? "").not.toMatch(/\.CPL/i);
   });
 
   it("ends a command past its time limit, with what a Windows shim started under it", async () => {
