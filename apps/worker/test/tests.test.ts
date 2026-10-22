@@ -235,7 +235,7 @@ describe("runRepoTests", () => {
   }
 
   // On Windows the command starts once PowerShell has made its job; elsewhere at once.
-  const STARTS_WITHIN_MS = process.platform === "win32" ? 8000 : 500;
+  const STARTS_WITHIN_MS = process.platform === "win32" ? 5000 : 500;
 
   it("ends a command past its time limit, and every process it started, though one holds its output open", async () => {
     const h = await holder("held-open");

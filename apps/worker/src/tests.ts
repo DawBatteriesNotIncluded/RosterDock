@@ -73,10 +73,10 @@ export const execCommand: Exec = (command, args, opts) =>
   new Promise((resolve) => {
     if (opts.signal?.aborted) return resolve({ code: null, output: "", timedOut: false });
     const win = process.platform === "win32";
-    const job = win ? inJob(command, args) : null;
     const env = { ...opts.env, CI: "1" };
+    const job = win ? inJob(command, args, env) : null;
     const child = job
-      ? spawn(job.file, job.args, { cwd: opts.cwd, env, windowsHide: true })
+      ? spawn(job.file, job.args, { cwd: opts.cwd, env: job.env, windowsHide: true })
       : spawn(command, args, {
           cwd: opts.cwd,
           env,
