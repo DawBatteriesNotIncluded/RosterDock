@@ -276,8 +276,8 @@ their own, each with its own database and workers.
   modes do nothing there: the MCP config that carries the run token is private because the temp directory
   is, as a user's profile is. What does not carry over is the pod: the engine, its shell and the
   repository's tests run as your Windows user, with your files, your credentials and your other programs
-  within reach, and nothing the engine leaves running ends with the run. Run anything but your own repositories in Docker
-  or WSL2.
+  within reach, and nothing the engine leaves running ends with the run. Run anything but your own
+  repositories in Docker or WSL2.
 
 ## The board
 
