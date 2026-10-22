@@ -92,12 +92,19 @@ function brokenEscapes(s: string): number {
   return end;
 }
 
-// Every character a scrubber has searched, at every level, in this process: what tests hold the work to.
+// Every character a scrubber has searched, at every level, and every automaton built, in this process: what
+// tests hold the work to, where a wall clock on a shared runner would not tell.
 let searched = 0;
+let built = 0;
 
 /** How many characters scrubbers have searched in this process, every level counted. */
 export function scrubbedChars(): number {
   return searched;
+}
+
+/** How many automata scrubbers have built in this process: one for each scrubber with credentials. */
+export function automataBuilt(): number {
+  return built;
 }
 
 /** A level: its text, and where each of its characters begins in the original (null: the same place). */
@@ -162,6 +169,7 @@ class Automaton {
   readonly nodes: number;
 
   constructor(needles: readonly string[]) {
+    built++;
     const size = needles.reduce((n, s) => n + s.length, 1);
     this.char = new Int32Array(size).fill(-1);
     this.child = new Int32Array(size);

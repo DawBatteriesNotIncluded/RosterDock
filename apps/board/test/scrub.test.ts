@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { scrubbedChars, scrubber, scrubText } from "../src/mcp/scrub.js";
+import { automataBuilt, scrubbedChars, scrubber, scrubText } from "../src/mcp/scrub.js";
 
 const secret = "AbC+dEf+GhI/jKl=";
 
@@ -194,29 +194,41 @@ describe("scrubbing a credential", () => {
     expect(clean.bounded({ abc: 1 }, 4)).toEqual({ value: {}, cut: true });
   });
 
-  it("stays quick at the sizes callers keep: a short and a long credential, many credentials, deep escapes", () => {
+  it("does work linear in what it reads: one automaton for every credential, one pass a level", () => {
     const jwt = `eyJ${"a".repeat(2045)}`;
     const fit = (s: string, n: number) => s.repeat(Math.ceil(n / s.length)).slice(0, n);
-    const time = (f: () => unknown) => {
-      const started = performance.now();
+    // What is counted is the work: characters searched, at every level, and automata built. A wall clock on
+    // a shared CI runner swings by ten times; it backs these up at two seconds for gross regressions only.
+    const work = (f: () => unknown) => {
+      const [chars, builds, started] = [scrubbedChars(), automataBuilt(), performance.now()];
       f();
-      return performance.now() - started;
+      expect(performance.now() - started).toBeLessThan(2000);
+      return { chars: scrubbedChars() - chars, builds: automataBuilt() - builds };
     };
-    // A six-character and a 2 KB credential over 50,000 cells: every cell is searched for both at once.
-    // About 25 ms here; building the search per string, it was seconds. The bounds leave room for a slow
-    // machine and none for that.
+    // A six-character and a 2 KB credential over 50,000 cells: one automaton for both, each cell read once.
+    // Built per string, it was 50,000 automata and seconds.
     const cells = { rows: Array.from({ length: 50_000 }, (_, i) => ({ id: i, name: `cell ${i} name` })) };
-    expect(time(() => scrubber([jwt, "Zq9#x1"]).value(cells))).toBeLessThan(300);
-    // An OpenAPI answer at its cap: plain text with a run of 256 backslashes, so every level is read, and 51
-    // credentials searched at once. About 50 ms here.
+    const cellChars = cells.rows.reduce((n, r) => n + r.name.length, 0);
+    expect(work(() => scrubber([jwt, "Zq9#x1"]).value(cells))).toEqual({ chars: cellChars, builds: 1 });
+    // An OpenAPI answer at its cap: plain text with a run of 256 backslashes, so all nine levels are read, and
+    // 52 credentials searched at once: nine passes over the text at most, not nine for each credential.
     const many = Array.from({ length: 51 }, (_, i) => `secret-${i}-${"x".repeat(30)}`);
     const cascade = `${fit("plain text, ", 256 * 1024)}${"\\".repeat(256)}"${fit("more plain ", 256 * 1024)}`;
-    expect(time(() => scrubber([...many, jwt]).text(cascade))).toBeLessThan(300);
+    const read = work(() => scrubber([...many, jwt]).text(cascade));
+    expect(read.builds).toBe(1);
+    expect(read.chars).toBeGreaterThan(8 * cascade.length - 1000);
+    expect(read.chars).toBeLessThanOrEqual(9 * cascade.length);
     // The server's own credential echoed beside escape chains all through it: found at every level, marked once.
     const echo = fit(`${secret}\\u005Cu005Cu005Cu005C`, 512 * 1024);
     let out = "";
-    expect(time(() => (out = scrubber([secret]).text(echo)))).toBeLessThan(300);
+    expect(work(() => (out = scrubber([secret]).text(echo))).chars).toBeLessThanOrEqual(9 * echo.length);
     expect(out).not.toContain("AbC");
+    // Fifty credentials of 8 KB: one automaton, built in a few tens of milliseconds here.
+    const big = Array.from(
+      { length: 50 },
+      (_, i) => `${String.fromCharCode(65 + (i % 26))}${i}-${"q".repeat(8190)}`,
+    );
+    expect(work(() => scrubber(big)).builds).toBe(1);
   });
 
   it("stays within its memory: an 8 MB echo of the credential near escapes, in a worker held to 64 MB", async () => {

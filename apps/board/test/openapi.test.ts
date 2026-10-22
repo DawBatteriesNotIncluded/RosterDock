@@ -19,6 +19,7 @@ import {
   toolNameFor,
 } from "../src/mcp/openapi.js";
 import { parsePrivateDestinations } from "../src/web/address.js";
+import { scrubbedChars } from "../src/mcp/scrub.js";
 import { boardEgress } from "../src/web/egress.js";
 import { fakeOpenApi } from "./openapi-fake.js";
 import {
@@ -265,7 +266,7 @@ describe("the OpenAPI runtime", () => {
     const call = async (body: string, secret: string) => {
       const answering = (async () =>
         new Response(body, { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
-      const started = performance.now();
+      const [started, before] = [performance.now(), scrubbedChars()];
       const outcome = await callOpenApiOperation(
         { url: "https://crm.example.test/v1", authEnvName: "CRM_API_TOKEN" },
         manifest,
@@ -273,25 +274,30 @@ describe("the OpenAPI runtime", () => {
         "list_contacts",
         {},
       );
-      return { outcome, ms: performance.now() - started };
+      return { outcome, ms: performance.now() - started, chars: scrubbedChars() - before };
     };
     // Half a megabyte of empty strings, and a credential of backslashes in a run of escaped backslashes: a
     // pattern built per string held the board's event loop 2.3 s for the first, a backtracking one 5.3 s for
-    // the second. A few tens of milliseconds now; the bound leaves room for a slow machine.
+    // the second. A few tens of milliseconds now. What is held is the work, characters searched at every
+    // level: at most nine passes over the answer; the clock only backs it up, at two seconds, for a shared
+    // CI runner that swings by ten times.
     const empties = await call(
       `[${Array.from({ length: 170_000 }, () => '""').join(",")}]`,
       env.CRM_API_TOKEN!,
     );
     expect(empties.outcome.ok).toBe(true);
-    expect(empties.ms).toBeLessThan(250);
+    expect(empties.chars).toBe(0);
+    expect(empties.ms).toBeLessThan(2000);
     const backslashes = await call(`{"v":"${"\\\\".repeat(120_000)}"}`, `${"\\".repeat(24)}tail00`);
     expect(backslashes.outcome.ok).toBe(true);
-    expect(backslashes.ms).toBeLessThan(250);
+    expect(backslashes.chars).toBeLessThanOrEqual(9 * 240_000);
+    expect(backslashes.ms).toBeLessThan(2000);
     // A long credential of one character over and over but one, in a megabyte of that character: indexOf
     // took 730 ms for it, comparing the credential afresh at every place; this search is one pass.
     const nearly = await call(`{"v":"${"a".repeat(1_000_000)}"}`, `${"a".repeat(2048)}b${"a".repeat(2047)}`);
     expect(nearly.outcome.ok).toBe(true);
-    expect(nearly.ms).toBeLessThan(250);
+    expect(nearly.chars).toBe(1_000_000);
+    expect(nearly.ms).toBeLessThan(2000);
     // And the scan finds what the pattern found: escaped or not, wherever it starts.
     const mixed = await call(
       `{"a":"x${"\\u0041bC+dEf+GhI\\/jKl="}y","b":"AbC\\u002bdEf+GhI/jKl="}`,
