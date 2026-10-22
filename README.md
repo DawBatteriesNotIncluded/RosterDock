@@ -37,7 +37,7 @@ Good to know:
 
 ## Quick start: free, on one machine
 
-Requirements: Node.js 22.12 or later, pnpm 10 (`npm install -g pnpm@10`, or `corepack enable` on Node 22
+Requirements: Node.js 22.13 or later, pnpm 10 (`npm install -g pnpm@10`, or `corepack enable` on Node 22
 or 24) and Docker. On the stub engine, with Peter without a model, nothing calls a model and nothing costs
 anything.
 

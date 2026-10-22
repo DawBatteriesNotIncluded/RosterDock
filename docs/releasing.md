@@ -19,11 +19,11 @@ For the maintainers. A release is one version for the three images and the chart
    git push origin v0.2.0
    ```
 
-3. The workflow runs CI on the tagged commit (the tests, the image builds, the smoke install on kind, helm
-   lint). Then it builds each image for linux/amd64 and linux/arm64 and pushes it as `0.2.0`, `0.2` and
-   `latest`, and last packages the chart as version `0.2.0` with appVersion `0.2.0` and pushes it to
-   `oci://ghcr.io/dawbatteriesnotincluded/charts`. A prerelease (`v0.2.0-rc.1`) is pushed under its own
-   version only, never `0.2` or `latest`.
+3. The workflow runs CI on the tagged commit (the tests, the worker's tests on Windows, the image builds, the
+   smoke install on kind, helm lint). Then it builds each image for linux/amd64 and linux/arm64 and pushes it
+   as `0.2.0`, `0.2` and `latest`, and last packages the chart as version `0.2.0` with appVersion `0.2.0` and
+   pushes it to `oci://ghcr.io/dawbatteriesnotincluded/charts`. A prerelease (`v0.2.0-rc.1`) is pushed under
+   its own version only, never `0.2` or `latest`.
 4. Check what a stranger gets, signed out of GHCR:
 
    ```bash
@@ -64,8 +64,11 @@ their parsers' fixtures were recorded with; moving one means recording the fixtu
 - **Code security.** Private vulnerability reporting is on: `SECURITY.md` and the issue template send
   reporters to `/security/advisories/new`. Secret scanning and push protection are on, and skip only the
   files `.github/secret_scanning.yml` names. CodeQL runs in its default setup.
-- **Rules.** The `main` ruleset takes changes only through a squash-merged pull request whose four CI checks
-  are green (the skipped smoke install counts), with no force-push, no deletion and nobody exempt. The
+- **Rules.** The `main` ruleset takes changes only through a squash-merged pull request whose required CI
+  checks are green: typecheck, lint, test; build images; helm lint; smoke install on kind (skipped counts);
+  and worker tests on Windows (node 22.16) and (node 22). No force-push, no deletion, nobody exempt. The
+  Windows checks are named by the matrix's Node versions: a change to the matrix changes the ruleset too, or
+  every pull request waits on a check that never runs. The
   `release tags` ruleset forbids moving or deleting a `v*` tag. Anyone who can push a `v*` tag publishes.
 - **The pre-release sentences.** When 0.1.0 ships, delete the sentence in `README.md`'s Status that says
   nothing is published, and the two sentences directly under "Where the images and the chart come from" in
