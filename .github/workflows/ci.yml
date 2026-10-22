@@ -91,30 +91,6 @@ jobs:
             fs.rmSync(f);
           '
       - run: pnpm install --frozen-lockfile
-      - name: PowerShell start times (temporary)
-        shell: bash
-        run: |
-          pnpm --filter @rosterdock/worker build
-          node --input-type=module -e '
-            import { spawnSync } from "node:child_process";
-            import { inJob } from "./apps/worker/dist/kill.js";
-            const ps = `${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
-            const keys = ["PATH","SYSTEMROOT","WINDIR","COMSPEC","PATHEXT","HOME","USERPROFILE","APPDATA","LOCALAPPDATA","TMPDIR","TEMP","TMP","LANG","TZ"];
-            const bare = Object.fromEntries(keys.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]));
-            const job = inJob("node", ["-e", "process.exit(4)"]);
-            const time = (label, file, args, env) => {
-              const t = Date.now();
-              const r = spawnSync(file, args, { env, encoding: "utf8" });
-              console.log(label, r.status, `${Date.now() - t} ms`, (r.stdout + r.stderr).slice(0, 400));
-            };
-            console.log(Object.keys(process.env).sort().join(" "));
-            for (let i = 0; i < 2; i++) {
-              time("exit, full env", ps, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "exit 3"], process.env);
-              time("exit, bare env", ps, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "exit 3"], bare);
-              time("job, full env", job.file, job.args, process.env);
-              time("job, bare env", job.file, job.args, bare);
-            }
-          '
       - run: pnpm --no-bail --filter @rosterdock/shared --filter @rosterdock/worker test
       - run: pnpm --filter @rosterdock/board exec vitest run test/peter-cli-bin.test.ts
 

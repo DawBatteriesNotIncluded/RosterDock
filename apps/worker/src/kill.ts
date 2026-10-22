@@ -39,11 +39,11 @@ export function killTree(child: ChildProcess): void {
  * which joins the job, as does everything it starts; waits for it and exits with its code. kernel32's job
  * functions are declared in memory, so nothing is compiled or written to disk. Without a job (a policy that
  * refuses this, a Windows that cannot nest jobs) the command runs all the same. PSModulePath, which PowerShell
- * sets, is taken out again: the command sees the environment the worker gave it. No cmdlet, only .NET: a
- * cmdlet loads its module, which in the tests' bare environment had PowerShell analyse every module again
- * first (12 s and more where this takes under one).
+ * sets, is taken out again, as is each name in `unset`: the command sees the environment the worker gave it.
+ * No cmdlet, only .NET: a cmdlet loads its module, which in the tests' bare environment had PowerShell analyse
+ * every module again first (12 s and more where this takes under one).
  */
-function jobScript(comspec: string, line: string): string {
+function jobScript(comspec: string, line: string, unset: string[]): string {
   const quoted = (s: string) => `'${s.replace(/'/g, "''")}'`;
   return [
     "$ErrorActionPreference = 'Stop'",
@@ -70,7 +70,9 @@ function jobScript(comspec: string, line: string): string {
     "  $self = [Diagnostics.Process]::GetCurrentProcess().Handle",
     "  if (-not $kernel32::AssignProcessToJobObject($job, $self)) { throw 'not in the job' }",
     "} catch {}",
-    "[Environment]::SetEnvironmentVariable('PSModulePath', $null)",
+    ...["PSModulePath", ...unset].map(
+      (name) => `[Environment]::SetEnvironmentVariable(${quoted(name)}, $null)`,
+    ),
     "$start = [Diagnostics.ProcessStartInfo]::new()",
     `$start.FileName = ${quoted(comspec)}`,
     `$start.Arguments = ${quoted(`/d /s /c "${line}"`)}`,
@@ -82,17 +84,24 @@ function jobScript(comspec: string, line: string): string {
 }
 
 /**
- * Windows: how to start `command` with `args` as cmd.exe would run them (npm, pnpm and yarn are .cmd shims
- * there), in a job, so that ending what this returns ends every process the command started, those whose
- * parent already ended included; and when the command ends by itself, whatever it left running ends with it.
- * Null without Windows PowerShell: start it under cmd.exe as it is.
+ * Windows: how to start `command` with `args` in `env` as cmd.exe would run them (npm, pnpm and yarn are .cmd
+ * shims there), in a job, so that ending what this returns ends every process the command started, those
+ * whose parent already ended included; and when the command ends by itself, whatever it left running ends
+ * with it. Null without Windows PowerShell: start it under cmd.exe as it is.
  */
-export function inJob(command: string, args: string[]): { file: string; args: string[] } | null {
+export function inJob(
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+): { file: string; args: string[]; env: Record<string, string> } | null {
   const powershell = path.win32.join(systemRoot(), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   if (!existsSync(powershell)) return null;
   const comspec = process.env.ComSpec || path.win32.join(systemRoot(), "System32", "cmd.exe");
-  const script = jobScript(comspec, [command, ...args].join(" "));
+  // PowerShell does not start without SystemRoot: given it, the command is not.
+  const given = Object.keys(env).some((k) => k.toLowerCase() === "systemroot");
+  const script = jobScript(comspec, [command, ...args].join(" "), given ? [] : ["SystemRoot"]);
   return {
+    env: given ? env : { ...env, SystemRoot: systemRoot() },
     file: powershell,
     args: [
       "-NoLogo",
