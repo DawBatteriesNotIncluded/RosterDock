@@ -21,7 +21,10 @@ vi.mock("node:fs", async (importOriginal) => {
 /** A spawned program that exits with `code`. */
 function exiting(code: number): ChildProcess {
   const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
-  setImmediate(() => child.emit("exit", code));
+  setImmediate(() => {
+    child.emit("exit", code);
+    child.emit("close", code);
+  });
   return child as unknown as ChildProcess;
 }
 

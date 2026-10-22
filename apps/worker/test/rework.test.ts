@@ -703,6 +703,18 @@ describe("a rework run and links", () => {
     },
   );
 
+  it("delivers a moved file by its new name only, never a part of its old one read as a name", async () => {
+    // Read without --no-renames, status -z gives a move's old name a field of its own: "ab/.env" read as an
+    // entry is status "ab" and the name ".env", an ignored file the worker would then deliver.
+    const { repo } = await linkRepo("moved-env", { ".gitignore": ".env\n", "ab/.env": "MODE=example\n" }, {});
+    const ws = await cloneFor(repo, "moved-env", false, []);
+    await run(["mv", "ab/.env", "ab/env.example"], ws.dir);
+    await writeFile(path.join(ws.dir, ".env"), "TOKEN=the-workers-own\n", "utf8");
+    const harvest = await harvestWorkspace(ws, []);
+    expect(JSON.stringify(harvest.artifacts)).not.toContain("the-workers-own");
+    expect(harvest.filesWritten).toEqual(["ab/env.example"]);
+  });
+
   it("records a committed link the engine staged as a file and then changed again as the file it is now", async () => {
     const { repo } = await linkRepo("restaged-link", { a: "a\n" }, { l: "a", m: "a" });
     for (const windows of CLONES) {

@@ -562,19 +562,35 @@ export async function harvestWorkspace(
       ["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`],
       ws.dir,
     );
+    // A folder git cannot open it passes over with a warning, and adds the rest: that is part of the change.
+    const skipped = /^warning: could not open directory .*$/m.exec(add.stderr)?.[0];
     const diff =
-      add.code === 0
+      add.code === 0 && !skipped
         ? await git(
-            ["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv"],
+            // core.quotePath false: a name past ASCII as it is; one with a quote or a control character is
+            // still quoted, and parseUnifiedDiff reads it back.
+            [
+              "-c",
+              "core.quotePath=false",
+              "diff",
+              "--cached",
+              "--no-color",
+              "--no-renames",
+              "--no-ext-diff",
+              "--no-textconv",
+            ],
             ws.dir,
           )
-        : add;
+        : { ...add, code: add.code || 1, stderr: skipped ?? add.stderr };
     // A part of the change the review would not show (an index.lock a git ended part-way left behind): no diff,
     // and the run that would complete fails with this rather than send half of it for review.
     if (diff.code === 0) diffText = diff.stdout;
     else {
       const lines = redactGit(diff.stderr).trim().split("\n");
-      const why = lines.find((l) => /^(?:error|fatal):/.test(l)) ?? lines.at(-1) ?? "";
+      let why = lines.find((l) => /^(?:error|fatal|warning):/.test(l)) ?? lines.at(-1) ?? "";
+      // The worker's own folders are none of the run's business: the clone's path as git writes it, `.`.
+      for (const at of await Promise.all([ws.dir, realpath(ws.dir).catch(() => ws.dir)]))
+        for (const form of new Set([at, at.replace(/\\/g, "/")])) why = why.split(form).join(".");
       out.unreadable = `the run's changes could not be read back for review (git: ${why || "no message"})`;
     }
   } else {

@@ -169,7 +169,8 @@ export function probeJob(): Promise<JobProbe> {
       clearTimeout(timer);
       refused(err);
     });
-    child.on("exit", (code) => {
+    // On close, once its stderr has ended too: the reason it gave, whole.
+    child.on("close", (code) => {
       clearTimeout(timer);
       resolve(
         code === 7
