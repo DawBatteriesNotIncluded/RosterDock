@@ -118,7 +118,7 @@ describe("a company's MCP server over HTTP", () => {
       [
         "intranet",
         "https://mcp.intranet.test/mcp",
-        `refused: mcp.intranet.test resolves to 10.0.0.5, a private address, ${NOT_ALLOWED}`,
+        `refused: mcp.intranet.test resolves to a private address, ${NOT_ALLOWED}`,
       ],
       [
         "metadata",
@@ -128,7 +128,7 @@ describe("a company's MCP server over HTTP", () => {
       [
         "loopback",
         "http://localhost:3001/mcp",
-        `refused: localhost resolves to 127.0.0.1, a loopback address, ${NOT_ALLOWED}`,
+        `refused: localhost resolves to a loopback address, ${NOT_ALLOWED}`,
       ],
       ["literal", "http://10.0.0.5:8080/mcp", `refused: 10.0.0.5 is a private address, ${NOT_ALLOWED}`],
       [
@@ -191,7 +191,7 @@ describe("a company's MCP server over HTTP", () => {
       await callConnectionTool(await loadConnection(board.db, companyId, intranet), deps, "whoami", {}),
     ).toEqual({
       ok: false,
-      error: `refused: mcp.intranet.test resolves to 10.0.0.5, a private address, ${NOT_ALLOWED}`,
+      error: `refused: mcp.intranet.test resolves to a private address, ${NOT_ALLOWED}`,
     });
   });
 });
@@ -217,7 +217,7 @@ describe("a company's OpenAPI service", () => {
       (await api.post(`${base}/connections/${id}/check`, {})).body.lastCheck;
     expect(await check(intranet)).toMatchObject({
       ok: false,
-      error: `could not reach the service: refused: crm.intranet.test resolves to 10.0.0.40, a private address, ${NOT_ALLOWED}`,
+      error: `could not reach the service: refused: crm.intranet.test resolves to a private address, ${NOT_ALLOWED}`,
     });
     expect(await check(literal)).toMatchObject({
       ok: false,
@@ -231,7 +231,7 @@ describe("a company's OpenAPI service", () => {
       callConnectionTool(await loadConnection(board.db, companyId, id), deps, "list_contacts", {});
     expect(await call(intranet)).toEqual({
       ok: false,
-      error: `list_contacts could not reach the service: refused: crm.intranet.test resolves to 10.0.0.40, a private address, ${NOT_ALLOWED}`,
+      error: `list_contacts could not reach the service: refused: crm.intranet.test resolves to a private address, ${NOT_ALLOWED}`,
     });
     // An operation, a write above all, goes where the manifest says or nowhere: even a public redirect is refused.
     expect(await call(moved)).toEqual({
@@ -256,7 +256,7 @@ describe("OAuth for a company's connection", () => {
     const start = await api.post(`${base}/connections/${created.body.id}/oauth/start`, {});
     expect(start.status).toBe(502);
     expect(start.body.error).toBe(
-      `could not reach auth.intranet.test: refused: auth.intranet.test resolves to 10.0.0.8, a private address, ${NOT_ALLOWED}`,
+      `could not reach auth.intranet.test: refused: auth.intranet.test resolves to a private address, ${NOT_ALLOWED}`,
     );
     // The resource metadata was read; nothing reached the authorization server.
     expect(sent).toEqual(["https://mcp.oauth.test/.well-known/oauth-protected-resource/mcp"]);
@@ -286,7 +286,7 @@ describe("OAuth for a company's connection", () => {
       `could not reach mcp.example.test: refused: 169.254.169.254 is a link-local address, where cloud metadata lives, ${NOT_ALLOWED}`,
     );
     await expect(discoverAuthorizationServer("https://auth.intranet.test", deps)).rejects.toThrow(
-      `could not reach auth.intranet.test: refused: auth.intranet.test resolves to 10.0.0.8, a private address, ${NOT_ALLOWED}`,
+      `could not reach auth.intranet.test: refused: auth.intranet.test resolves to a private address, ${NOT_ALLOWED}`,
     );
     const as = {
       issuer: "https://auth.example.test",
@@ -311,7 +311,7 @@ describe("OAuth for a company's connection", () => {
       "could not reach the token endpoint: auth.example.test answered 308, a redirect to tokens.example.test, which the board does not follow here",
     );
     await expect(refresh("https://auth.intranet.test/token")).rejects.toThrow(
-      `could not reach the token endpoint: refused: auth.intranet.test resolves to 10.0.0.8, a private address, ${NOT_ALLOWED}`,
+      `could not reach the token endpoint: refused: auth.intranet.test resolves to a private address, ${NOT_ALLOWED}`,
     );
     expect(t).toEqual([
       "https://mcp.example.test/.well-known/oauth-protected-resource/mcp",
@@ -349,7 +349,7 @@ describe("a company's notifications", () => {
     expect(await test()).toEqual({
       sent: false,
       target: "GTM_HOOK",
-      error: `refused: hooks.intranet.test resolves to 169.254.169.254, a link-local address, where cloud metadata lives, ${NOT_ALLOWED}`,
+      error: `refused: hooks.intranet.test resolves to a link-local address, where cloud metadata lives, ${NOT_ALLOWED}`,
     });
     env.GTM_HOOK = "https://hooks.moved.test/services/T0/B0/secret-000";
     const moved = await test();
@@ -369,7 +369,7 @@ describe("a company's notifications", () => {
     expect(await test()).toEqual({
       sent: true,
       target: "ROSTERDOCK_NOTIFY_WEBHOOK_URL",
-      error: `email: refused: smtp.intranet.test resolves to 10.0.0.25, a private address, ${NOT_ALLOWED}`,
+      error: `email: refused: smtp.intranet.test resolves to a private address, ${NOT_ALLOWED}`,
     });
     env.GTM_SMTP = "smtp://owner:pw@10.0.0.25:587/";
     expect(await test()).toMatchObject({
@@ -387,7 +387,7 @@ describe("a style pack's download", () => {
       const behindName = await api.put(`${base}/styles/${style.id}`, { enabled: true });
       expect(behindName.status).toBe(502);
       expect(behindName.body.error).toBe(
-        `could not download ${style.label} from ${style.source.repo}: refused: raw.githubusercontent.com resolves to 10.0.0.3, a private address, ${NOT_ALLOWED}`,
+        `could not download ${style.label} from ${style.source.repo}: refused: raw.githubusercontent.com resolves to a private address, ${NOT_ALLOWED}`,
       );
       expect(sent).toEqual([]);
       delete names["raw.githubusercontent.com"];

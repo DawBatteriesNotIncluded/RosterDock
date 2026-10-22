@@ -98,6 +98,8 @@ export function renderMessage(message: SmtpMessage): string {
 
 class Session {
   private socket: Socket | null = null;
+  /** The socket being connected or secured, or in use: what the deadline ends. */
+  private live: Socket | null = null;
   private buffer = "";
   private queue: string[] = [];
   private waiter: { resolve(line: string): void; reject(err: Error): void } | null = null;
@@ -114,10 +116,12 @@ class Session {
     private readonly lookup?: LookupFunction,
   ) {
     this.secure = target.secure;
-    this.timer = setTimeout(
-      () => this.fail(new SmtpError(`the server gave no answer in ${Math.round(timeoutMs / 1000)}s`)),
-      timeoutMs,
-    );
+    // The deadline covers the whole exchange: connecting, a TLS handshake and every reply.
+    this.timer = setTimeout(() => {
+      const err = new SmtpError(`the server gave no answer in ${Math.round(timeoutMs / 1000)}s`);
+      this.fail(err);
+      this.live?.destroy(err);
+    }, timeoutMs);
   }
 
   private readonly onData = (chunk: string): void => {
@@ -211,6 +215,7 @@ class Session {
         this.secure = true;
         resolve();
       });
+      this.live = secured;
       secured.once("error", reject);
     });
   }
@@ -222,6 +227,7 @@ class Session {
       const socket = this.target.secure
         ? tlsConnect({ host, port, servername: host, ...this.tls, ...via }, resolve)
         : netConnect({ host, port, ...via }, resolve);
+      this.live = socket;
       socket.once("error", reject);
       this.attach(socket);
     });
@@ -266,6 +272,7 @@ class Session {
 
   close(): void {
     clearTimeout(this.timer);
+    this.live?.destroy();
     this.socket?.destroy();
   }
 }

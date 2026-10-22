@@ -52,6 +52,10 @@ describe("the private destinations an operator allows", () => {
       "x.internal/8",
       "1.2.3.4/8/9",
       "under score.internal",
+      "fd00::1%eth0",
+      "0x7f",
+      "host.010",
+      "service.internal.0x1f",
     ])
       expect(() => parsePrivateDestinations(bad), bad).toThrow(/^ROSTERDOCK_PRIVATE_DESTINATIONS: /);
   });
@@ -70,7 +74,15 @@ describe("the private destinations an operator allows", () => {
 
   it("admits an address in a listed range and nothing else; a public address needs no list", () => {
     const allow = parsePrivateDestinations("10.0.0.0/8,127.0.0.1,fd00::/8,172.16.5.9/12");
-    for (const a of ["10.1.2.3", "127.0.0.1", "::ffff:10.9.9.9", "fd00:ec2::254", "172.20.0.1", "172.32.0.1"])
+    for (const a of [
+      "10.1.2.3",
+      "127.0.0.1",
+      "::ffff:10.9.9.9",
+      "64:ff9b::a01:203",
+      "fd00:ec2::254",
+      "172.20.0.1",
+      "172.32.0.1",
+    ])
       expect(refuseDestination(a, allow), a).toBeNull();
     const refused: [string, RegExp][] = [
       ["127.0.0.2", /loopback/],
@@ -97,12 +109,12 @@ describe("the private destinations an operator allows", () => {
       "other.internal",
     ])
       await expect(reachableAddresses(resolve, host, allow), host).rejects.toThrow(
-        `refused: ${host} resolves to 10.0.0.7, a private address, ${NOT_ALLOWED}`,
+        `refused: ${host} resolves to a private address, ${NOT_ALLOWED}`,
       );
     // A name nobody listed is judged by every address it has: one private address refuses it whole.
     await expect(
       reachableAddresses(async () => [PUBLIC_TEST_ADDRESS, "10.0.0.7"], "mixed.example.com", allow),
-    ).rejects.toThrow(`refused: mixed.example.com resolves to 10.0.0.7, a private address, ${NOT_ALLOWED}`);
+    ).rejects.toThrow(`refused: mixed.example.com resolves to a private address, ${NOT_ALLOWED}`);
     await expect(
       reachableAddresses(async () => [PUBLIC_TEST_ADDRESS], "public.example.com", NO_PRIVATE_DESTINATIONS),
     ).resolves.toEqual([PUBLIC_TEST_ADDRESS]);
@@ -152,10 +164,10 @@ describe("a company's destination through the egress", () => {
       /refused: ::ffff:a9fe:a9fe is a link-local/,
     );
     await expect(f("https://intranet.example.com/mcp", { method: "POST", body: "{}" })).rejects.toThrow(
-      `refused: intranet.example.com resolves to 10.0.0.5, a private address, ${NOT_ALLOWED}`,
+      `refused: intranet.example.com resolves to a private address, ${NOT_ALLOWED}`,
     );
     await expect(f("http://localhost:3001/mcp")).rejects.toThrow(
-      `refused: localhost resolves to 127.0.0.1, a loopback address, ${NOT_ALLOWED}`,
+      `refused: localhost resolves to a loopback address, ${NOT_ALLOWED}`,
     );
     await expect(f("http://metadata.example.com/")).rejects.toBeInstanceOf(RefusedAddress);
     await expect(f("file:///etc/passwd")).rejects.toThrow(
@@ -178,7 +190,7 @@ describe("a company's destination through the egress", () => {
     expect((await f("https://intranet.example.com/mcp")).status).toBe(200);
     expect((await f("http://10.0.0.5:8080/")).status).toBe(200);
     await expect(f("https://internal.example.com/")).rejects.toThrow(
-      `refused: internal.example.com resolves to 10.0.0.9, a private address, ${NOT_ALLOWED}`,
+      `refused: internal.example.com resolves to a private address, ${NOT_ALLOWED}`,
     );
     await expect(f("http://127.0.0.1:3001/")).rejects.toThrow(
       `refused: 127.0.0.1 is a loopback address, ${NOT_ALLOWED}`,
@@ -203,7 +215,7 @@ describe("a company's destination through the egress", () => {
       `refused: 169.254.169.254 is a link-local address, where cloud metadata lives, ${NOT_ALLOWED}`,
     );
     await expect(follow("https://auth.example.com/b")).rejects.toThrow(
-      `refused: internal.example.com resolves to 10.0.0.9, a private address, ${NOT_ALLOWED}`,
+      `refused: internal.example.com resolves to a private address, ${NOT_ALLOWED}`,
     );
     expect(t.calls.map((c) => c.url)).toEqual([
       "https://auth.example.com/.well-known/oauth-authorization-server",
@@ -370,13 +382,28 @@ describe("the pinned transport for a company's destinations", () => {
       contentType: "application/x-www-form-urlencoded;charset=UTF-8",
       body: "grant_type=refresh_token",
     });
+    // The transport names the host and frames the body itself: a caller's Host (a credential header called
+    // Host, say) would reach a server behind a shared ingress that the operator never listed.
+    seen.length = 0;
+    const framed = await allowed(`http://echo.test:${port}/echo`, {
+      method: "POST",
+      headers: {
+        host: "grafana.corp",
+        "content-length": "1",
+        "transfer-encoding": "chunked",
+        connection: "upgrade",
+      },
+      body: "{}",
+    });
+    expect(await framed.json()).toMatchObject({ contentLength: "2", body: "{}" });
+    expect(seen).toEqual([`POST echo.test:${port} /echo`]);
     seen.length = 0;
     // Nothing listed: the check refuses before anything is sent.
     await expect(
       egressFetch(boardEgress(NO_PRIVATE_DESTINATIONS, toServer), { redirect: "error", timeoutMs: 5000 })(
         `http://echo.test:${port}/echo`,
       ),
-    ).rejects.toThrow(`refused: echo.test resolves to 127.0.0.1, a loopback address, ${NOT_ALLOWED}`);
+    ).rejects.toThrow(`refused: echo.test resolves to a loopback address, ${NOT_ALLOWED}`);
     // A name that answers the check with a public address and the socket with this one (DNS rebinding): the
     // socket connects only to what its own lookup admitted, so nothing reaches the server.
     let asked = 0;
@@ -385,7 +412,7 @@ describe("the pinned transport for a company's destinations", () => {
       egressFetch(boardEgress(NO_PRIVATE_DESTINATIONS, rebinding), { redirect: "error", timeoutMs: 5000 })(
         `http://rebind.test:${port}/echo`,
       ),
-    ).rejects.toThrow(`refused: rebind.test resolves to 127.0.0.1, a loopback address, ${NOT_ALLOWED}`);
+    ).rejects.toThrow(`refused: rebind.test resolves to a loopback address, ${NOT_ALLOWED}`);
     // And the transport on its own refuses an address in the URL the list does not take.
     await expect(
       boardEgress(NO_PRIVATE_DESTINATIONS, toServer).fetch(`http://127.0.0.1:${port}/echo`),
@@ -432,7 +459,7 @@ describe("the pinned transport for a company's destinations", () => {
         egress: boardEgress(parsePrivateDestinations("*.other.test"), toServer),
         timeoutMs: 5000,
       }),
-    ).rejects.toThrow(`refused: mcp.cluster.test resolves to 127.0.0.1, a loopback address, ${NOT_ALLOWED}`);
+    ).rejects.toThrow(`refused: mcp.cluster.test resolves to a loopback address, ${NOT_ALLOWED}`);
     expect(seen).toEqual([]);
   });
 });

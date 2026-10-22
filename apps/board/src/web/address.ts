@@ -169,17 +169,25 @@ export interface PrivateDestinations {
 
 export const NO_PRIVATE_DESTINATIONS: PrivateDestinations = { names: [], ranges: [], entries: [] };
 
+// A URL reads a name whose last label is a number (decimal, or 0x hex) as an IPv4 address, so no URL's host
+// is ever such a name.
+const NUMERIC_TAIL = /(^|\.)(0x[\da-f]*|\d+)$/;
+
 const NAME_RE =
   /^(?:\*\.)?(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)*[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/;
 
-/** An address on its own as its bytes, an IPv4 written as IPv6 by its IPv4, so a range matches either way. */
+/**
+ * An address on its own as its bytes, an IPv4 written as IPv6 (mapped, or NAT64's well-known prefix) by its
+ * IPv4, as refuseAddress reads them, so a range matches either way.
+ */
 function addressBytes(address: string): number[] | null {
   const v4 = v4Bytes(address);
   if (v4) return v4;
   const v6 = v6Bytes(address);
   if (!v6) return null;
   const mapped = v6.slice(0, 10).every((b) => b === 0) && v6[10] === 0xff && v6[11] === 0xff;
-  return mapped ? v6.slice(12) : v6;
+  const nat64 = inRange(v6, [[0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0], 96, ""]);
+  return mapped || nat64 ? v6.slice(12) : v6;
 }
 
 /**
@@ -193,7 +201,8 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
     const entry = item.trim().toLowerCase();
     if (!entry) continue;
     const [addr, bitsText, extra] = entry.replace(/^\[|\](?=\/|$)/g, "").split("/");
-    const bytes = addressBytes(addr!);
+    const bytes = entry.includes("%") ? null : addressBytes(addr!);
+    const name = addr!.replace(/\.$/, "");
     if (bytes && extra === undefined) {
       const max = bytes.length * 8;
       const bits = bitsText === undefined ? max : /^\d{1,3}$/.test(bitsText) ? Number(bitsText) : NaN;
@@ -202,9 +211,10 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
       // The range's own address with its host bits cleared: 10.1.2.3/8 is 10.0.0.0/8.
       const prefix = bytes.map((b, i) => b & (0xff << (8 - Math.max(0, Math.min(8, bits - i * 8)))) & 0xff);
       out.ranges.push([prefix, bits, entry]);
-    } else if (bitsText === undefined && NAME_RE.test(entry.replace(/\.$/, "")) && !/^[\d.]+$/.test(entry)) {
-      out.names.push(entry.replace(/\.$/, ""));
+    } else if (bitsText === undefined && NAME_RE.test(name) && !NUMERIC_TAIL.test(name)) {
+      out.names.push(name);
     } else {
+      // A zone (%eth0) names an interface, not a destination.
       throw new Error(
         `ROSTERDOCK_PRIVATE_DESTINATIONS: "${entry}" is not a host name, an address or an address range (10.0.0.0/8)`,
       );
@@ -252,9 +262,10 @@ export async function reachableAddresses(
 ): Promise<string[]> {
   const addresses = await resolved(resolve, host);
   if (nameListed(host, allow)) return addresses;
+  // The kind of address, not the address: a company learns nothing of the network behind the board.
   for (const a of addresses) {
     const why = refuseDestination(a, allow);
-    if (why) throw new RefusedAddress(`refused: ${host} resolves to ${a}, ${why}, ${NOT_ALLOWED}`);
+    if (why) throw new RefusedAddress(`refused: ${host} resolves to ${why}, ${NOT_ALLOWED}`);
   }
   return addresses;
 }

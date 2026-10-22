@@ -51,6 +51,8 @@ export interface ReachOptions {
 }
 
 export const MAX_HOPS = 3;
+/** How long a kept connection waits idle before it closes. */
+const IDLE_MS = 4000;
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const CREDENTIAL_HEADERS = ["authorization", "cookie", "proxy-authorization"];
 const BODY_HEADERS = [
@@ -190,8 +192,9 @@ export function boardEgress(
     fetch: pinnedFetch(socket.lookup, {
       literal: socket.literal,
       agents: {
-        http: new http.Agent({ keepAlive: true, maxFreeSockets: 16 }),
-        https: new https.Agent({ keepAlive: true, maxFreeSockets: 16 }),
+        // An idle connection closes after a few seconds, as fetch's do; one in use is the caller's.
+        http: new http.Agent({ keepAlive: true, maxFreeSockets: 16, timeout: IDLE_MS }),
+        https: new https.Agent({ keepAlive: true, maxFreeSockets: 16, timeout: IDLE_MS }),
       },
     }),
     resolve,

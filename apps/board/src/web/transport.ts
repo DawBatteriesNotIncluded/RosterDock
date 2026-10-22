@@ -81,6 +81,21 @@ export interface PinnedOptions {
   agents?: { http: http.Agent; https: https.Agent };
 }
 
+// Headers the transport sets itself, never a caller: Host above all, or a company could name a server
+// (a credential header called Host, say) other than the one its URL reached, behind a shared ingress.
+const OWN_HEADERS = [
+  "host",
+  "connection",
+  "content-length",
+  "expect",
+  "keep-alive",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+];
+
 /** A request body as the bytes to send: a string, URL-encoded form or bytes, as the board's callers send. */
 function bodyBytes(body: RequestInit["body"], headers: Record<string, string>): Buffer | null {
   if (body === undefined || body === null) return null;
@@ -114,7 +129,9 @@ export function pinnedFetch(lookup: LookupFunction, opts: PinnedOptions = {}): t
       if (refused) return reject(new TypeError(refused));
       const method = (init?.method ?? "GET").toUpperCase();
       const headers: Record<string, string> = {};
-      new Headers(init?.headers).forEach((value, name) => (headers[name] = value));
+      new Headers(init?.headers).forEach((value, name) => {
+        if (!OWN_HEADERS.includes(name)) headers[name] = value;
+      });
       headers["accept-encoding"] = "gzip, deflate, br";
       let body: Buffer | null;
       try {

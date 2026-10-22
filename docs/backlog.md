@@ -12,6 +12,10 @@ scheduled; delete it when it ships.
 - A stdio connection's server runs inside the board pod as the board, so it can read the board's environment,
   a file secret store and the service account token (`docs/security.md`, What they can reach). Run those
   servers as another user, or in a sidecar, without any of them.
+- A company's server's answers are read whole before their caps apply (an OpenAPI operation's
+  `maxResponseBytes`, OAuth's JSON, an MCP answer), and a compressed body is decoded without a limit, so a
+  server can send a body that inflates to fill the board's memory within the deadline. Cap the decoded
+  bytes in the transport (`web/transport.ts`), per call site.
 - The worker fleet is shared by every company on a board, and code a company controls (the repository's
   `test` script, an engine's shell) can read the worker's environment, the board's `DATABASE_URL` included
   (`docs/security.md`, Companies on one board). Give the worker a database role of its own that reaches

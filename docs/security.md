@@ -314,8 +314,11 @@ their own, each with its own database and workers.
   (carrier-grade NAT) and the other special-purpose ranges are refused, an IPv4 written as IPv6 by its
   IPv4, as for the web connection (Reading the web, below). The board connects only to the addresses its
   own lookup admitted, so a name cannot pass the check with one address and send the connection to
-  another; the SMTP connection's socket takes the same lookup. A refusal reads "refused: ... which this
-  board's operator has not allowed" on the connection's check, in Activity and in the call's result.
+  another; the SMTP connection's socket takes the same lookup. The board sets the Host header and the
+  body's framing itself, so no header a company names (a credential header called Host) reaches another
+  server behind a shared ingress. A refusal reads "refused: ... which this board's operator has not
+  allowed" on the connection's check, in Activity and in the call's result, and names the kind of address
+  a name resolves to, never the address.
 - **Redirects.** An MCP server, an OpenAPI operation, a webhook, OAuth registration and the token requests
   follow none: the credential and the call go to the URL the company gave, or nowhere, and the error names
   the host it pointed to (no more, since a path may carry a token). An OpenAPI connection's check takes a
@@ -323,7 +326,9 @@ their own, each with its own database and workers.
   most, every hop checked again, and a hop that leaves the origin loses the credential headers.
 - **Time.** One deadline per request, looking names up included: an MCP request's is the call's timeout
   (30 seconds) up to the answer's headers, after which an event stream stays open until the call ends;
-  an OpenAPI operation takes its manifest's timeout, OAuth 15 seconds, a webhook and an SMTP exchange 15.
+  an OpenAPI operation takes its manifest's timeout, OAuth 15 seconds, a webhook 15, and an SMTP exchange
+  15, connecting and its TLS handshake included. A connection kept between requests closes after four idle
+  seconds.
 - **The operator's list.** `ROSTERDOCK_PRIVATE_DESTINATIONS` (chart `board.privateDestinations`) names the
   private destinations companies may use: host names (`*.tools.svc.cluster.local` for the names under
   one), addresses and ranges (`10.20.0.0/16`). A listed name is trusted with whatever it resolves to, so
