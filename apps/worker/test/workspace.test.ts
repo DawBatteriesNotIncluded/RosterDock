@@ -20,6 +20,7 @@ import {
   cleanupWorkspace,
   fitDiff,
   git,
+  GIT_NO_CONFIG,
   gitEnvironment,
   harvestWorkspace,
   prepareWorkspace,
@@ -249,8 +250,7 @@ describe("workspace", () => {
       LANG: "C.UTF-8",
       GIT_TERMINAL_PROMPT: "0",
       GIT_CONFIG_NOSYSTEM: "1",
-      // Git for Windows reads /dev/null as its NUL device too.
-      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
     });
   });
 
@@ -294,9 +294,9 @@ describe("workspace", () => {
       ws.dir,
       outer,
     );
-    // git writes paths with forward slashes on Windows too.
-    const [gitDir, top, isBare] = where.stdout.trim().split("\n");
-    expect([path.resolve(gitDir!), path.resolve(top!), isBare]).toEqual([
+    // git prints C:/… on Windows; path.resolve gives the platform's own separators.
+    const [gitDir, top, ...rest] = where.stdout.trim().split("\n");
+    expect([path.resolve(gitDir ?? ""), path.resolve(top ?? ""), ...rest]).toEqual([
       path.join(await realpath(ws.dir), ".git"),
       await realpath(ws.dir),
       "false",

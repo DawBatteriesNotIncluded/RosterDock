@@ -8,7 +8,6 @@
 // credentials.
 
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -57,17 +56,19 @@ const GIT_ENV_KEYS = [
 ];
 
 /**
- * git's environment: the keys above, no prompt, and no system or global config (a credential helper, an
- * include, a ~/.gitconfig an earlier run wrote). The global config is /dev/null on Windows too, where Git
- * for Windows reads that name as its NUL device; it refuses the name Node gives NUL there (`\\.\nul`).
+ * The global config git reads: none. Not os.devNull, which is \\.\nul on Windows and a path Git for Windows
+ * refuses to read config from; it takes /dev/null as the null device itself.
  */
+export const GIT_NO_CONFIG = "/dev/null";
+
+/** git's environment: the keys above, no prompt, and no system or global config (a credential helper, an include, a ~/.gitconfig an earlier run wrote). */
 export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of GIT_ENV_KEYS) {
     const v = env[key];
     if (v !== undefined) out[key] = v;
   }
-  return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+  return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: GIT_NO_CONFIG };
 }
 
 /**
@@ -77,18 +78,8 @@ export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<str
  */
 const GIT_KEY_ALLOWED = /^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL|DATE)$/;
 
-/**
- * Every command: no fsmonitor and no hooks, whatever the repository's config says. git looks for hooks
- * where there can be none: under /dev/null, which is no directory; on Windows, which has no such path, in
- * a directory that does not exist, under a name made up for each command.
- */
-function gitSafeArgs(): string[] {
-  const hooks =
-    process.platform === "win32"
-      ? path.join(os.tmpdir(), `rosterdock-no-hooks-${randomUUID()}`)
-      : "/dev/null";
-  return ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${hooks}`];
-}
+/** Every command: no fsmonitor and no hooks, whatever the repository's config says. */
+const GIT_SAFE_ARGS = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${os.devNull}`];
 
 /**
  * Run git with gitEnvironment; `extraEnv` is for the worker's own tests (an author for a commit). An abort
@@ -105,7 +96,7 @@ export function git(
     if (signal?.aborted) return resolve({ code: null, stdout: "", stderr: "stopped" });
     // Its own process group where there are groups, so a stop reaches the helpers too.
     const group = process.platform !== "win32";
-    const child = spawn("git", [...gitSafeArgs(), ...args], {
+    const child = spawn("git", [...GIT_SAFE_ARGS, ...args], {
       cwd,
       env: {
         ...gitEnvironment(),
@@ -185,7 +176,7 @@ export async function prepareWorkspace(
   signal?: AbortSignal,
 ): Promise<Workspace> {
   const dir = path.join(workRoot, runId);
-  // Retried: Windows removes no directory a process (git ending after a stop, a virus scan) still holds.
+  // Retried as cleanupWorkspace is: a git just stopped in it holds the directory a moment on Windows (EBUSY).
   await rm(dir, { recursive: true, force: true, maxRetries: 3 });
   await mkdir(dir, { recursive: true });
   if (!project.repoUrl) return { dir, repo: false };
@@ -324,10 +315,13 @@ async function readInWorkspace(
     }
     const handle = await open(at, READ_FLAGS);
     try {
-      // The file opened must be the one checked above: the same device and file id, compared whole (an
-      // NTFS file id does not fit in a number), and a real id, since 0 (none) would match any file.
+      // The file opened must be the one checked above. Its file id is compared whole (an NTFS id does not fit
+      // in a number) and must be a real one: 0, none, would match any file. On Windows a stat by path
+      // reports device 0 and one by handle the volume's serial, so only the file id compares there; realpath
+      // above has already kept the file on the workspace's volume.
       const s = await handle.stat({ bigint: true });
-      if (s.ino === 0n || s.dev !== last.dev || s.ino !== last.ino) {
+      const sameDev = process.platform === "win32" || s.dev === last.dev;
+      if (!sameDev || s.ino === 0n || s.ino !== last.ino) {
         refused.push(rel);
         return null;
       }

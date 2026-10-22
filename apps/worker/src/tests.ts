@@ -68,9 +68,8 @@ export const execCommand: Exec = (command, args, opts) =>
     const child = spawn(command, args, {
       cwd: opts.cwd,
       env: { ...opts.env, CI: "1" },
-      // npm, pnpm and yarn are .cmd shims on Windows, which only cmd.exe runs; the arguments are fixed
-      // strings. A program (.exe) starts on its own and gets its arguments as they are.
-      shell: win && !/\.exe$/i.test(command),
+      // npm, pnpm and yarn are .cmd shims on Windows; the arguments are fixed strings.
+      shell: win,
       windowsHide: true,
     });
     let output = "";

@@ -252,19 +252,6 @@ their own, each with its own database and workers.
   sha256 the review recorded and applied with `git apply`, which writes nothing outside the clone, into
   `.git` or through a link. A round that would leave a link in the clone is undone, and the run starts
   from the clean clone instead.
-- A worker run natively on Windows (`pnpm dev:worker` there, not in Docker or WSL2) keeps the rules above by
-  other means. git's global config is `/dev/null`, which Git for Windows reads as its NUL device, and git
-  looks for hooks in a directory that does not exist, under a name made up for each command. Windows looks
-  for a program in the directory it starts in before PATH; the worker turns that off
-  (`NoDefaultCurrentDirectoryInExePath`), so a `git.exe` or `claude.exe` in a clone never runs in place of
-  the real one. Windows has no `O_NOFOLLOW`: a symbolic link or a junction anywhere on a file's way is
-  refused, and the file is read only when the one opened has the file id of the one checked. A stopped git
-  ends with the helpers it started (`taskkill /t`, where Linux has the process group), and a test past its
-  time limit with everything cmd.exe started for it. File modes do nothing there: the MCP config that
-  carries the run token is private because the temp directory is, as a user's profile is. What does not
-  carry over is the pod: the engine, its shell and the repository's tests run as your Windows user, with
-  your files, your credentials and your other programs within reach, and nothing they leave ends with the
-  run. Run anything but your own repositories in Docker or WSL2.
 
 ## The board
 
