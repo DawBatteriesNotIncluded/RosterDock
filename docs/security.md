@@ -251,7 +251,10 @@ their own, each with its own database and workers.
 - A run sent back with changes requested starts from that round only as its diff, checked against the
   sha256 the review recorded and applied with `git apply`, which writes nothing outside the clone, into
   `.git` or through a link. A round that would leave a link in the clone is undone, and the run starts
-  from the clean clone instead.
+  from the clean clone instead. The worker finds such a link by reading the whole clone, a submodule's
+  folder included, where git status and git clean never look; the undo empties those folders again, as
+  the clone left them. A round that copies or renames a file is refused before it is applied: the
+  harvest's diffs never do, and a copy could carry a link the repository holds into such a folder.
 
 ## The board
 
