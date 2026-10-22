@@ -78,7 +78,10 @@ export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<str
  */
 const GIT_KEY_ALLOWED = /^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL|DATE)$/;
 
-/** Every command: no fsmonitor and no hooks, whatever the repository's config says. */
+/**
+ * Every command: no fsmonitor and no hooks, whatever the repository's config says. Hooks are looked for under
+ * the null device, where no file can be: on Windows too (`\\.\nul`), though git refuses it as a config file.
+ */
 const GIT_SAFE_ARGS = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${os.devNull}`];
 
 /**
