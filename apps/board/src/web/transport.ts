@@ -57,20 +57,18 @@ export function guardedLookup(resolve: Resolve, allow?: PrivateDestinations): Lo
   };
 }
 
-/** The body as it arrives, decoded when the server compressed it. */
-function decoded(res: http.IncomingMessage): Readable {
+/** A decoder for the encoding the server names, or null when the body is sent as it is. */
+function decoderFor(res: http.IncomingMessage): zlib.Gunzip | zlib.Inflate | zlib.BrotliDecompress | null {
   const encoding = String(res.headers["content-encoding"] ?? "")
     .trim()
     .toLowerCase();
-  const decoder =
-    encoding === "gzip" || encoding === "x-gzip"
-      ? zlib.createGunzip()
-      : encoding === "deflate"
-        ? zlib.createInflate()
-        : encoding === "br"
-          ? zlib.createBrotliDecompress()
-          : null;
-  return decoder ? pipeline(res, decoder, () => {}) : res;
+  return encoding === "gzip" || encoding === "x-gzip"
+    ? zlib.createGunzip()
+    : encoding === "deflate"
+      ? zlib.createInflate()
+      : encoding === "br"
+        ? zlib.createBrotliDecompress()
+        : null;
 }
 
 /** What the web reader never needs and a company's destinations may: an address in the URL, kept connections. */
@@ -158,7 +156,15 @@ export function pinnedFetch(lookup: LookupFunction, opts: PinnedOptions = {}): t
               for (const v of [value ?? []].flat()) out.append(name, v);
             const empty = status === 204 || status === 205 || status === 304 || method === "HEAD";
             if (empty) res.on("error", () => {}).resume();
-            const stream = empty ? null : (Readable.toWeb(decoded(res)) as ReadableStream<Uint8Array>);
+            // Decoded as it is read, so a reader that stops early stops the decoding too. What arrives is no
+            // longer what the server's length and encoding described.
+            const decoder = empty ? null : decoderFor(res);
+            if (decoder) {
+              out.delete("content-encoding");
+              out.delete("content-length");
+            }
+            const source: Readable = decoder ? pipeline(res, decoder, () => {}) : res;
+            const stream = empty ? null : (Readable.toWeb(source) as ReadableStream<Uint8Array>);
             resolve(new Response(stream, { status, statusText: res.statusMessage ?? "", headers: out }));
           } catch (err) {
             res.destroy();

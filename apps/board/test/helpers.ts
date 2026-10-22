@@ -15,7 +15,10 @@ import { migrate } from "../src/db/migrate.js";
 import { NO_PRIVATE_DESTINATIONS, parsePrivateDestinations, type Resolve } from "../src/web/address.js";
 import type { Egress } from "../src/web/egress.js";
 
-/** What a name resolves to in a test that does not say: an address the board's guard takes as public. */
+/**
+ * What a name resolves to in a test that does not say: an address the board's guard takes as public. Only a
+ * fake transport is ever handed it; a test with real sockets resolves its names to 127.0.0.1 itself.
+ */
 export const PUBLIC_TEST_ADDRESS = "93.184.215.14";
 
 /**

@@ -41,6 +41,10 @@ export interface SmtpTarget {
 }
 
 const ADDRESS_RE = /^[^\s<>@,;"]+@[^\s<>@,;"]+$/;
+/** RFC 5321 keeps a reply's line to 512 octets; this is generous, and bounds what a server can make the board hold. */
+const MAX_LINE = 1000;
+/** EHLO's is the longest reply a server sends here, a few dozen lines at most. */
+const MAX_REPLY_LINES = 100;
 
 export function parseSmtpUrl(raw: string): SmtpTarget {
   let url: URL;
@@ -125,6 +129,7 @@ class Session {
   }
 
   private readonly onData = (chunk: string): void => {
+    if (this.failure) return;
     this.buffer += chunk;
     let i: number;
     while ((i = this.buffer.indexOf("\r\n")) >= 0) {
@@ -134,11 +139,19 @@ class Session {
         const w = this.waiter;
         this.waiter = null;
         w.resolve(line);
-      } else {
-        this.queue.push(line);
+      } else if (this.queue.push(line) > MAX_REPLY_LINES) {
+        return this.tooMuch("more lines than it was asked for");
       }
     }
+    // A server that never ends a line would otherwise fill the board's memory before the deadline.
+    if (this.buffer.length > MAX_LINE) this.tooMuch("a line longer than an SMTP reply's");
   };
+
+  private tooMuch(what: string): void {
+    const err = new SmtpError(`the server sent ${what}; the board read no further`);
+    this.fail(err);
+    this.live?.destroy(err);
+  }
   private readonly onError = (err: Error): void => this.fail(err);
   private readonly onClose = (): void => this.fail(new SmtpError("the server closed the connection"));
 
@@ -181,8 +194,10 @@ class Session {
     for (;;) {
       const l = await this.line();
       const m = /^(\d{3})([ -]?)(.*)$/.exec(l);
-      if (!m) throw new SmtpError(`the server sent something that is not a reply: ${l.slice(0, 80)}`);
-      lines.push(m[3]!);
+      // Not quoted: a company could point its SMTP URL at another service and read its banner here.
+      if (!m) throw new SmtpError("the server answered with something that is not an SMTP reply");
+      if (lines.push(m[3]!) > MAX_REPLY_LINES)
+        throw new SmtpError(`the server sent a reply of more than ${MAX_REPLY_LINES} lines`);
       if (m[2] !== "-") return { code: Number(m[1]), lines };
     }
   }

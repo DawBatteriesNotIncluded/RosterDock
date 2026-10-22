@@ -311,7 +311,7 @@ async function post(
   // A company's webhook follows no redirect: its URL may carry a token, and the post goes there or nowhere.
   const doFetch = target.operator
     ? (deps.fetch ?? fetch)
-    : egressFetch(deps.egress ?? defaultEgress(), { redirect: "error", timeoutMs });
+    : egressFetch(deps.egress ?? defaultEgress(), { redirect: "error", timeoutMs, maxBytes: 64 * 1024 });
   try {
     const res = await doFetch(target.url, {
       method: "POST",
@@ -319,6 +319,8 @@ async function post(
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });
+    // Only the status matters; the body is never read.
+    await res.body?.cancel().catch(() => {});
     if (!res.ok)
       return { sent: false, target: target.source, error: `the webhook answered HTTP ${res.status}` };
     return { sent: true, target: target.source, error: null };

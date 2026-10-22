@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { callConnectionTool } from "../src/mcp/call.js";
 import { loadConnection } from "../src/mcp/connections.js";
 import {
+  authorizationUrl,
   discoverAuthorizationServer,
   discoverResource,
   OAuthError,
@@ -57,13 +58,34 @@ const oauth = createOAuthFake({
   inner: mcp.fetch,
   issuer: "https://auth.intranet.test",
 });
+// One whose authorization server is public, for a row that kept a resource from before the origin check.
+const reauth = createOAuthFake({
+  mcpUrl: "https://mcp.reauth.test/mcp",
+  inner: mcp.fetch,
+  issuer: "https://auth.reauth.test",
+});
 const style = STYLE_PACKS.find((p) => p.id === "caveman")!;
 /** Answered with a redirect, by URL. */
 const redirects: Record<string, [number, string]> = {
   "https://mcp.moved.test/mcp": [307, "http://169.254.169.254/mcp"],
+  "https://mcp.slash.test/mcp": [308, "https://mcp.slash.test/mcp/"],
   "https://crm.moved.test/v1": [302, "http://10.0.0.1/"],
   "https://crm.moved.test/v1/contacts": [307, "https://crm.example.test/v1/contacts"],
   "https://hooks.moved.test/services/T0/B0/secret-000": [308, "http://10.0.0.1/hook"],
+};
+/** Answered with this JSON, by URL: metadata a test writes for itself. */
+const documents: Record<string, unknown> = {
+  "https://mcp.script.test/.well-known/oauth-protected-resource/mcp": {
+    resource: "https://mcp.script.test/mcp",
+    authorization_servers: ["https://auth.script.test"],
+  },
+  "https://auth.script.test/.well-known/oauth-authorization-server": {
+    issuer: "https://auth.script.test",
+    authorization_endpoint: "javascript:fetch('/api/companies').then((r) => r.text())//",
+    token_endpoint: "https://auth.script.test/token",
+    registration_endpoint: "https://auth.script.test/register",
+    code_challenge_methods_supported: ["S256"],
+  },
 };
 /** Every URL the transport was asked for: what the board sent. */
 const sent: string[] = [];
@@ -72,11 +94,14 @@ const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
   sent.push(url);
   const moved = redirects[url];
   if (moved) return new Response(null, { status: moved[0], headers: { location: moved[1] } });
+  if (url in documents)
+    return new Response(JSON.stringify(documents[url]), { headers: { "content-type": "application/json" } });
   const host = new URL(url).hostname;
   if (host.startsWith("crm.")) return crm.fetch(input, init);
   if (host.startsWith("hooks.")) return new Response("ok", { status: 200 });
   if (host === "raw.githubusercontent.com") return new Response("not the pinned file", { status: 200 });
   if (host === "mcp.oauth.test" || host === "auth.intranet.test") return oauth.fetch(input, init);
+  if (host === "mcp.reauth.test" || host === "auth.reauth.test") return reauth.fetch(input, init);
   return mcp.fetch(input, init);
 }) as typeof fetch;
 
@@ -90,7 +115,7 @@ beforeAll(async () => {
     {
       privateDestinations: parsePrivateDestinations("mcp.allowed.test,10.9.0.0/16"),
       notifyWebhookUrl: "https://hooks.board.test/own",
-      sharedEnvNames: ["GTM_HOOK", "GTM_SMTP"],
+      sharedEnvNames: ["GTM_HOOK", "GTM_SMTP", "SLASH_MCP_TOKEN"],
       secretStore: { kind: "file", dir },
     },
     {
@@ -134,7 +159,7 @@ describe("a company's MCP server over HTTP", () => {
       [
         "moved",
         "https://mcp.moved.test/mcp",
-        "mcp.moved.test answered 307, a redirect to 169.254.169.254, which the board does not follow here: use the address it points to",
+        "mcp.moved.test answered 307, a redirect to http://169.254.169.254, which the board does not follow here: use the address it points to",
       ],
     ];
     sent.length = 0;
@@ -148,6 +173,22 @@ describe("a company's MCP server over HTTP", () => {
     expect(sent).toEqual(["https://mcp.moved.test/mcp"]);
     const checks = await eventsOf(api, base, "connection.checked");
     expect(checks.map((e) => e.payload.error).sort()).toEqual(cases.map((c) => c[2]).sort());
+  });
+
+  it("follows its server's own redirect, /mcp to /mcp/, with the bearer, as it did before the check", async () => {
+    const { api, base } = await seedCompany(board, "egress-slash@example.com");
+    env.SLASH_MCP_TOKEN = "slash-token-000000";
+    const created = await api.post(`${base}/connections`, {
+      name: "slash",
+      transport: "http",
+      url: "https://mcp.slash.test/mcp",
+      authEnvName: "SLASH_MCP_TOKEN",
+    });
+    mcp.requests.length = 0;
+    const checked = await api.post(`${base}/connections/${created.body.id}/check`, {});
+    expect(checked.body.lastCheck).toMatchObject({ ok: true, error: null });
+    expect(mcp.requests.every((r) => r.url === "https://mcp.slash.test/mcp/")).toBe(true);
+    expect(mcp.requests[0]!.headers.authorization).toBe("Bearer slash-token-000000");
   });
 
   it("reaches what the operator lists, a name or a range, and nothing beside it; a tool call is held to the same", async () => {
@@ -237,7 +278,7 @@ describe("a company's OpenAPI service", () => {
     expect(await call(moved)).toEqual({
       ok: false,
       error:
-        "list_contacts could not reach the service: crm.moved.test answered 307, a redirect to crm.example.test, which the board does not follow here: use the address it points to",
+        "list_contacts could not reach the service: crm.moved.test answered 307, a redirect to https://crm.example.test, which the board does not follow here: use the address it points to",
     });
     expect(sent).toEqual(["https://crm.moved.test/v1", "https://crm.moved.test/v1/contacts"]);
   });
@@ -260,6 +301,148 @@ describe("OAuth for a company's connection", () => {
     );
     // The resource metadata was read; nothing reached the authorization server.
     expect(sent).toEqual(["https://mcp.oauth.test/.well-known/oauth-protected-resource/mcp"]);
+  });
+
+  it("sends a person only to a web page, and calls only https or a listed server, whatever the metadata says", async () => {
+    resetOAuthCaches();
+    const { api, base } = await seedCompany(board, "egress-oauth-script@example.com");
+    const created = await api.post(`${base}/connections`, {
+      name: "scripted",
+      url: "https://mcp.script.test/mcp",
+      oauth: {},
+    });
+    const start = await api.post(`${base}/connections/${created.body.id}/oauth/start`, {});
+    expect(start.status).toBe(502);
+    expect(start.body).toEqual({
+      error: "auth.script.test names an authorization endpoint that is a javascript URL, not https",
+    });
+    // The same rules where the metadata is read.
+    const metadata: Record<string, Record<string, unknown>> = {};
+    const fake = (async (input: RequestInfo | URL) => {
+      const doc = metadata[String(input)];
+      return doc
+        ? new Response(JSON.stringify(doc), { headers: { "content-type": "application/json" } })
+        : new Response("{}", { status: 404 });
+    }) as typeof fetch;
+    const deps = (allow?: string) => ({ egress: testEgress(fake, { resolve, allow }), log: { warn() {} } });
+    const server = (issuer: string, endpoints: Record<string, string>) => {
+      metadata[`${issuer}/.well-known/oauth-authorization-server`] = {
+        issuer,
+        authorization_endpoint: `${issuer}/authorize`,
+        token_endpoint: `${issuer}/token`,
+        ...endpoints,
+      };
+    };
+    server("https://data.example.test", { authorization_endpoint: "data:text/html,<script>1</script>" });
+    server("https://plain.example.test", { token_endpoint: "http://plain.example.test/token" });
+    server("https://register.example.test", { registration_endpoint: "ftp://register.example.test/" });
+    server("http://dev.example.test", {});
+    await expect(discoverAuthorizationServer("https://data.example.test", deps())).rejects.toThrow(
+      "data.example.test names an authorization endpoint that is a data URL, not https",
+    );
+    await expect(discoverAuthorizationServer("https://plain.example.test", deps())).rejects.toThrow(
+      "plain.example.test names a token endpoint that is plain http to a server this board's operator does not list",
+    );
+    await expect(discoverAuthorizationServer("https://register.example.test", deps())).rejects.toThrow(
+      "register.example.test names a registration endpoint that is a ftp URL, not https",
+    );
+    await expect(discoverAuthorizationServer("http://dev.example.test", deps())).rejects.toThrow(
+      "the authorization server's address is plain http to a server this board's operator does not list",
+    );
+    // Plain http to a server the operator lists, such as one on this machine in development, is taken.
+    expect(
+      (await discoverAuthorizationServer("http://dev.example.test", deps("dev.example.test"))).token_endpoint,
+    ).toBe("http://dev.example.test/token");
+    // The resource metadata: its authorization server is held to the same, and it speaks for its own origin only.
+    const resourceAt = (mcp: string, doc: Record<string, unknown>) => {
+      const u = new URL(mcp);
+      metadata[`${u.origin}/.well-known/oauth-protected-resource${u.pathname}`] = doc;
+    };
+    resourceAt("https://one.example.test/mcp", { authorization_servers: ["javascript:alert(1)"] });
+    resourceAt("https://two.example.test/mcp", {
+      authorization_servers: ["https://auth.example.test"],
+      resource: "https://api.othervendor.test/mcp",
+    });
+    resourceAt("https://three.example.test/mcp", {
+      authorization_servers: ["https://auth.example.test"],
+      resource: "https://three.example.test",
+    });
+    await expect(discoverResource("https://one.example.test/mcp", deps())).rejects.toThrow(
+      "one.example.test names an authorization server that is a javascript URL, not https",
+    );
+    await expect(discoverResource("https://two.example.test/mcp", deps())).rejects.toThrow(
+      "two.example.test declares itself a resource on another server",
+    );
+    expect(await discoverResource("https://three.example.test/mcp", deps())).toMatchObject({
+      authorizationServer: "https://auth.example.test",
+      resource: "https://three.example.test",
+    });
+    // Plain http to a name whose every address is in a listed range is taken, as for a connection.
+    names["keycloak.ranged.test"] = ["10.40.0.5"];
+    server("http://keycloak.ranged.test", {});
+    expect(
+      (await discoverAuthorizationServer("http://keycloak.ranged.test", deps("10.40.0.0/16"))).token_endpoint,
+    ).toBe("http://keycloak.ranged.test/token");
+    resetOAuthCaches();
+    await expect(
+      discoverAuthorizationServer("http://keycloak.ranged.test", deps("10.41.0.0/16")),
+    ).rejects.toThrow(
+      "the authorization server's address is plain http to a server this board's operator does not list",
+    );
+    delete names["keycloak.ranged.test"];
+    // An issuer or a token endpoint a row kept from before these checks is held to them before anything goes there.
+    await expect(discoverAuthorizationServer("javascript:alert(1)", deps())).rejects.toThrow(
+      "the authorization server's address is a javascript URL, not https",
+    );
+    await expect(
+      refreshTokens(
+        "http://plain.example.test/token",
+        { clientId: "c", clientSecret: "s", refreshToken: "r", resource: "https://mcp.example.test/mcp" },
+        deps(),
+      ),
+    ).rejects.toThrow("the token endpoint is plain http to a server this board's operator does not list");
+    // And where the consent URL is built, whatever reached it.
+    expect(() =>
+      authorizationUrl(
+        {
+          issuer: "https://x.test",
+          authorization_endpoint: "javascript:alert(1)",
+          token_endpoint: "https://x.test/t",
+        },
+        {
+          clientId: "c",
+          redirectUri: "http://rosterdock.test/cb",
+          scopes: [],
+          state: "s",
+          verifier: "v",
+          resource: "r",
+        },
+      ),
+    ).toThrow("x.test names an authorization endpoint that is not a web page");
+  });
+
+  it("discovers again a resource a connection kept on another server's origin from before the check", async () => {
+    resetOAuthCaches();
+    const { api, base, companyId } = await seedCompany(board, "egress-oauth-kept@example.com");
+    const created = await api.post(`${base}/connections`, {
+      name: "kept",
+      url: "https://mcp.reauth.test/mcp",
+      oauth: {},
+    });
+    expect((await api.post(`${base}/connections/${created.body.id}/oauth/start`, {})).status).toBe(200);
+    // What a row kept before: another service's resource.
+    await board.db.query(
+      `UPDATE connections SET oauth = jsonb_set(oauth, '{resource}', '"https://api.other.test/mcp"') WHERE id = $1 AND company_id = $2`,
+      [created.body.id, companyId],
+    );
+    const again = await api.post(`${base}/connections/${created.body.id}/oauth/start`, {});
+    expect(again.status).toBe(200);
+    expect(new URL(again.body.url).searchParams.get("resource")).toBe("https://mcp.reauth.test/mcp");
+    const kept = await board.db.query<{ resource: string | null }>(
+      "SELECT oauth->>'resource' AS resource FROM connections WHERE id = $1",
+      [created.body.id],
+    );
+    expect(kept.rows[0]!.resource).toBe("https://mcp.reauth.test/mcp");
   });
 
   it("follows discovery's redirects with every hop checked, follows none for registration or a token, and reaches a listed server", async () => {
@@ -299,7 +482,7 @@ describe("OAuth for a company's connection", () => {
     );
     expect(registered).toBeInstanceOf(OAuthError);
     expect((registered as OAuthError).message).toBe(
-      "could not reach the registration endpoint: auth.example.test answered 307, a redirect to another address on the same host, which the board does not follow here: use the address it points to",
+      "could not reach the registration endpoint: auth.example.test answered 307, a redirect to another address on the same server, which the board does not follow here: use the address it points to",
     );
     const refresh = (endpoint: string) =>
       refreshTokens(
@@ -308,7 +491,7 @@ describe("OAuth for a company's connection", () => {
         deps,
       );
     await expect(refresh("https://auth.example.test/token")).rejects.toThrow(
-      "could not reach the token endpoint: auth.example.test answered 308, a redirect to tokens.example.test, which the board does not follow here",
+      "could not reach the token endpoint: auth.example.test answered 308, a redirect to https://tokens.example.test, which the board does not follow here",
     );
     await expect(refresh("https://auth.intranet.test/token")).rejects.toThrow(
       `could not reach the token endpoint: refused: auth.intranet.test resolves to a private address, ${NOT_ALLOWED}`,
@@ -357,7 +540,7 @@ describe("a company's notifications", () => {
       sent: false,
       target: "GTM_HOOK",
       error:
-        "hooks.moved.test answered 308, a redirect to 10.0.0.1, which the board does not follow here: use the address it points to",
+        "hooks.moved.test answered 308, a redirect to http://10.0.0.1, which the board does not follow here: use the address it points to",
     });
     expect(JSON.stringify(moved)).not.toContain("secret-000");
     expect(sent).toEqual(["https://hooks.moved.test/services/T0/B0/secret-000"]);

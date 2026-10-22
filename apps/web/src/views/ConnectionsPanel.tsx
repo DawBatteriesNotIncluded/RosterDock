@@ -9,6 +9,13 @@
 import { Activity, KeyRound, Plug, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import type { CreateConnectionInput, CreateOpenApiConnectionInput } from "@rosterdock/shared";
+import {
+  isAddress,
+  nameListed,
+  parsePrivateDestinations,
+  refuseDestination,
+  type PrivateDestinations,
+} from "@rosterdock/shared/address";
 import type {
   CatalogEntry,
   CompanySecret,
@@ -152,40 +159,17 @@ export function stdioListed(lines: readonly string[], typed: string): boolean {
   });
 }
 
-/** An IPv4 address as a number, or null. */
-function v4(address: string): number | null {
-  const parts = address.split(".");
-  if (parts.length !== 4 || !parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255)) return null;
-  return parts.reduce((n, p) => n * 256 + Number(p), 0);
-}
-
-/** Whether an IPv4 address is in a range written as `a.b.c.d/n` (or is the address itself). */
-function inV4Range(address: number, range: string): boolean {
-  const [base, bitsText] = range.split("/");
-  const start = v4(base ?? "");
-  const bits = bitsText === undefined ? 32 : Number(bitsText);
-  if (start === null || !(bits >= 0 && bits <= 32)) return false;
-  const size = 2 ** (32 - bits);
-  return Math.floor(address / size) === Math.floor(start / size);
-}
-
-const PRIVATE_V4 = [
-  "0.0.0.0/8",
-  "10.0.0.0/8",
-  "100.64.0.0/10",
-  "127.0.0.0/8",
-  "169.254.0.0/16",
-  "172.16.0.0/12",
-  "192.168.0.0/16",
-];
+// Names that usually lead inside a network. Only resolving one tells, which the board does and the browser
+// cannot, so for a name the flag says what would happen, not that it will.
 const LOCAL_SUFFIXES = [".localhost", ".local", ".internal", ".lan", ".home.arpa", ".svc", ".cluster.local"];
 
 /**
- * Whether a URL's host looks private and the operator's list does not name it: an address in a private,
- * loopback or link-local range, localhost, a name of one label or under a local suffix. The board decides by
- * what a name resolves to; this only says so before its check does.
+ * What the board will do with a URL's host, as far as the browser can tell, by the board's own rules
+ * (@rosterdock/shared/address): `refused`, an address it does not take and the operator's list does not
+ * cover; `unless-listed`, a name that looks private and no entry names, so it is refused if it resolves to a
+ * private address outside the listed ranges; null, nothing to say.
  */
-export function privateUnlisted(url: string, listed: readonly string[]): boolean {
+export function privateFlag(url: string, listed: readonly string[]): "refused" | "unless-listed" | null {
   let host: string;
   try {
     host = new URL(url).hostname
@@ -193,33 +177,52 @@ export function privateUnlisted(url: string, listed: readonly string[]): boolean
       .replace(/^\[|\]$/g, "")
       .replace(/\.$/, "");
   } catch {
-    return false;
+    return null;
   }
-  if (!host) return false;
-  const entries = listed.map((e) => e.toLowerCase().replace(/^\[|\](?=\/|$)/g, ""));
-  const address = v4(host);
-  if (address !== null)
-    return PRIVATE_V4.some((r) => inV4Range(address, r)) && !entries.some((e) => inV4Range(address, e));
-  if (host.includes(":")) {
-    const looks = host === "::1" || host === "::" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host);
-    return looks && !entries.includes(host);
+  if (!host) return null;
+  // The board read every entry at boot; one this page cannot read is left out, not the whole list.
+  const allow: PrivateDestinations = { names: [], ranges: [], entries: [] };
+  for (const entry of listed) {
+    try {
+      const one = parsePrivateDestinations(entry);
+      allow.names.push(...one.names);
+      allow.ranges.push(...one.ranges);
+    } catch {
+      // not one the board would have started with
+    }
   }
+  if (isAddress(host)) return refuseDestination(host, allow) ? "refused" : null;
   const looks = host === "localhost" || !host.includes(".") || LOCAL_SUFFIXES.some((s) => host.endsWith(s));
-  return (
-    looks &&
-    !entries.some((e) =>
-      e.startsWith("*.") ? host.endsWith(e.slice(1)) && host.length > e.length - 1 : e === host,
-    )
-  );
+  return looks && !nameListed(host, allow) ? "unless-listed" : null;
 }
 
-/** Under a URL the board would refuse: what this board reaches, and who changes it. */
-function PrivateHint({ listed }: { listed: readonly string[] }) {
+/** The consent page the board names, only when it is a web page: a script URL would run in this page. */
+export function consentUrl(url: string): string {
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(url);
+  } catch {
+    // not a URL at all
+  }
+  if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:"))
+    throw new Error("The board named a consent page that is not a web page; nothing was opened.");
+  return parsed.toString();
+}
+
+/** What the operator's list is, for a person to read. */
+function listedPhrase(listed: readonly string[]): string {
+  return listed.length ? listed.join(" · ") : "none";
+}
+
+/** Under a URL the board refuses, or would if its name resolves privately: what this board reaches, and who changes it. */
+function PrivateHint({ flag, listed }: { flag: "refused" | "unless-listed"; listed: readonly string[] }) {
   return (
     <span className="hint" style={{ color: "var(--warn-ink)" }}>
-      This board reaches public addresses, and private ones only where its operator lists them
-      {listed.length ? `: ${listed.join(" · ")}` : ": none so far"}. A connection here is refused until the
-      operator adds it (board.privateDestinations on the chart, or ROSTERDOCK_PRIVATE_DESTINATIONS).
+      {flag === "refused"
+        ? "The board refuses this address: it is not public, and no private destination its operator lists covers it."
+        : "This name looks private. If it resolves to a private address, the board refuses it unless its operator lists the name, or a range its address is in."}{" "}
+      Private destinations here: {listedPhrase(listed)} (board.privateDestinations on the chart, or
+      ROSTERDOCK_PRIVATE_DESTINATIONS).
     </span>
   );
 }
@@ -261,9 +264,9 @@ function AddMcpForm({
   /** A stdio server runs inside the board, so only a command line the operator lists. */
   const stdioRefused =
     transport === "stdio" && stdioCommands !== undefined && !stdioListed(stdioCommands, command);
-  /** The server looks private and the operator lists it nowhere: its check and calls will be refused. */
-  const privateRefused =
-    transport === "http" && privateDestinations !== undefined && privateUnlisted(url, privateDestinations);
+  /** The server's address is refused, or would be if its name resolves privately. */
+  const privateNote =
+    transport === "http" && privateDestinations !== undefined ? privateFlag(url, privateDestinations) : null;
   /** The name a typed value would be set under: the client secret's for OAuth, else the credential's. */
   const secretTarget = byOAuth
     ? clientId.trim()
@@ -340,7 +343,7 @@ function AddMcpForm({
                     : " · its command must be one the operator allows"
                 : e.transport === "http" &&
                     privateDestinations &&
-                    privateUnlisted(e.urlExample ?? "", privateDestinations)
+                    privateFlag(e.urlExample ?? "", privateDestinations)
                   ? " · usually on a private address, which the operator must allow"
                   : ""}
             </option>
@@ -386,7 +389,7 @@ function AddMcpForm({
           </datalist>
         </Field>
       )}
-      {privateRefused ? <PrivateHint listed={privateDestinations ?? []} /> : null}
+      {privateNote ? <PrivateHint flag={privateNote} listed={privateDestinations ?? []} /> : null}
       {stdioRefused ? (
         <span className="hint" style={{ color: "var(--warn-ink)" }}>
           {stdioCommands?.length
@@ -565,8 +568,8 @@ function AddOpenApiForm({
             style={{ width: 240 }}
           />
         </Field>
-        {privateDestinations && privateUnlisted(url, privateDestinations) ? (
-          <PrivateHint listed={privateDestinations} />
+        {privateDestinations && privateFlag(url, privateDestinations) ? (
+          <PrivateHint flag={privateFlag(url, privateDestinations)!} listed={privateDestinations} />
         ) : null}
         <Field label="Credential env var NAME">
           <input
@@ -933,6 +936,9 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
           Approvals. Credentials are env var names: this company&apos;s secrets, or names the board shares
           {p.features?.sharedEnvNames ? ` (${p.features.sharedEnvNames.join(", ") || "none"})` : ""}; the rest
           of the board&apos;s environment never reaches a company, and no value is stored here.
+          {p.features?.privateDestinations
+            ? ` A connection reaches public addresses, and of private ones only those this board's operator lists: ${listedPhrase(p.features.privateDestinations)}.`
+            : ""}
           {p.features?.oauth
             ? " A value can be set under its name below; it goes into the board's secret store and is never shown again. A connection may authorise by OAuth instead; its tokens live in the same store."
             : ""}
@@ -966,7 +972,7 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
                         variant={c.oauth.authorizedAt ? "ghost" : "accent"}
                         onClick={wrap(async () => {
                           const { url } = await p.startOAuth(c.id);
-                          window.location.assign(url);
+                          window.location.assign(consentUrl(url));
                         })}
                       >
                         <KeyRound size={14} />

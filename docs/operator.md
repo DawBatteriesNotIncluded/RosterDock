@@ -185,9 +185,13 @@ governs. The web is one too.
   connect over HTTP.
 - **The Playwright browser** as a service: the `mcr.microsoft.com/playwright/mcp` image, or
   `npx -y @playwright/mcp@0.0.83 --headless --isolated --browser chromium --port 8931 --host 0.0.0.0` with
-  `--allowed-hosts` naming the service, in a pod whose network policy reaches public addresses only; then a
-  connection to `http://<service>:8931/mcp`, with the service's name in `board.privateDestinations` (Private
-  destinations, below). Snapshots and screenshots read; navigating, clicking and typing
+  `--allowed-hosts` naming the service as the board reaches it, port included
+  (`playwright-mcp.tools.svc.cluster.local:8931`), in a pod whose network policy reaches public addresses
+  only; then a
+  connection to `http://playwright-mcp.<namespace>.svc.cluster.local:8931/mcp` (the catalog's example), with
+  that name, as the URL writes it, in `board.privateDestinations` and port 8931 in
+  `networkPolicy.board.egressPorts` (Private destinations, below). Snapshots and screenshots read; navigating,
+  clicking and typing
   are writes, as the server marks them, so under a read grant the browser can only look at the page it is on.
   To let teammates move between pages without asking, a person flips `browser_navigate` and
   `browser_navigate_back` to read on the connection's card; clicks and typing stay writes, proposed for a
@@ -212,23 +216,36 @@ network is listed in `board.privateDestinations` (`ROSTERDOCK_PRIVATE_DESTINATIO
 ```yaml
 board:
   privateDestinations:
-    - "playwright-mcp.tools.svc.cluster.local" # one service
-    - "*.ai.svc.cluster.local" # every service in a namespace of yours
+    - "playwright-mcp.tools.svc.cluster.local" # one service, by the name the connection's URL uses
+    - "*.ai.svc.cluster.local" # every service in a namespace only you create services in
     - "10.20.0.0/16" # a range, whatever name leads to it
+networkPolicy:
+  board:
+    egressPorts: [443, 80, 8931, 11434] # and the ports those services listen on
 ```
 
-- Every company on the board may use what you list, and a listed name is trusted with whatever it resolves
-  to: list services every company may reach, by names whose DNS you control.
+- A name is matched as the connection's URL writes it, without the pod's search domains: list
+  `playwright-mcp.tools.svc.cluster.local` and use that name in the URL. The short `playwright-mcp` is
+  another name, refused until it is listed too. A range is matched by address, whatever the name.
+- A listed name is trusted with whatever it resolves to. Never list a wildcard over the cluster's domain
+  (`*.cluster.local`, `*.svc.cluster.local`, `*.pod.cluster.local`): cluster DNS answers
+  `169-254-169-254.<namespace>.pod.cluster.local` with that address (CoreDNS's `pods insecure`, the default on
+  kubeadm, kind and EKS), and an ExternalName service is a CNAME to anywhere, so the wildcard would hand
+  every company the cloud's metadata service. List each service, or a namespace only you create services in.
+- Every company on the board may use what you list: list services every company may reach.
 - A connection that points at an unlisted private address fails its Check, and its calls fail, with
   "refused: … which this board's operator has not allowed"; Activity shows the same. Nothing else about it
-  changes: list the destination, or give the connection a public URL, and press Check. Owners and admins
-  adding a connection in Settings see your list, and a URL that looks private and is not on it is flagged
-  before they save it.
+  changes: list the destination, or give the connection a public URL, and press Check. Owners and admins see
+  your list under Settings > Connections, and the add form flags a URL whose address the board refuses, or
+  whose name looks private and is not listed.
 - Your own destinations are not checked: the git hosts, OIDC, OTLP, the bucket, the Kubernetes API, the model
   API, `board.notifySecret` and `board.notifyEmail`. A company that names its own webhook or SMTP server in
   Settings is checked.
 - The board does not start on an entry it cannot read (a typo, a range past /32 or /128).
-- The network policy (`networkPolicy.board.egressTo`) still applies on top; the check is the board's own.
+- The network policy still applies on top: with `networkPolicy.enabled`, a listed service's port must be in
+  `networkPolicy.board.egressPorts`, and `egressTo` narrows where the board goes. The check is the board's;
+  it judges an address by its range, so cluster addresses outside the private ranges look public to it
+  (`docs/security.md`), and only the network policy keeps companies from those.
 
 ## Upgrades and backups
 
@@ -258,9 +275,13 @@ board:
 - From a board before `ROSTERDOCK_PRIVATE_DESTINATIONS`, what a company chooses reaches public addresses
   only. A connection, its OAuth or a company's webhook or SMTP server at a private address (a service in
   the cluster, a host on your network) fails until `board.privateDestinations` lists it (Private
-  destinations, above), and a connection whose server answers with a redirect fails and names where it
-  pointed: give it that address. A local `apps/board/.env` copied before this change needs the
-  `ROSTERDOCK_PRIVATE_DESTINATIONS` line from `.env.example` to reach servers on your machine.
+  destinations, above). An MCP server that redirects within its own server with a 307 or 308 (`/mcp` to
+  `/mcp/`) is followed; a 301 or 302 (an http-to-https rule's) would turn the call into a GET, so it fails
+  and names the address to use. One that redirects to another server, and an OpenAPI operation or a webhook
+  that answers with any redirect, fails and names the server it pointed to: give the connection that
+  address. A
+  local `apps/board/.env` copied before this change needs the `ROSTERDOCK_PRIVATE_DESTINATIONS` line from
+  `.env.example` to reach servers on your machine.
 
 ## Environment reference
 

@@ -12,7 +12,7 @@ import type { ActorRef } from "@rosterdock/shared";
 import type { Db, Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate } from "../mutate.js";
-import { egressFetch, type Egress } from "../web/egress.js";
+import { egressFetch, readCapped, type Egress } from "../web/egress.js";
 import { rawUrl, STYLE_PACKS, vendoredPath, type StyleLevel, type StylePack } from "./catalog.js";
 
 const MAX_BYTES = 256 * 1024;
@@ -93,18 +93,30 @@ async function download(pack: StylePack, egress: Egress): Promise<{ sha256: stri
   const url = rawUrl(pack);
   let res: Response;
   try {
-    res = await egressFetch(egress, { redirect: "follow", timeoutMs: TIMEOUT_MS })(url);
+    res = await egressFetch(egress, { redirect: "follow", timeoutMs: TIMEOUT_MS, maxBytes: MAX_BYTES + 1 })(
+      url,
+    );
   } catch (err) {
     throw new HttpError(
       502,
       `could not download ${pack.label} from ${pack.source.repo}: ${(err as Error).message}`,
     );
   }
-  if (!res.ok)
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
     throw new HttpError(502, `could not download ${pack.label} from ${pack.source.repo}: HTTP ${res.status}`);
-  const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length > MAX_BYTES)
-    throw new HttpError(502, `${pack.label} is larger than a style file should be`);
+  }
+  let read: Awaited<ReturnType<typeof readCapped>>;
+  try {
+    read = await readCapped(res, MAX_BYTES);
+  } catch (err) {
+    throw new HttpError(
+      502,
+      `could not download ${pack.label} from ${pack.source.repo}: ${(err as Error).message}`,
+    );
+  }
+  if (read.cut) throw new HttpError(502, `${pack.label} is larger than a style file should be`);
+  const bytes = Buffer.from(read.bytes);
   const sha256 = sha256Of(bytes);
   if (sha256 !== pack.sha256)
     throw new HttpError(

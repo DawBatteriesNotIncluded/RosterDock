@@ -39,22 +39,33 @@ export interface Egress {
 /** One call site's terms. */
 export interface ReachOptions {
   /**
-   * A redirect: `error` refuses it and names the host it pointed to (nothing is sent there), `manual` hands
-   * the answer back as it is, `follow` follows three at most, every hop checked again, and drops the
-   * credential headers when a hop leaves the origin.
+   * A redirect: `error` refuses it and names the server it pointed to, never the path (nothing is sent
+   * there); `manual` hands the answer back as it is; `same-origin` follows a hop that stays on the origin (or
+   * moves the same host from http to https on the default ports) with every header kept and the request as
+   * it was sent, and refuses one that leaves it or would turn the request into a GET (a 301, 302 or 303 to
+   * anything but a read); `follow`
+   * follows any, and a hop that leaves the origin keeps only the headers that say what is wanted. Three hops
+   * at most, every one checked again.
    */
-  redirect: "error" | "manual" | "follow";
+  redirect: "error" | "manual" | "same-origin" | "follow";
   /** The whole exchange, names looked up and the body read; for a `stream`, until the answer's headers. */
   timeoutMs: number;
   /** The answer may stay open (MCP's event streams): once its headers are in, its body is the caller's to close. */
   stream?: boolean;
+  /**
+   * The most of the answer's body that is read, decoded (an event stream counts every event). Past it the
+   * body ends with an error, so nothing a server compresses can fill the board's memory. A caller that keeps
+   * the start of a longer answer reads it with readCapped and gives one byte more here.
+   */
+  maxBytes: number;
 }
 
 export const MAX_HOPS = 3;
 /** How long a kept connection waits idle before it closes. */
 const IDLE_MS = 4000;
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
-const CREDENTIAL_HEADERS = ["authorization", "cookie", "proxy-authorization"];
+// What a hop to another origin keeps: nothing that could be a credential, whatever the header is called.
+const CROSS_ORIGIN_HEADERS = ["accept", "accept-language", "user-agent", "content-type", "content-language"];
 const BODY_HEADERS = [
   "content-type",
   "content-length",
@@ -62,6 +73,12 @@ const BODY_HEADERS = [
   "content-language",
   "content-location",
 ];
+
+/** Where a refused redirect pointed, for a person: the server, or the kind of URL; never a path. */
+function redirectTarget(from: URL, to: URL): string {
+  if (to.protocol !== "http:" && to.protocol !== "https:") return `a ${to.protocol.replace(":", "")} URL`;
+  return to.origin === from.origin ? "another address on the same server" : to.origin;
+}
 
 /** A promise that rejects once the signal aborts; it is never left rejected with no one listening. */
 function aborted(signal: AbortSignal): Promise<never> {
@@ -122,7 +139,7 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
         const location = REDIRECTS.has(res.status) ? res.headers.get("location") : null;
         if (location === null || opts.redirect === "manual") {
           if (opts.stream) clearTimeout(timer);
-          return res;
+          return capped(res, opts.maxBytes, url.host);
         }
         await res.body?.cancel().catch(() => {});
         let next: URL;
@@ -131,22 +148,36 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
         } catch {
           throw new Error(`${url.host} answered ${res.status} with a location that is no URL`);
         }
-        // Where it points goes no further than its host: a path may carry a token.
-        if (opts.redirect === "error")
+        // The same server: the same origin, or the same host moving from http to https on the default ports.
+        const sameOrigin =
+          next.origin === url.origin ||
+          (url.protocol === "http:" &&
+            next.protocol === "https:" &&
+            next.hostname === url.hostname &&
+            url.port === "" &&
+            next.port === "");
+        if (opts.redirect === "error" || (opts.redirect === "same-origin" && !sameOrigin))
           throw new Error(
-            `${url.host} answered ${res.status}, a redirect to ${next.host === url.host ? "another address on the same host" : next.host}, which the board does not follow here: use the address it points to`,
+            `${url.host} answered ${res.status}, a redirect to ${redirectTarget(url, next)}, which the board does not follow here: use the address it points to`,
           );
         if (hop >= MAX_HOPS) throw new Error(`${url.host} redirected more than ${MAX_HOPS} times`);
         // As fetch does: a POST moved by 301 or 302, and anything but a read moved by 303, becomes a GET.
-        if (
+        const toGet =
           (res.status === 303 && method !== "GET" && method !== "HEAD") ||
-          ((res.status === 301 || res.status === 302) && method === "POST")
-        ) {
+          ((res.status === 301 || res.status === 302) && method === "POST");
+        // A call that must arrive as it was sent (MCP's JSON-RPC) is refused instead, with where to send it: the
+        // same server's address, which the connection already shows, without its query.
+        if (toGet && opts.redirect === "same-origin")
+          throw new Error(
+            `${url.host} answered ${res.status} to a ${method}, which would arrive at ${next.origin}${next.pathname} as a GET without its body: use that address`,
+          );
+        if (toGet) {
           method = "GET";
           body = undefined;
           for (const h of BODY_HEADERS) headers.delete(h);
         }
-        if (next.origin !== url.origin) for (const h of CREDENTIAL_HEADERS) headers.delete(h);
+        if (!sameOrigin)
+          for (const h of [...headers.keys()]) if (!CROSS_ORIGIN_HEADERS.includes(h)) headers.delete(h);
         url = next;
       }
     } catch (err) {
@@ -156,6 +187,70 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
       throw err;
     }
   };
+}
+
+/** How an answer past its cap ends, so a caller that sees only a wrapped message (an SDK's) can tell it. */
+export const READ_NO_FURTHER = "the board read no further";
+
+/** A size for a person: 8 MB, 256 KB. */
+function sizePhrase(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${Math.round(bytes / (1024 * 1024))} MB` : `${Math.round(bytes / 1024)} KB`;
+}
+
+/**
+ * The answer with its body cut at `max` bytes: what fits is handed on, then the body ends with an error and
+ * nothing more is read from the server.
+ */
+function capped(res: Response, max: number, host: string): Response {
+  if (!res.body) return res;
+  const reader = res.body.getReader();
+  let total = 0;
+  let over = false;
+  const tooBig = () => new Error(`${host} answered more than ${sizePhrase(max)}; ${READ_NO_FURTHER}`);
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (over) return controller.error(tooBig());
+      const { done, value } = await reader.read();
+      if (done) return controller.close();
+      if (total + value.byteLength <= max) {
+        total += value.byteLength;
+        return controller.enqueue(value);
+      }
+      // What still fits goes on; the next read is the error.
+      over = true;
+      const room = max - total;
+      total = max;
+      await reader.cancel().catch(() => {});
+      if (room > 0) controller.enqueue(value.subarray(0, room));
+      else controller.error(tooBig());
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+}
+
+/**
+ * The start of an answer's body, at most `max` bytes, and whether there was more: what was read past it is
+ * dropped and the rest is never read. Give the egress `max + 1` as its cap.
+ */
+export async function readCapped(res: Response, max: number): Promise<{ bytes: Uint8Array; cut: boolean }> {
+  if (!res.body) return { bytes: new Uint8Array(), cut: false };
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      return { bytes: Buffer.concat(parts).subarray(0, max), cut: true };
+    }
+  }
+  return { bytes: Buffer.concat(parts), cut: false };
 }
 
 /** For a socket of the board's own (SMTP): a lookup that admits only what egressFetch would, and the check of an address written as the host. */
