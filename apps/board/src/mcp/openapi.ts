@@ -20,7 +20,7 @@ import YAML from "yaml";
 import { notSetForCompany } from "../secrets/company.js";
 import { defaultEgress, egressFetch, readCapped, type Egress } from "../web/egress.js";
 import type { McpCallOutcome } from "./client.js";
-import { scrubCut, scrubText, scrubValue } from "./scrub.js";
+import { scrubber, scrubText, type Scrubber } from "./scrub.js";
 
 export type OpenApiManifest = OpenApiManifestInput;
 export type OpenApiOperation = OpenApiOperationInput;
@@ -393,30 +393,31 @@ export async function callOpenApiOperation(
   const raw = Buffer.from(read.bytes)
     .toString("utf8")
     .replace(/^\uFEFF/, "");
-  const text = truncated ? scrubCut(raw, [secret]) : scrubText(raw, [secret]);
-  const result = truncated ? null : readAnswer(text, secret);
+  const clean = scrubber([secret]);
+  const text = truncated ? clean.cut(raw) : clean.text(raw);
+  const result = truncated ? null : readAnswer(text, clean);
   return { ok: true, result: truncated ? { truncated: true, text } : result };
 }
 
 /** A parsed value with secret-looking keys redacted and the credential out of every string. */
-function cleaned(value: unknown, secret: string | null): unknown {
-  return scrubValue(deepRedact(value), [secret]);
+function cleaned(value: unknown, clean: Scrubber): unknown {
+  return clean.value(deepRedact(value));
 }
 
 /**
  * A whole answer as the teammate reads it: JSON parsed and cleaned; newline-delimited JSON (a log, an export)
  * cleaned line by line and written back as lines; anything else the scrubbed text.
  */
-function readAnswer(text: string, secret: string | null): unknown {
+function readAnswer(text: string, clean: Scrubber): unknown {
   try {
-    return cleaned(JSON.parse(text), secret);
+    return cleaned(JSON.parse(text), clean);
   } catch {
     // not one JSON value
   }
   const lines = text.split("\n");
   if (lines.filter((l) => l.trim()).length < 2) return text;
   try {
-    return lines.map((l) => (l.trim() ? JSON.stringify(cleaned(JSON.parse(l), secret)) : l)).join("\n");
+    return lines.map((l) => (l.trim() ? JSON.stringify(cleaned(JSON.parse(l), clean)) : l)).join("\n");
   } catch {
     return text;
   }

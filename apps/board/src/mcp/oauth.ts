@@ -21,7 +21,10 @@ export const OAUTH_TIMEOUT_MS = 15_000;
 /** The most of a metadata document or a token answer the board reads, decoded. */
 export const OAUTH_MAX_BYTES = 256 * 1024;
 
-/** Plain http to a name that did not resolve: refused for now, but perhaps only for now (a lookup that failed). */
+/**
+ * Plain http to a name that did not resolve while the operator lists ranges it could resolve into: refused for
+ * now, but perhaps only for now (a lookup that failed).
+ */
 export const UNRESOLVED = "is plain http to a name that does not resolve";
 
 /**
@@ -46,8 +49,9 @@ export async function endpointRefusal(
   if (hostListed(host, egress.allow)) return null;
   if (!isAddress(host)) {
     const addresses = await egress.resolve(host).catch(() => [] as string[]);
-    if (!addresses.length) return UNRESOLVED;
-    if (addresses.every((a) => addressListed(a, egress.allow))) return null;
+    // With no listed range, a name is refused whatever it resolves to; with one, it may resolve into it later.
+    if (!addresses.length && egress.allow.ranges.length) return UNRESOLVED;
+    if (addresses.length && addresses.every((a) => addressListed(a, egress.allow))) return null;
   }
   return "is plain http to a server this board's operator does not list";
 }
@@ -80,7 +84,7 @@ export interface OAuthDeps {
   log: { warn(msg: string): void };
 }
 
-export type OAuthErrorCode = "server" | "registration" | "state" | "token" | "store" | "forbidden";
+export type OAuthErrorCode = "server" | "registration" | "state" | "moved" | "token" | "store" | "forbidden";
 
 export class OAuthError extends Error {
   readonly code: OAuthErrorCode;

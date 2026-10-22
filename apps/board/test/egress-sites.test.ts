@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import type { EventRecord } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { callConnectionTool } from "../src/mcp/call.js";
-import { callMcpTool } from "../src/mcp/client.js";
+import { callMcpTool, discoverTools } from "../src/mcp/client.js";
 import { loadConnection } from "../src/mcp/connections.js";
 import {
   authorizationUrl,
@@ -298,37 +298,47 @@ describe("a company's MCP server over HTTP", () => {
   it("takes the credential out of what an MCP server says back, its errors included, however JSON escapes it", async () => {
     // The recorded error answer, its words replaced by an echo of the bearer as a proxied API's log writes it:
     // JSON in a string, PHP's \/ and .NET's +.
-    const recorded = JSON.parse(
-      readFileSync(
-        path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "mcp", "tools-call-error.json"),
-        "utf8",
-      ),
-    ) as { result: Record<string, unknown> };
+    const recorded = (name: string) =>
+      JSON.parse(
+        readFileSync(
+          path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "mcp", name),
+          "utf8",
+        ),
+      ) as { result: Record<string, unknown> };
+    const error = recorded("tools-call-error.json");
+    // The recorded tools list, its first description echoing the bearer too: kept on the row, shown to teammates.
+    const listed = recorded("tools-list.json") as { result: { tools: Record<string, unknown>[] } };
     const echoed = 'upstream refused {"authorization":"Bearer AbC\\u002BdEf\\u002BGhI\\/jKl="}';
     const clean = 'upstream refused {"authorization":"Bearer [redacted]"}';
     const echoing = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const body = init?.body
         ? (JSON.parse(String(init.body)) as { id?: number; method?: string; params?: { name?: string } })
         : null;
-      if (body?.method !== "tools/call") return transport(input, init);
       const json = (status: number, payload: unknown) =>
         new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
+      if (body?.method === "tools/list") {
+        const [first, ...rest] = listed.result.tools;
+        const tools = [{ ...first, description: echoed }, ...rest];
+        return json(200, { ...listed, id: body.id, result: { ...listed.result, tools } });
+      }
+      if (body?.method !== "tools/call") return transport(input, init);
       // A server error whose body the SDK repeats in its own words.
       if (body.params?.name === "broken") return json(500, { error: echoed });
       const result = {
-        ...recorded.result,
+        ...error.result,
         content: [{ type: "text", text: echoed }],
         isError: body.params?.name === "failing",
       };
-      return json(200, { ...recorded, id: body.id, result });
+      return json(200, { ...error, id: body.id, result });
     }) as typeof fetch;
-    const call = (tool: string) =>
-      callMcpTool(
-        { transport: "http", url: "https://mcp.echo.test/mcp", authEnvName: "ECHO_TOKEN" },
-        { egress: testEgress(echoing, { resolve }), env: { ECHO_TOKEN: "AbC+dEf+GhI/jKl=" } },
-        tool,
-        {},
-      );
+    const target = {
+      transport: "http" as const,
+      url: "https://mcp.echo.test/mcp",
+      authEnvName: "ECHO_TOKEN",
+    };
+    const deps = { egress: testEgress(echoing, { resolve }), env: { ECHO_TOKEN: "AbC+dEf+GhI/jKl=" } };
+    const call = (tool: string) => callMcpTool(target, deps, tool, {});
+    expect((await discoverTools(target, deps))[0]!.description).toBe(clean);
     expect(await call("failing")).toEqual({ ok: false, error: clean });
     expect(await call("answering")).toEqual({ ok: true, result: clean });
     const broken = await call("broken");
@@ -588,6 +598,15 @@ describe("OAuth for a company's connection", () => {
     expect((unresolved as Error).message).toBe(
       "the authorization server's address is plain http to a name that does not resolve",
     );
+    // With no range listed it could resolve into, it is refused outright, and Authorise may move on.
+    const unlisted = await discoverAuthorizationServer(
+      "http://keycloak.ranged.test",
+      deps("auth.other.test"),
+    ).catch((err: unknown) => err);
+    expect(unlisted).toBeInstanceOf(IssuerUnusable);
+    expect((unlisted as Error).message).toBe(
+      "the authorization server's address is plain http to a server this board's operator does not list",
+    );
     delete names["keycloak.ranged.test"];
     // An issuer or a token endpoint a row kept from before these checks is held to them before anything goes there.
     await expect(discoverAuthorizationServer("javascript:alert(1)", deps())).rejects.toThrow(
@@ -764,7 +783,7 @@ describe("OAuth for a company's connection", () => {
       url: `/api/oauth/callback?code=c-1&state=${new URL(begun.body.url).searchParams.get("state")}`,
       headers: { authorization: `Bearer ${owner.token}` },
     });
-    expect(late.headers.location).toBe("http://rosterdock.test/?oauth_error=state");
+    expect(late.headers.location).toBe("http://rosterdock.test/?oauth_error=moved");
     expect(sent).toEqual([]);
     // A client a person gave was registered at the issuer it was given for: neither it nor its secret moves.
     await kept({ authorizationServer: refused, registered: false });

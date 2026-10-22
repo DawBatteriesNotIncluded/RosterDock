@@ -368,9 +368,10 @@ their own, each with its own database and workers.
   changed. Every store entry names the issuer it came from, and only the row's issuer's entry is sent or
   refreshed, so a refresh that lands late never hands one server's tokens or secret to another. A client id
   a person gave is never carried to another issuer: Authorise refuses, and the connection is added again
-  with a client id registered there.
-  Which authorization server it names stays the server's choice, and a person consents on that server's
-  page before any token is issued.
+  with a client id registered there. An authorisation in progress is bound to the issuer it was started
+  at: a person who comes back after the connection moved is refused and asked to authorise again, and the
+  code and its PKCE verifier never go to the new server. Which authorization server it names stays the
+  server's choice, and a person consents on that server's page before any token is issued.
 - **Redirects.** An MCP server is followed within its own server (`/mcp` to `/mcp/`, or http to https on
   the same host and the default ports), its credential kept and every hop checked again, when the call
   arrives as it was sent: a 307 or 308. A 301, 302 or 303 would turn its POST into a GET without its body,
@@ -390,17 +391,20 @@ their own, each with its own database and workers.
   cut there and read no further), a style pack 256 KB, an SMTP reply's line 1,000 characters and a reply
   100 lines. A webhook's answer and an OpenAPI check's body are never read.
 - **What an answer repeats.** A service may echo the credential it was sent. What an OpenAPI operation or
-  an MCP server says back (an answer, a tool's error, an error the MCP SDK words from the server's body) has
-  the credential replaced by `[redacted]` as written, and as JSON escapes any of its characters (`\uXXXX`
-  in either case, `\/` and the other short escapes), read up to eight levels deep, so JSON a string carries
-  (a request log, echoed headers, a log entry that carries those again) is scrubbed too. A cut OpenAPI answer
-  also drops its last 256 characters, or sixteen times the credential's length if that is more, so a
-  credential cut in two shows no part of itself, and the text is the same whatever a guess at it matched.
-  In an OpenAPI answer that is whole JSON, or JSON line by line (a byte order mark first is dropped), the
-  values of keys that look secret (`authorization`, `token`, `password` and the like) are redacted too; a
-  cut answer, other text and an MCP server's answers keep theirs. An OpenAPI refusal repeats the status alone,
-  never the server's reason phrase or body. A credential shorter than 6 characters is never scrubbed,
-  since that would blank ordinary text: give such a service a longer one.
+  an MCP server says back (an answer, a number in it, a tool's error, a tool's name and description, an
+  error the MCP SDK words from the server's body) has the credential replaced by `[redacted]` as written,
+  and as JSON escapes any of its characters (`\uXXXX` in either case, `\/` and the other short escapes),
+  read up to eight levels deep, so JSON a string carries (a request log, echoed headers, a log entry that
+  carries those again) is scrubbed too. Other encodings are not read: percent-encoding in a URL, HTML
+  entities, a body in UTF-16 or Latin-1, an echo split across two of an MCP answer's text items. A cut
+  OpenAPI answer also drops its last 256 characters, or sixteen times the credential's length if that is
+  more, so a credential cut in two shows no part of itself escaped up to three levels deep, and the text
+  is the same whatever a guess at it matched. In an answer that is JSON (an OpenAPI answer whole or line
+  by line, a byte order mark first dropped, or an MCP answer), the values of keys that look secret
+  (`authorization`, `token`, `password` and the like) are redacted too; a cut OpenAPI answer and other
+  text keep theirs. An OpenAPI refusal repeats the status alone, never the server's reason phrase or body.
+  A credential shorter than 6 characters is never scrubbed, since that would blank ordinary text: give
+  such a service a longer one.
 - **Time.** One deadline per request, looking names up included: an MCP request's is the call's timeout
   (30 seconds) up to the answer's headers, after which an event stream stays open until the call ends;
   an OpenAPI operation takes its manifest's timeout, OAuth 15 seconds, a webhook 15, and an SMTP exchange

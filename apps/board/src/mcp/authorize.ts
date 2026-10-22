@@ -289,7 +289,7 @@ export async function finishAuthorization(
     trimTrailingSlashes(pending.issuer) !== trimTrailingSlashes(row.oauth.authorizationServer ?? "")
   )
     throw new OAuthError(
-      "state",
+      "moved",
       "the connection moved to another authorization server while it was being authorised",
     );
   const name = connectionSecretName(row.id);

@@ -123,7 +123,7 @@ import {
   reviewFixture,
   reviewListFixture,
 } from "./fixtures.ts";
-import { loadFeatures } from "../src/App.tsx";
+import { loadFeatures, oauthErrorText } from "../src/App.tsx";
 import type { Features } from "../src/api/types.ts";
 
 const noop = () => {};
@@ -2920,5 +2920,16 @@ describe("what the board offers, company by company", () => {
     loadFeatures({ features: () => Promise.resolve({ ...a, companyPrivateDestinations: [] }) }, null, set);
     await new Promise((r) => setTimeout(r, 0));
     expect(state.privateDestinations).toEqual(["10.20.0.0/16", "ollama.a.internal"]);
+  });
+});
+
+describe("an authorisation that comes back refused", () => {
+  it("says the connection moved when it did, and what to do", () => {
+    expect(oauthErrorText("moved")).toBe(
+      "The connection's server moved to another authorization server while you were authorising; press Authorise again.",
+    );
+    expect(oauthErrorText("state")).toBe(
+      "That authorisation took too long or was started elsewhere; press Authorise again.",
+    );
   });
 });

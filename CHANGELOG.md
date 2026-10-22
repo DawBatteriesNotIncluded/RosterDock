@@ -82,8 +82,8 @@ Against the images built from the pre-release tree (then called Pharo, not publi
   redirect within its own server is followed when the call arrives as sent (307, 308); a 301 or 302, as an
   http-to-https rule sends, would turn the call into a GET, so it fails and says what to change (over https,
   or with or without the trailing slash). An answer is read only up to its call site's cap,
-  decoded. What an OpenAPI or MCP server says back, its errors included, loses the credential however JSON
-  escapes it, eight levels deep at most. OAuth endpoints must be https (http only to a listed destination), and the resource an MCP server
+  decoded. What an OpenAPI or MCP server says back, its errors and tool descriptions included, loses the
+  credential however JSON escapes it, eight levels deep at most. OAuth endpoints must be https (http only to a listed destination), and the resource an MCP server
   declares must be on its own origin, at or above its MCP URL's path; a connection that kept one that is not,
   or an issuer now refused or without metadata, is discovered again at its next Authorise, its old tokens
   dropped and nothing of one issuer sent to another (a person's client id is refused there). The board's own destinations (git hosts, OIDC, OTLP, the bucket, the

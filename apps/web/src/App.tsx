@@ -48,6 +48,8 @@ export function oauthErrorText(code: string, detail: string | null = null): stri
       return "That authorisation took too long or was started elsewhere; press Authorise again.";
     case "forbidden":
       return "You may not manage this company's connections.";
+    case "moved":
+      return "The connection's server moved to another authorization server while you were authorising; press Authorise again.";
     case "token":
       return `The authorization server did not issue a token; press Authorise again.${said}`;
     default:
