@@ -1,0 +1,34 @@
+diff --git a/drop.sql b/drop.sql
+deleted file mode 100644
+index 330a487..0000000
+--- a/drop.sql
++++ /dev/null
+@@ -1,2 +0,0 @@
+--- a/config.sql
+-select 1;
+diff --git a/inc.lua b/inc.lua
+index 7f33518..420ff05 100644
+--- a/inc.lua
++++ b/inc.lua
+@@ -1,2 +1,3 @@
+ local x = 1
++++ x
+ return x
+diff --git a/notes.md b/notes.md
+new file mode 100644
+index 0000000..9a42686
+--- /dev/null
++++ b/notes.md
+@@ -0,0 +1 @@
++++ b/../../x
+diff --git a/schema.sql b/schema.sql
+index 977384d..7d7a9b1 100644
+--- a/schema.sql
++++ b/schema.sql
+@@ -1,3 +1,2 @@
+ create table a;
+--- old comment
+ create table b;
+diff --git a/src/Plan b/__init__.py b/src/Plan b/__init__.py
+new file mode 100644
+index 0000000..e69de29

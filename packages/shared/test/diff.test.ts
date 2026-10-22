@@ -139,3 +139,32 @@ describe("names git quotes", () => {
     }
   });
 });
+
+describe("lines that read like headers", () => {
+  // Recorded from git (fixtures/header-like-lines.diff): a deleted SQL comment ("-- old comment" reads
+  // "--- old comment"), an added Lua line "++ x" ("+++ x"), a deleted file holding "-- a/config.sql", a new file
+  // holding "++ b/../../x", and an empty new file under "src/Plan b/" beside a root __init__.py.
+  const files = parseUnifiedDiff(read("header-like-lines.diff"));
+
+  it("keeps every hunk's lines in it, and every file under its own name", () => {
+    expect(files.map((f) => [f.path, f.status, f.additions, f.deletions])).toEqual([
+      ["drop.sql", "deleted", 0, 2],
+      ["inc.lua", "modified", 1, 0],
+      ["notes.md", "added", 1, 0],
+      ["schema.sql", "modified", 0, 1],
+      ["src/Plan b/__init__.py", "added", 0, 0],
+    ]);
+    expect(files[0]!.hunks[0]!.lines.map((l) => l.text)).toEqual(["-- a/config.sql", "select 1;"]);
+    expect(files[1]!.hunks[0]!.lines.find((l) => l.kind === "add")?.text).toBe("++ x");
+    expect(files[2]!.hunks[0]!.lines.map((l) => l.text)).toEqual(["++ b/../../x"]);
+    expect(files[3]!.hunks[0]!.lines.find((l) => l.kind === "del")?.text).toBe("-- old comment");
+  });
+
+  it("applies each file's hunks to what it was", () => {
+    expect(applyFilePatch("create table a;\n-- old comment\ncreate table b;\n", files[3]!)).toBe(
+      "create table a;\ncreate table b;\n",
+    );
+    expect(applyFilePatch("local x = 1\nreturn x\n", files[1]!)).toBe("local x = 1\n++ x\nreturn x\n");
+    expect(applyFilePatch(null, files[2]!)).toBe("++ b/../../x\n");
+  });
+});

@@ -88,6 +88,15 @@ function unprefixed(p: string): string {
 
 function pathsFromGitHeader(line: string): { a: string; b: string } | null {
   const rest = line.slice("diff --git ".length);
+  // "diff --git a/x b/x" with one name both sides (the harvest diffs with --no-renames): split at the middle, as
+  // git apply reads it, whatever spaces and " b/" the name holds. A stanza with no ---/+++ lines (an empty new
+  // file, a binary one, a mode change) is named by this alone.
+  const mid = (rest.length - 1) / 2;
+  if (Number.isInteger(mid) && rest[mid] === " ") {
+    const [a, b] = [rest.slice(0, mid), rest.slice(mid + 1)];
+    if (a.startsWith("a/") && b.startsWith("b/") && a.slice(2) === b.slice(2))
+      return { a: a.slice(2), b: b.slice(2) };
+  }
   // "diff --git \"a/x\" \"b/x\"" where git quoted the names.
   if (rest.startsWith('"')) {
     const a = readQuoted(rest, 0);
@@ -128,8 +137,14 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
   let newNo = 0;
   let oldPath: string | null = null;
   let newPath: string | null = null;
+  // What the current hunk still has to come, by its @@ header: until then every line is one of its lines,
+  // whatever it starts with (a deleted "-- comment" reads "--- comment").
+  let oldLeft = 0;
+  let newLeft = 0;
 
   const closeFile = () => {
+    oldLeft = 0;
+    newLeft = 0;
     if (!file) return;
     if (file.status !== "deleted" && newPath && newPath !== "/dev/null") file.path = newPath;
     else if (file.status === "deleted" && oldPath && oldPath !== "/dev/null") file.path = oldPath;
@@ -140,6 +155,28 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
+    if (file && hunk && (oldLeft > 0 || newLeft > 0) && !(line === "" && i === lines.length - 1)) {
+      const mark = line[0];
+      if (mark === "+" && newLeft > 0) {
+        hunk.lines.push({ kind: "add", old: null, new: newNo++, text: line.slice(1) });
+        file.additions += 1;
+        newLeft -= 1;
+        continue;
+      }
+      if (mark === "-" && oldLeft > 0) {
+        hunk.lines.push({ kind: "del", old: oldNo++, new: null, text: line.slice(1) });
+        file.deletions += 1;
+        oldLeft -= 1;
+        continue;
+      }
+      if ((mark === " " || line === "") && oldLeft > 0 && newLeft > 0) {
+        hunk.lines.push({ kind: "ctx", old: oldNo++, new: newNo++, text: line.slice(1) });
+        oldLeft -= 1;
+        newLeft -= 1;
+        continue;
+      }
+      // Anything else: the hunk was cut short; what follows is read as below.
+    }
     if (line.startsWith("diff --git ")) {
       closeFile();
       const paths = pathsFromGitHeader(line);
@@ -191,6 +228,8 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
       file.hunks.push(hunk);
       oldNo = hunk.oldStart;
       newNo = hunk.newStart;
+      oldLeft = hunk.oldLines;
+      newLeft = hunk.newLines;
       continue;
     }
     if (!hunk) continue;

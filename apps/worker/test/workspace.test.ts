@@ -19,6 +19,7 @@ import path from "node:path";
 import { applyFilePatch, parseUnifiedDiff, renderNewFileDiff } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  decodeNames,
   cleanupWorkspace,
   fitDiff,
   git,
@@ -252,11 +253,51 @@ describe("workspace", () => {
     expect(env).toEqual({
       PATH: "/usr/bin",
       LANG: "C.UTF-8",
+      LC_ALL: "C",
       GIT_TERMINAL_PROMPT: "0",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
     });
+    // git's messages in English whatever the worker's locale: the harvest and the rework read some of them.
+    expect(gitEnvironment({ LANG: "de_DE.UTF-8", LC_ALL: "de_DE.UTF-8" })).toMatchObject({ LC_ALL: "C" });
   });
+
+  it("reads git's NUL-separated names as UTF-8, and none at all where one is not", () => {
+    const names = (...parts: (string | number[])[]) =>
+      Buffer.concat(parts.map((p) => (typeof p === "string" ? Buffer.from(p, "utf8") : Buffer.from(p))));
+    expect(decodeNames(names("?? résumé.md", [0], "?? はじめに.md", [0]))).toEqual([
+      "?? résumé.md",
+      "?? はじめに.md",
+    ]);
+    expect(decodeNames(names(""))).toEqual([]);
+    // bad\xff.md and bad\xfe.md: loosely decoded, both would be "bad\ufffd.md", the name of a third file.
+    expect(decodeNames(names("?? bad", [0xff], ".md", [0], "?? bad", [0xfe], ".md", [0]))).toBeNull();
+  });
+
+  it.runIf(process.platform === "linux")(
+    "says git could not read the changes back where a file's name is not UTF-8",
+    async () => {
+      // Linux takes any bytes for a name; macOS and Windows take none of these.
+      const ws = await prepareWorkspace(
+        path.join(root, "work"),
+        "run-not-utf8",
+        { repoUrl: bare, defaultBranch: "main" },
+        null,
+      );
+      await writeFile(
+        Buffer.concat([Buffer.from(`${ws.dir}/bad`), Buffer.from([0xff]), Buffer.from(".md")]),
+        "x\n",
+      );
+      for (const declared of [[], ["README.md"]]) {
+        const h = await harvestWorkspace(ws, declared);
+        expect(h.unreadable).toBe(
+          "the run's changes could not be read back for review (a file's name is not UTF-8)",
+        );
+        expect(h.artifacts.find((a) => a.kind === "diff")).toBeUndefined();
+      }
+      await cleanupWorkspace(ws);
+    },
+  );
 
   it("runs the git on PATH, never one the run left in its directory", async () => {
     // Windows looks for a program in the directory it starts in before PATH, unless told not to.
@@ -392,7 +433,8 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
-  it.runIf(process.platform !== "win32")(
+  // As root a folder's mode stops nobody, and Windows has none.
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "says git could not read the changes back where it could not open a folder the run made",
     async () => {
       const ws = await prepareWorkspace(

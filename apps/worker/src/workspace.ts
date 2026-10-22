@@ -61,14 +61,24 @@ const GIT_ENV_KEYS = [
  */
 export const GIT_NO_CONFIG = "/dev/null";
 
-/** git's environment: the keys above, no prompt, and no system or global config (a credential helper, an include, a ~/.gitconfig an earlier run wrote). */
+/**
+ * git's environment: the keys above, no prompt, and no system or global config (a credential helper, an include, a
+ * ~/.gitconfig an earlier run wrote). Its messages in English (LC_ALL=C), whatever the worker's locale: the worker
+ * reads some of them (a folder git could not open, why a patch did not apply).
+ */
 export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of GIT_ENV_KEYS) {
     const v = env[key];
     if (v !== undefined) out[key] = v;
   }
-  return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: GIT_NO_CONFIG };
+  return {
+    ...out,
+    LC_ALL: "C",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
+  };
 }
 
 /**
@@ -140,6 +150,49 @@ export function git(
     child.on("close", (code) => done({ code, stdout, stderr }));
   });
 }
+
+/** git as `git` runs it, its output as bytes: names git prints with -z need not be UTF-8. */
+export function gitBytes(
+  args: string[],
+  cwd: string,
+): Promise<{ code: number | null; stdout: Buffer; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("git", [...GIT_SAFE_ARGS, ...args], {
+      cwd,
+      env: gitEnvironment(),
+      shell: false,
+      windowsHide: true,
+    });
+    const out: Buffer[] = [];
+    let stderr = "";
+    child.stdout.on("data", (c: Buffer) => out.push(c));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (c: string) => (stderr += c));
+    child.on("error", (err) =>
+      resolve({ code: null, stdout: Buffer.concat(out), stderr: `${stderr}\n${err.message}` }),
+    );
+    child.on("close", (code) => resolve({ code, stdout: Buffer.concat(out), stderr }));
+  });
+}
+
+/**
+ * NUL-separated entries as git prints them with -z, each decoded as UTF-8. Null where one is not: decoded loosely,
+ * every such name would be one and the same name, U+FFFD where its bytes were, and collide with the others.
+ */
+export function decodeNames(out: Buffer): string[] | null {
+  const strict = new TextDecoder("utf-8", { fatal: true });
+  const names: string[] = [];
+  for (let at = 0, end = out.indexOf(0); end >= 0; at = end + 1, end = out.indexOf(0, at)) {
+    try {
+      names.push(strict.decode(out.subarray(at, end)));
+    } catch {
+      return null;
+    }
+  }
+  return names;
+}
+
+const NOT_UTF8 = "the run's changes could not be read back for review (a file's name is not UTF-8)";
 
 /** The fleet's git token and the hosts it is for (ROSTERDOCK_GIT_TOKEN, ROSTERDOCK_GIT_TOKEN_HOSTS). */
 export interface GitCredential {
@@ -512,16 +565,17 @@ export async function harvestWorkspace(
   } else if (ws.repo) {
     // -z: every name as it is (a space, a quote, a character git would escape); --no-renames: a moved file by its
     // new name, as the diff has it.
-    const status = await git(
+    const status = await gitBytes(
       ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"],
       ws.dir,
     );
+    const entries = decodeNames(status.stdout);
+    if (!entries) out.unreadable = NOT_UTF8;
     // A path git calls deleted is not a file the run wrote, whatever is on disk there: a file the run took out of
     // the index and kept, ignored (a local .env), is listed only so. One it kept and git does not ignore is
     // listed again as untracked. A merge conflict's side (UD, DU) is a file the run may have resolved.
     const deleted = (xy: string) => xy.includes("D") && !xy.includes("U");
-    candidates = status.stdout
-      .split("\0")
+    candidates = (entries ?? [])
       .filter((entry) => entry.length > 3 && !deleted(entry.slice(0, 2)))
       .map((entry) => entry.slice(3))
       .filter((p) => p !== HANDOVER_FILE && p !== BLOCKED_FILE)
@@ -564,8 +618,16 @@ export async function harvestWorkspace(
     );
     // A folder git cannot open it passes over with a warning, and adds the rest: that is part of the change.
     const skipped = /^warning: could not open directory .*$/m.exec(add.stderr)?.[0];
-    const diff =
-      add.code === 0 && !skipped
+    const staged = add.code === 0 && !skipped;
+    // Every name the diff will carry, read as bytes: one that is not UTF-8 is no name the review can hold.
+    const names = staged
+      ? decodeNames(
+          (await gitBytes(["diff", "--cached", "--name-only", "-z", "--no-renames"], ws.dir)).stdout,
+        )
+      : [];
+    if (!names) out.unreadable = NOT_UTF8;
+    else {
+      const diff = staged
         ? await git(
             // core.quotePath false: a name past ASCII as it is; one with a quote or a control character is
             // still quoted, and parseUnifiedDiff reads it back.
@@ -582,16 +644,22 @@ export async function harvestWorkspace(
             ws.dir,
           )
         : { ...add, code: add.code || 1, stderr: skipped ?? add.stderr };
-    // A part of the change the review would not show (an index.lock a git ended part-way left behind): no diff,
-    // and the run that would complete fails with this rather than send half of it for review.
-    if (diff.code === 0) diffText = diff.stdout;
-    else {
-      const lines = redactGit(diff.stderr).trim().split("\n");
-      let why = lines.find((l) => /^(?:error|fatal|warning):/.test(l)) ?? lines.at(-1) ?? "";
-      // The worker's own folders are none of the run's business: the clone's path as git writes it, `.`.
-      for (const at of await Promise.all([ws.dir, realpath(ws.dir).catch(() => ws.dir)]))
-        for (const form of new Set([at, at.replace(/\\/g, "/")])) why = why.split(form).join(".");
-      out.unreadable = `the run's changes could not be read back for review (git: ${why || "no message"})`;
+      // A part of the change the review would not show (an index.lock a git ended part-way left behind): no
+      // diff, and the run that would complete fails with this rather than send half of it for review.
+      if (diff.code === 0) diffText = diff.stdout;
+      else {
+        const lines = redactGit(diff.stderr).trim().split("\n");
+        // git's error before any warning beside it (a line-ending one), the warning where it is all git said.
+        let why =
+          lines.find((l) => /^(?:error|fatal):/.test(l)) ??
+          lines.find((l) => /^warning:/.test(l)) ??
+          lines.at(-1) ??
+          "";
+        // The worker's own folders are none of the run's business: the clone's path as git writes it, `.`.
+        for (const at of await Promise.all([ws.dir, realpath(ws.dir).catch(() => ws.dir)]))
+          for (const form of new Set([at, at.replace(/\\/g, "/")])) why = why.split(form).join(".");
+        out.unreadable = `the run's changes could not be read back for review (git: ${why || "no message"})`;
+      }
     }
   } else {
     diffText = out.artifacts
