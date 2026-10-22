@@ -60,7 +60,9 @@ export interface ReachOptions {
   /**
    * A redirect: `error` refuses it and names the server it pointed to, never the path (nothing is sent
    * there); `manual` hands the answer back as it is; `same-origin` follows a hop that stays on the origin (or
-   * moves the same host from http to https) with every header kept, and refuses one that leaves it; `follow`
+   * moves the same host from http to https on the default ports) with every header kept and the request as
+   * it was sent, and refuses one that leaves it or would turn the request into a GET (a 301, 302 or 303 to
+   * anything but a read); `follow`
    * follows any, and a hop that leaves the origin keeps only the headers that say what is wanted. Three hops
    * at most, every one checked again.
    */
@@ -165,19 +167,30 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
         } catch {
           throw new Error(`${url.host} answered ${res.status} with a location that is no URL`);
         }
+        // The same server: the same origin, or the same host moving from http to https on the default ports.
         const sameOrigin =
           next.origin === url.origin ||
-          (url.protocol === "http:" && next.protocol === "https:" && next.hostname === url.hostname);
+          (url.protocol === "http:" &&
+            next.protocol === "https:" &&
+            next.hostname === url.hostname &&
+            url.port === "" &&
+            next.port === "");
         if (opts.redirect === "error" || (opts.redirect === "same-origin" && !sameOrigin))
           throw new Error(
             `${url.host} answered ${res.status}, a redirect to ${redirectTarget(url, next)}, which the board does not follow here: use the address it points to`,
           );
         if (hop >= MAX_HOPS) throw new Error(`${url.host} redirected more than ${MAX_HOPS} times`);
         // As fetch does: a POST moved by 301 or 302, and anything but a read moved by 303, becomes a GET.
-        if (
+        const toGet =
           (res.status === 303 && method !== "GET" && method !== "HEAD") ||
-          ((res.status === 301 || res.status === 302) && method === "POST")
-        ) {
+          ((res.status === 301 || res.status === 302) && method === "POST");
+        // A call that must arrive as it was sent (MCP's JSON-RPC) is refused instead, with where to send it: the
+        // same server's address, which the connection already shows, without its query.
+        if (toGet && opts.redirect === "same-origin")
+          throw new Error(
+            `${url.host} answered ${res.status} to a ${method}, which would arrive at ${next.origin}${next.pathname} as a GET without its body: use that address`,
+          );
+        if (toGet) {
           method = "GET";
           body = undefined;
           for (const h of BODY_HEADERS) headers.delete(h);
@@ -195,6 +208,9 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
   };
 }
 
+/** How an answer past its cap ends, so a caller that sees only a wrapped message (an SDK's) can tell it. */
+export const READ_NO_FURTHER = "the board read no further";
+
 /** A size for a person: 8 MB, 256 KB. */
 function sizePhrase(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${Math.round(bytes / (1024 * 1024))} MB` : `${Math.round(bytes / 1024)} KB`;
@@ -209,7 +225,7 @@ function capped(res: Response, max: number, host: string): Response {
   const reader = res.body.getReader();
   let total = 0;
   let over = false;
-  const tooBig = () => new Error(`${host} answered more than ${sizePhrase(max)}; the board read no further`);
+  const tooBig = () => new Error(`${host} answered more than ${sizePhrase(max)}; ${READ_NO_FURTHER}`);
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (over) return controller.error(tooBig());

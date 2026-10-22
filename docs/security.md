@@ -329,12 +329,17 @@ their own, each with its own database and workers.
   reply, so another service's banner is never repeated.
 - **OAuth's endpoints.** The authorization server an MCP server names, and the authorization, token and
   registration endpoints that server's metadata names, must be https, or plain http to a destination the
-  operator lists (a server on this machine in development); a script or data URL never reaches a person's
-  browser, and the web checks the consent page's scheme again before it goes there. The resource an MCP
-  server declares must be on its own origin, so it cannot have the board ask for another service's token.
+  operator lists (by name, or an address or a name whose every address is in a listed range: a server on
+  this machine in development); a script or data URL never reaches a person's browser, and the web checks
+  the consent page's scheme again before it goes there. An issuer and a token endpoint a connection kept
+  from before these checks are held to them too. The resource an MCP server declares must be on its own
+  origin, so the board never asks for a token named for another service; which authorization server it
+  names stays the server's choice, and a person consents on that server's page before any token is issued.
 - **Redirects.** An MCP server is followed within its own server (`/mcp` to `/mcp/`, or http to https on
-  the same host), its credential kept and every hop checked again, and refused when it points to another
-  server. An OpenAPI operation, a webhook, OAuth registration and the token requests follow none: the
+  the same host and the default ports), its credential kept and every hop checked again, when the call
+  arrives as it was sent: a 307 or 308. A 301, 302 or 303 would turn its POST into a GET without its body,
+  so it is refused, and the refusal names the address to use (the same server's, without its query). A
+  redirect to another server is refused. An OpenAPI operation, a webhook, OAuth registration and the token requests follow none: the
   credential and the call go to the URL the company gave, or nowhere. A refusal names the server it pointed
   to (scheme, host and port), or the kind of URL, never a path, which may carry a token. An OpenAPI
   connection's check takes a redirect as its answer and follows nothing. OAuth discovery and a style pack's
@@ -343,8 +348,8 @@ their own, each with its own database and workers.
 - **Size.** The board reads no more of an answer than its call site's cap, decoded, so a small compressed
   body cannot fill the board's memory: an MCP answer 8 MB (an event stream counts every event on it),
   OAuth metadata and token answers 256 KB, an OpenAPI operation its manifest's response cap (the answer is
-  cut there and read no further), a style pack 256 KB. A webhook's answer and an OpenAPI check's body are
-  never read.
+  cut there and read no further), a style pack 256 KB, an SMTP reply's line 1,000 characters and a reply
+  100 lines. A webhook's answer and an OpenAPI check's body are never read.
 - **Time.** One deadline per request, looking names up included: an MCP request's is the call's timeout
   (30 seconds) up to the answer's headers, after which an event stream stays open until the call ends;
   an OpenAPI operation takes its manifest's timeout, OAuth 15 seconds, a webhook 15, and an SMTP exchange

@@ -203,12 +203,17 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
       const max = bytes.length * 8;
       // An IPv4 range written as IPv6 (::ffff:10.0.0.0/104) counts its prefix over the whole IPv6 address.
       const over = bytes.length === 4 && addr!.includes(":") ? 96 : 0;
-      const given = bitsText === undefined ? NaN : /^\d{1,3}$/.test(bitsText) ? Number(bitsText) - over : -1;
-      const bits = bitsText === undefined ? max : given;
-      if (!(bits >= 0 && bits <= max))
+      const given = bitsText === undefined ? max + over : /^\d{1,3}$/.test(bitsText) ? Number(bitsText) : NaN;
+      if (!(given >= 0 && given <= max + over))
         throw new Error(
-          `ROSTERDOCK_PRIVATE_DESTINATIONS: ${written} has a prefix length past /${max + over}`,
+          `ROSTERDOCK_PRIVATE_DESTINATIONS: ${written} has no prefix length from /${over} to /${max + over}`,
         );
+      // ::ffff:0:0/96 or 64:ff9b::/96 reads as every IPv4 address, cloud metadata and loopback included.
+      if (over && given <= over)
+        throw new Error(
+          `ROSTERDOCK_PRIVATE_DESTINATIONS: ${written} is every IPv4 address there is; list the IPv4 ranges you mean`,
+        );
+      const bits = given - over;
       // The range's own address with its host bits cleared: 10.1.2.3/8 is 10.0.0.0/8.
       const prefix = bytes.map((b, i) => b & (0xff << (8 - Math.max(0, Math.min(8, bits - i * 8)))) & 0xff);
       out.ranges.push([prefix, bits, entry]);

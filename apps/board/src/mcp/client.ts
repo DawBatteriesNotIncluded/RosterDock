@@ -26,7 +26,7 @@ import { stdioRefusal } from "../operator.js";
 import { notSetForCompany } from "../secrets/company.js";
 import type { SecretStore } from "../secrets/store.js";
 import { isExpiring, refreshTokens, type TokenAuth } from "./oauth.js";
-import { defaultEgress, egressFetch, type Egress } from "../web/egress.js";
+import { defaultEgress, egressFetch, READ_NO_FURTHER, type Egress } from "../web/egress.js";
 import type { WebReader } from "../web/transport.js";
 
 export const MCP_CALL_TIMEOUT_MS = 30_000;
@@ -329,7 +329,16 @@ export async function withMcpClient<T>(
   let client: Client | null = null;
   try {
     client = await connect();
-    return await fn(client);
+    // An answer cut at its cap inside an event stream reaches the SDK's onerror, not the call waiting on it,
+    // which would otherwise wait out its timeout: the call ends with the cut instead.
+    let cut: (err: Error) => void = () => {};
+    const tooBig = new Promise<never>((_, reject) => (cut = reject));
+    tooBig.catch(() => {});
+    client.onerror = (err) => {
+      if (err.message.includes(READ_NO_FURTHER))
+        cut(new Error(err.message.replace(/^SSE stream disconnected: (Error: )?/, "")));
+    };
+    return await Promise.race([fn(client), tooBig]);
   } catch (err) {
     if (err instanceof McpTargetError) throw err;
     throw new Error(scrub((err as Error).message ?? String(err), secrets));

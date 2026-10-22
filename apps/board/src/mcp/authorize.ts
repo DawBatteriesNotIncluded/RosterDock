@@ -24,6 +24,7 @@ import {
   exchangeCode,
   OAuthError,
   registerClient,
+  resourceOnOrigin,
   tokenAuthFor,
   type OAuthDeps,
   type TokenSet,
@@ -114,8 +115,9 @@ export async function startAuthorization(
     let scopesHint: string[] | null = null;
     let issuer = meta.authorizationServer;
     let declared = meta.resource ?? null;
-    // The resource identifier is read with the issuer, and again for a row from before it was kept.
-    if (!issuer || meta.resource == null) {
+    // The resource identifier is read with the issuer, and again for a row from before it was kept, or that
+    // keeps one on another server's origin from before the board checked that.
+    if (!issuer || meta.resource == null || (meta.resource && !resourceOnOrigin(meta.resource, row.url))) {
       const found = await discoverResource(row.url, oauth);
       issuer ??= found.authorizationServer;
       scopesHint = found.scopes;

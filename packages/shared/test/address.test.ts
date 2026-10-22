@@ -60,8 +60,12 @@ describe("addresses without node", () => {
     expect(addressListed("192.168.8.1", allow)).toBe(false);
     expect(refuseDestination("10.1.4.5", allow)).toBeNull();
     expect(refuseDestination("10.2.0.1", allow)).toBe("a private address");
-    expect(() => parsePrivateDestinations("::ffff:10.0.0.0/129")).toThrow("past /128");
-    expect(() => parsePrivateDestinations("::ffff:10.0.0.0/95")).toThrow("past /128");
+    expect(() => parsePrivateDestinations("::ffff:10.0.0.0/129")).toThrow(
+      "no prefix length from /96 to /128",
+    );
+    expect(() => parsePrivateDestinations("::ffff:10.0.0.0/95")).toThrow("is every IPv4 address there is");
+    for (const all of ["::ffff:0:0/96", "64:ff9b::/96", "[64:ff9b::]/96"])
+      expect(() => parsePrivateDestinations(all), all).toThrow("is every IPv4 address there is");
   });
 
   it("keeps what the operator gives one company for that company alone", () => {

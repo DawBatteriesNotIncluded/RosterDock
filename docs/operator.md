@@ -185,7 +185,9 @@ governs. The web is one too.
   connect over HTTP.
 - **The Playwright browser** as a service: the `mcr.microsoft.com/playwright/mcp` image, or
   `npx -y @playwright/mcp@0.0.83 --headless --isolated --browser chromium --port 8931 --host 0.0.0.0` with
-  `--allowed-hosts` naming the service, in a pod whose network policy reaches public addresses only; then a
+  `--allowed-hosts` naming the service as the board reaches it, port included
+  (`playwright-mcp.tools.svc.cluster.local:8931`), in a pod whose network policy reaches public addresses
+  only; then a
   connection to `http://playwright-mcp.<namespace>.svc.cluster.local:8931/mcp` (the catalog's example), with
   that name, as the URL writes it, in `board.privateDestinations` and port 8931 in
   `networkPolicy.board.egressPorts` (Private destinations, below). Snapshots and screenshots read; navigating,
@@ -288,9 +290,11 @@ networkPolicy:
 - From a board before `ROSTERDOCK_PRIVATE_DESTINATIONS`, what a company chooses reaches public addresses
   only. A connection, its OAuth or a company's webhook or SMTP server at a private address (a service in
   the cluster, a host on your network) fails until `board.privateDestinations` lists it (Private
-  destinations, above). An MCP server that redirects within its own server (`/mcp` to `/mcp/`, http to https)
-  is followed as before; one that redirects to another server, and an OpenAPI operation or a webhook that
-  answers with any redirect, fails and names the server it pointed to: give the connection that address. A
+  destinations, above). An MCP server that redirects within its own server with a 307 or 308 (`/mcp` to
+  `/mcp/`) is followed; a 301 or 302 (an http-to-https rule's) would turn the call into a GET, so it fails
+  and names the address to use. One that redirects to another server, and an OpenAPI operation or a webhook
+  that answers with any redirect, fails and names the server it pointed to: give the connection that
+  address. A
   local `apps/board/.env` copied before this change needs the `ROSTERDOCK_PRIVATE_DESTINATIONS` line from
   `.env.example` to reach servers on your machine.
 
