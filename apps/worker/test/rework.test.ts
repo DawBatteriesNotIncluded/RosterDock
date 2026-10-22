@@ -1055,4 +1055,25 @@ describe("a rework run and a submodule's folder", () => {
     expect(await readFile(path.join(ws.dir, "README.md"), "utf8")).toBe("hello again\n");
     expect(await readdir(path.join(ws.dir, "sub"))).toEqual([]);
   });
+
+  it("counts the files of a round git applies though the board would refuse a line of it", async () => {
+    const diff = [
+      "diff --git a/README.md b/README.md",
+      "--- a/README.md",
+      "+++ b/README.md",
+      "@@ -1 +1 @@",
+      "-hello",
+      "+hello again",
+      // A signature, as format-patch ends a patch with: git passes over it.
+      "-- ",
+      "2.43.0",
+      "",
+    ].join("\n");
+    const ws = await fresh("sub-signed");
+    expect(await applyPreviousRound(ws, subRound(diff), "main")).toEqual({
+      round: 1,
+      applied: true,
+      files: 1,
+    });
+  });
 });

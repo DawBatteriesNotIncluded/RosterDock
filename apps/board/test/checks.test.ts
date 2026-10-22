@@ -245,6 +245,11 @@ describe("secretsCheck", () => {
       ),
     );
     expect(secretsCheck(named).ok).toBe(true);
+    // A diff that could not be read was not scanned: the check fails and says why.
+    expect(secretsCheck([], "x.md: a line git does not write in a diff")).toMatchObject({
+      ok: false,
+      detail: { unread: "x.md: a line git does not write in a diff" },
+    });
   });
 });
 

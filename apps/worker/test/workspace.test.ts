@@ -19,15 +19,18 @@ import path from "node:path";
 import { applyFilePatch, parseUnifiedDiff, renderNewFileDiff } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  decodeNames,
   cleanupWorkspace,
   fitDiff,
   git,
+  gitReason,
   GIT_NO_CONFIG,
   gitEnvironment,
   harvestWorkspace,
   prepareWorkspace,
   type Harvest,
   redactGit,
+  removalsDone,
   removeTree,
   sameFile,
   withToken,
@@ -95,6 +98,24 @@ describe("workspace", () => {
     expect(existsSync(ws.dir)).toBe(false);
   });
 
+  it("fails a run whose diff carries two names a reviewer cannot tell apart, whatever it declared", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-lookalike",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, "notes.md"), "n\n", "utf8");
+    await writeFile(path.join(ws.dir, "README.md"), "# demo, changed\n", "utf8");
+    await writeFile(path.join(ws.dir, "\ufeffREADME.md"), "other\n", "utf8");
+    const h = await harvestWorkspace(ws, ["notes.md"]);
+    expect(h.filesWritten).toEqual(["notes.md"]);
+    expect(h.unreadable).toBe(
+      'the run\'s changes could not be read back for review (two files\' names differ only by spaces or a U+FEFF at an end: "README.md" and "\\ufeffREADME.md")',
+    );
+    await cleanupWorkspace(ws);
+  });
+
   it("without declared outputs, harvests new and modified files; without a repo, top-level files", async () => {
     const ws = await prepareWorkspace(
       path.join(root, "work"),
@@ -131,6 +152,63 @@ describe("workspace", () => {
     expect(synthetic.content).toContain("+a");
     expect(synthetic.content).not.toContain("blocked.md");
     await cleanupWorkspace(empty);
+
+    // Each file once, under the name git would give it; one whose name starts with U+FEFF is another than the
+    // one without.
+    const odd = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-3b",
+      { repoUrl: null, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(odd.dir, "report.md"), "r\n", "utf8");
+    await writeFile(path.join(odd.dir, "\ufeffnotes.md"), "b\n", "utf8");
+    const listed = await harvestWorkspace(odd, []);
+    expect([...listed.filesWritten].sort()).toEqual(["report.md", "\ufeffnotes.md"]);
+    expect(listed.unreadable).toBeNull();
+    const read = (h: typeof listed) =>
+      parseUnifiedDiff(h.artifacts.find((a) => a.kind === "diff")!.content).map((f) => f.path);
+    expect(read(listed).sort()).toEqual(["report.md", "\ufeffnotes.md"]);
+    expect(read(await harvestWorkspace(odd, ["./report.md"]))).toEqual(["report.md"]);
+    const declared = await harvestWorkspace(odd, ["./report.md", "report.md"]);
+    expect(declared.filesWritten).toEqual(["./report.md", "report.md"]);
+    expect(read(declared)).toEqual(["report.md"]);
+    expect(declared.unreadable).toBeNull();
+
+    // Two names a reviewer cannot tell apart, the same but for a U+FEFF or a space at an end: the run fails.
+    await writeFile(path.join(odd.dir, "\ufeffreport.md"), "other\n", "utf8");
+    expect((await harvestWorkspace(odd, [])).unreadable).toBe(
+      'the run\'s changes could not be read back for review (two files\' names differ only by spaces or a U+FEFF at an end: "report.md" and "\\ufeffreport.md")',
+    );
+    await rm(path.join(odd.dir, "\ufeffreport.md"));
+    // Windows drops a space at the end of a name: there it is the same file.
+    if (process.platform !== "win32") {
+      await writeFile(path.join(odd.dir, "report.md "), "other\n", "utf8");
+      expect((await harvestWorkspace(odd, [])).unreadable).toMatch(
+        /"report.md" and "report.md "|"report.md " and "report.md"/,
+      );
+      // However a declared output spells it.
+      expect((await harvestWorkspace(odd, ["./report.md ", "report.md"])).unreadable).toMatch(
+        /"report.md " and "report.md"/,
+      );
+      await rm(path.join(odd.dir, "report.md "));
+    }
+
+    // A file no repository holds, one named .git in any case: never delivered, and the run fails naming it.
+    await writeFile(path.join(odd.dir, ".GIT"), 'aws_key = "not-a-real-value-123"\n', "utf8");
+    const dotGit = await harvestWorkspace(odd, []);
+    expect(dotGit.unreadable).toBe(
+      "the run's changes could not be read back for review (a file's name is one no repository can hold: \".GIT\")",
+    );
+    expect(dotGit.filesWritten).not.toContain(".GIT");
+    expect(dotGit.artifacts.map((a) => a.path)).not.toContain(".GIT");
+    expect(dotGit.artifacts.some((a) => a.content.includes("not-a-real-value"))).toBe(false);
+    await rm(path.join(odd.dir, ".GIT"));
+    await writeFile(path.join(odd.dir, ".git"), 'aws_key = "not-a-real-value-123"\n', "utf8");
+    const declaredGit = await harvestWorkspace(odd, [".git", "report.md"]);
+    expect(declaredGit.unreadable).toMatch(/one no repository can hold: "\.git"/);
+    expect(declaredGit.artifacts.map((a) => a.path)).not.toContain(".git");
+    await cleanupWorkspace(odd);
   });
 
   it("skips a file over the cap and cuts the diff at it; the board's cap from the run spec raises both", async () => {
@@ -169,6 +247,26 @@ describe("workspace", () => {
     // What is left applies whole.
     expect(files.map((f) => applyFilePatch(null, f))).toEqual(["first\n", "last\n"]);
     expect(fitDiff(diff, 1_000_000)).toEqual({ text: diff, omitted: [] });
+  });
+
+  it("cuts a diff over the limit only between files, never at a line separator inside a line", () => {
+    // A line that holds U+2028 (or a CR) and then "diff --git": with `m`, `^` matched after it.
+    const forged = `x\u2028diff --git a/evil.md b/evil.md\n${"y".repeat(3000)}`;
+    const diff = [renderNewFileDiff("a.md", `${forged}\n`), renderNewFileDiff("c.md", "last\n")].join("");
+    const fitted = fitDiff(diff, 2000);
+    expect(fitted.omitted).toEqual(["a.md"]);
+    expect(parseUnifiedDiff(fitted.text).map((f) => f.path)).toEqual(["c.md"]);
+  });
+
+  it("says why git failed by its error before a warning beside it", () => {
+    const warned =
+      "warning: in the working copy of 'x', LF will be replaced by CRLF\nfatal: Unable to create '.git/index.lock'";
+    expect(gitReason(warned)).toBe("fatal: Unable to create '.git/index.lock'");
+    expect(gitReason("warning: could not open directory 'closed/': Permission denied")).toBe(
+      "warning: could not open directory 'closed/': Permission denied",
+    );
+    expect(gitReason("something odd\nlast words")).toBe("last words");
+    expect(gitReason("fatal: https://x-access-token:secret@github.com/o/r.git")).not.toContain("secret");
   });
 
   it("leaves a changed file that does not fit out of a repository's diff instead of cutting it", async () => {
@@ -252,11 +350,66 @@ describe("workspace", () => {
     expect(env).toEqual({
       PATH: "/usr/bin",
       LANG: "C.UTF-8",
+      LC_ALL: "C",
       GIT_TERMINAL_PROMPT: "0",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
     });
+    // git's messages in English whatever the worker's locale: the harvest and the rework read some of them.
+    expect(gitEnvironment({ LANG: "de_DE.UTF-8", LC_ALL: "de_DE.UTF-8" })).toMatchObject({ LC_ALL: "C" });
   });
+
+  it("reads git's NUL-separated names as UTF-8, and spells one that is not apart, in ASCII", () => {
+    const names = (...parts: (string | number[])[]) =>
+      Buffer.concat(parts.map((p) => (typeof p === "string" ? Buffer.from(p, "utf8") : Buffer.from(p))));
+    expect(decodeNames(names("?? résumé.md", [0], "?? はじめに.md", [0]))).toEqual({
+      names: ["?? résumé.md", "?? はじめに.md"],
+      notUtf8: [],
+    });
+    expect(decodeNames(names(""))).toEqual({ names: [], notUtf8: [] });
+    // bad\xff.md and bad\xfe.md: loosely decoded, both would be "bad\ufffd.md", the name of a third file.
+    expect(
+      decodeNames(names("?? bad", [0xff], ".md", [0], "?? ok.md", [0], "?? bad", [0xfe], ".md", [0])),
+    ).toEqual({
+      names: ["?? ok.md"],
+      notUtf8: ["?? bad\\xff.md", "?? bad\\xfe.md"],
+    });
+    // A backslash doubled: `\\x82` the characters is not `\x82` the byte.
+    expect(decodeNames(names("?? a\\x82", [0x82, 0]))).toEqual({ names: [], notUtf8: ["?? a\\\\x82\\x82"] });
+    // A name that starts with U+FEFF keeps it: without, it is another file's.
+    expect(decodeNames(names("\ufeffreport.md", [0], "report.md", [0]))).toEqual({
+      names: ["\ufeffreport.md", "report.md"],
+      notUtf8: [],
+    });
+  });
+
+  it.runIf(process.platform === "linux")(
+    "says git could not read the changes back where a file's name is not UTF-8",
+    async () => {
+      // Linux takes any bytes for a name; macOS and Windows take none of these.
+      const ws = await prepareWorkspace(
+        path.join(root, "work"),
+        "run-not-utf8",
+        { repoUrl: bare, defaultBranch: "main" },
+        null,
+      );
+      await writeFile(
+        Buffer.concat([Buffer.from(`${ws.dir}/bad`), Buffer.from([0xff]), Buffer.from(".md")]),
+        "x\n",
+      );
+      await writeFile(path.join(ws.dir, "report.md"), "The report.\n", "utf8");
+      for (const declared of [[], ["report.md"]]) {
+        const h = await harvestWorkspace(ws, declared);
+        expect(h.unreadable).toBe(
+          "the run's changes could not be read back for review (a file's name is not UTF-8: bad\\xff.md)",
+        );
+        expect(h.artifacts.find((a) => a.kind === "diff")).toBeUndefined();
+        // The run's other files are still its files: a blocked run keeps them.
+        expect(h.filesWritten).toEqual(["report.md"]);
+      }
+      await cleanupWorkspace(ws);
+    },
+  );
 
   it("runs the git on PATH, never one the run left in its directory", async () => {
     // Windows looks for a program in the directory it starts in before PATH, unless told not to.
@@ -392,7 +545,31 @@ describe("workspace", () => {
     await cleanupWorkspace(ws);
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.runIf(process.platform === "linux")(
+    "says a run without a repository could not be read back where a file's name is not UTF-8",
+    async () => {
+      const ws = await prepareWorkspace(
+        path.join(root, "work"),
+        "run-no-repo-not-utf8",
+        { repoUrl: null, defaultBranch: "main" },
+        null,
+      );
+      await writeFile(
+        Buffer.concat([Buffer.from(`${ws.dir}/bad`), Buffer.from([0xff]), Buffer.from(".md")]),
+        "x\n",
+      );
+      await writeFile(path.join(ws.dir, "report.md"), "The report.\n", "utf8");
+      const h = await harvestWorkspace(ws, []);
+      expect(h.unreadable).toBe(
+        "the run's changes could not be read back for review (a file's name is not UTF-8: bad\\xff.md)",
+      );
+      expect(h.filesWritten).toEqual(["report.md"]);
+      await cleanupWorkspace(ws);
+    },
+  );
+
+  // As root a folder's mode stops nobody, and Windows has none.
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "says git could not read the changes back where it could not open a folder the run made",
     async () => {
       const ws = await prepareWorkspace(
@@ -649,6 +826,68 @@ describe("removing a run's directory", () => {
       }),
     ).rejects.toBe(denied);
     expect(calls).toBe(1);
+  });
+
+  /**
+   * A remover that finds the folder busy, as a file a taskkilled git holds on Windows, for `ms` from the
+   * removal after the failed clone, however long the clone took to fail. The first call, before the clone,
+   * finds nothing there and goes.
+   */
+  const heldFor = (ms: number): typeof rm => {
+    let calls = 0;
+    let until = 0;
+    return async (p, o) => {
+      if (++calls === 2) until = Date.now() + ms;
+      if (calls > 1 && Date.now() < until) throw busy();
+      return rm(p, o);
+    };
+  };
+  const noSuchRepo = () => ({ repoUrl: path.join(root, "no-such.git"), defaultBranch: "main" });
+
+  it("goes on removing a failed clone's folder past its window, and a stopping worker waits for it", async () => {
+    const workRoot = await mkdtemp(path.join(root, "removals-"));
+    await expect(
+      prepareWorkspace(workRoot, "run-held", noSuchRepo(), null, undefined, heldFor(3000)),
+    ).rejects.toThrow(/git clone failed/);
+    expect(existsSync(path.join(workRoot, "run-held"))).toBe(true);
+    await removalsDone();
+    expect(existsSync(path.join(workRoot, "run-held"))).toBe(false);
+  });
+
+  it("lets a stopping worker wait for a removal that starts while it waits", async () => {
+    const workRoot = await mkdtemp(path.join(root, "removals-"));
+    await expect(
+      prepareWorkspace(workRoot, "run-a", noSuchRepo(), null, undefined, heldFor(6000)),
+    ).rejects.toThrow(/git clone failed/);
+    // run-b's clone fails while the worker already waits for run-a's folder; its own outlasts that.
+    const b = prepareWorkspace(workRoot, "run-b", noSuchRepo(), null, undefined, heldFor(6000));
+    const done = removalsDone();
+    await expect(b).rejects.toThrow(/git clone failed/);
+    await done;
+    expect(existsSync(path.join(workRoot, "run-a"))).toBe(false);
+    expect(existsSync(path.join(workRoot, "run-b"))).toBe(false);
+  });
+
+  it("prepares a run again in a folder still being removed only once the removal is done, so it takes nothing new", async () => {
+    const workRoot = await mkdtemp(path.join(root, "removals-"));
+    const started = Date.now();
+    const remove = heldFor(5000);
+    await expect(
+      prepareWorkspace(workRoot, "run-held", noSuchRepo(), null, undefined, remove),
+    ).rejects.toThrow(/git clone failed/);
+    const ws = await prepareWorkspace(
+      workRoot,
+      "run-held",
+      { repoUrl: null, defaultBranch: "main" },
+      null,
+      undefined,
+      remove,
+    );
+    expect(Date.now() - started).toBeGreaterThanOrEqual(5000);
+    await writeFile(path.join(ws.dir, "work.md"), "w\n", "utf8");
+    await removalsDone();
+    expect(existsSync(path.join(ws.dir, "work.md"))).toBe(true);
+    await cleanupWorkspace(ws);
   });
 
   it("gives up within its time when that is longer than the longest wait between tries", async () => {

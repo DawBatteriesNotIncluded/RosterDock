@@ -13,6 +13,7 @@ import { lstat, mkdir, open, readdir, readFile, realpath, rm, writeFile } from "
 import os from "node:os";
 import path from "node:path";
 import {
+  isTreePath,
   parseUnifiedDiff,
   renderBinaryFileDiff,
   renderNewFileDiff,
@@ -39,7 +40,7 @@ export interface Workspace {
   gitConfig?: string;
 }
 
-/** Where programs live, the temp directory, the locale: all git needs from the worker's environment. */
+/** Where programs live, the temp directory, the locale (whose messages LC_ALL=C sets to English): all git needs. */
 const GIT_ENV_KEYS = [
   "PATH",
   "Path",
@@ -61,14 +62,24 @@ const GIT_ENV_KEYS = [
  */
 export const GIT_NO_CONFIG = "/dev/null";
 
-/** git's environment: the keys above, no prompt, and no system or global config (a credential helper, an include, a ~/.gitconfig an earlier run wrote). */
+/**
+ * git's environment: the keys above, no prompt, and no system or global config (a credential helper, an include, a
+ * ~/.gitconfig an earlier run wrote). Its messages in English (LC_ALL=C), whatever the worker's locale: the worker
+ * reads some of them (a folder git could not open, why a patch did not apply).
+ */
 export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of GIT_ENV_KEYS) {
     const v = env[key];
     if (v !== undefined) out[key] = v;
   }
-  return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: GIT_NO_CONFIG };
+  return {
+    ...out,
+    LC_ALL: "C",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
+  };
 }
 
 /**
@@ -141,6 +152,83 @@ export function git(
   });
 }
 
+/** git as `git` runs it, its output as bytes: names git prints with -z need not be UTF-8. */
+export function gitBytes(
+  args: string[],
+  cwd: string,
+): Promise<{ code: number | null; stdout: Buffer; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("git", [...GIT_SAFE_ARGS, ...args], {
+      cwd,
+      env: gitEnvironment(),
+      shell: false,
+      windowsHide: true,
+    });
+    const out: Buffer[] = [];
+    let stderr = "";
+    child.stdout.on("data", (c: Buffer) => out.push(c));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (c: string) => (stderr += c));
+    child.on("error", (err) =>
+      resolve({ code: null, stdout: Buffer.concat(out), stderr: `${stderr}\n${err.message}` }),
+    );
+    child.on("close", (code) => resolve({ code, stdout: Buffer.concat(out), stderr }));
+  });
+}
+
+/**
+ * NUL-separated entries as git prints them with -z: those that decode as UTF-8, and, apart and spelled in ASCII
+ * (`unz\x82.txt`), those that do not. Decoded loosely, every such name would be one and the same, U+FFFD where
+ * its bytes were, and collide with the others.
+ */
+export function decodeNames(out: Buffer): { names: string[]; notUtf8: string[] } {
+  // ignoreBOM: a name that starts with U+FEFF keeps it, as another without it is another file.
+  const strict = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const decoded = { names: [] as string[], notUtf8: [] as string[] };
+  for (let at = 0, end = out.indexOf(0); end >= 0; at = end + 1, end = out.indexOf(0, at)) {
+    const entry = out.subarray(at, end);
+    try {
+      decoded.names.push(strict.decode(entry));
+    } catch {
+      decoded.notUtf8.push(
+        [...entry]
+          // A backslash doubled, so `\\x82` the four characters reads apart from `\x82` the byte.
+          .map((b) =>
+            b === 0x5c
+              ? "\\\\"
+              : b >= 0x20 && b < 0x7f
+                ? String.fromCharCode(b)
+                : `\\x${b.toString(16).padStart(2, "0")}`,
+          )
+          .join(""),
+      );
+    }
+  }
+  return decoded;
+}
+
+/** A name as a reason quotes it: quoted and in ASCII, so a space or a U+FEFF at an end shows (`"\ufeffreport.md"`). */
+function spellName(name: string): string {
+  return JSON.stringify(name).replace(
+    /[^\x20-\x7e]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
+ * Why git said it failed, in its line: its error before any warning beside it (a line-ending one), the warning
+ * where that is all it said, its last line otherwise. Credentials redacted.
+ */
+export function gitReason(stderr: string): string {
+  const lines = redactGit(stderr).trim().split("\n");
+  return (
+    lines.find((l) => /^(?:error|fatal):/.test(l)) ??
+    lines.find((l) => /^warning:/.test(l)) ??
+    lines.at(-1) ??
+    ""
+  );
+}
+
 /** The fleet's git token and the hosts it is for (ROSTERDOCK_GIT_TOKEN, ROSTERDOCK_GIT_TOKEN_HOSTS). */
 export interface GitCredential {
   token: string;
@@ -171,6 +259,20 @@ export function redactGit(text: string): string {
 export const CLONE_LOW_SPEED = { bytesPerSecond: 1000, seconds: 60 };
 
 /**
+ * Removals of a stopped clone's folder that outlived removeTree's window, by folder: a run prepared there next
+ * waits for its own, so it never takes the new clone's files, and a worker that stops waits for them all.
+ */
+const removing = new Map<string, Promise<void>>();
+
+/**
+ * Every stopped clone's removal still going on, settled: each folder gone, or given up after half a minute.
+ * One a run still ending starts meanwhile is waited for too.
+ */
+export async function removalsDone(): Promise<void> {
+  while (removing.size) await Promise.all([...removing.values()]);
+}
+
+/**
  * The run's directory, with the repository cloned into it. `signal` (Stop, the time limit, shutdown) ends the
  * clone; a clone that fails or is ended leaves no directory behind.
  */
@@ -180,17 +282,29 @@ export async function prepareWorkspace(
   project: { repoUrl: string | null; defaultBranch: string },
   credential: GitCredential | null,
   signal?: AbortSignal,
+  /** How a folder is removed; a test's stands in for a file Windows holds. */
+  remove: typeof rm = rm,
 ): Promise<Workspace> {
   const dir = path.join(workRoot, runId);
+  await removing.get(dir);
   // A git just stopped in it holds its files a moment on Windows (EBUSY).
-  await removeTree(dir);
+  await removeTree(dir, undefined, remove);
   await mkdir(dir, { recursive: true });
   if (!project.repoUrl) return { dir, repo: false };
   try {
     return await cloneInto(dir, { ...project, repoUrl: project.repoUrl }, credential, signal);
   } catch (err) {
     // A clone that failed or was stopped part-way leaves nothing: its .git/config holds the URL, token and all.
-    await removeTree(dir).catch(() => {});
+    // On Windows a git just ended by taskkill may hold its files past removeTree's window: the removal goes on
+    // without holding the run's stop, until git lets go.
+    await removeTree(dir, undefined, remove).catch(() => {
+      const removal: Promise<void> = removeTree(dir, 30_000, remove)
+        .catch(() => {})
+        .finally(() => {
+          if (removing.get(dir) === removal) removing.delete(dir);
+        });
+      removing.set(dir, removal);
+    });
     throw err;
   }
 }
@@ -303,17 +417,27 @@ export interface Harvest {
  * is left out and named, never cut inside a hunk, so the review never shows (and a merge never applies)
  * half a change.
  */
+/** A file's stanza by its path, or its first line where it cannot be read. */
+function fileName(stanza: string): string {
+  try {
+    return parseUnifiedDiff(stanza)[0]?.path || stanza.split("\n", 1)[0]!;
+  } catch {
+    return stanza.split("\n", 1)[0]!;
+  }
+}
+
 export function fitDiff(diffText: string, maxBytes: number): { text: string; omitted: string[] } {
   if (Buffer.byteLength(diffText, "utf8") <= maxBytes) return { text: diffText, omitted: [] };
   const kept: string[] = [];
   const omitted: string[] = [];
   let used = 0;
-  for (const file of diffText.split(/^(?=diff --git )/m).filter(Boolean)) {
+  // Split before a line that starts "diff --git", after a \n only: not after a U+2028 or a CR inside a line.
+  for (const file of diffText.split(/(?<=\n)(?=diff --git )/).filter(Boolean)) {
     const bytes = Buffer.byteLength(file, "utf8");
     if (used + bytes <= maxBytes) {
       kept.push(file);
       used += bytes;
-    } else omitted.push(parseUnifiedDiff(file)[0]?.path || file.split("\n", 1)[0]!);
+    } else omitted.push(fileName(file));
   }
   return { text: kept.join(""), omitted };
 }
@@ -512,25 +636,31 @@ export async function harvestWorkspace(
   } else if (ws.repo) {
     // -z: every name as it is (a space, a quote, a character git would escape); --no-renames: a moved file by its
     // new name, as the diff has it.
-    const status = await git(
+    const status = await gitBytes(
       ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"],
       ws.dir,
     );
+    // One whose name is not UTF-8 is left out here; the read-back below fails a run that would complete on it.
+    const entries = decodeNames(status.stdout).names;
     // A path git calls deleted is not a file the run wrote, whatever is on disk there: a file the run took out of
     // the index and kept, ignored (a local .env), is listed only so. One it kept and git does not ignore is
     // listed again as untracked. A merge conflict's side (UD, DU) is a file the run may have resolved.
     const deleted = (xy: string) => xy.includes("D") && !xy.includes("U");
-    candidates = status.stdout
-      .split("\0")
+    candidates = entries
       .filter((entry) => entry.length > 3 && !deleted(entry.slice(0, 2)))
       .map((entry) => entry.slice(3))
       .filter((p) => p !== HANDOVER_FILE && p !== BLOCKED_FILE)
       .slice(0, MAX_UNDECLARED_FILES);
   } else {
-    const entries = await readdir(ws.dir, { withFileTypes: true });
-    candidates = entries
-      .filter((e) => e.isFile() && e.name !== HANDOVER_FILE && e.name !== BLOCKED_FILE)
-      .map((e) => e.name)
+    // By their bytes, as in a repository: a name that is not UTF-8 is left out, and fails a run that would
+    // complete, where read loosely it would collide with another.
+    const entries = await readdir(ws.dir, { withFileTypes: true, encoding: "buffer" });
+    const files = entries.filter((e) => e.isFile());
+    const { names, notUtf8 } = decodeNames(Buffer.concat(files.flatMap((e) => [e.name, Buffer.from([0])])));
+    if (notUtf8.length)
+      out.unreadable = `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
+    candidates = names
+      .filter((n) => n !== HANDOVER_FILE && n !== BLOCKED_FILE)
       .slice(0, MAX_UNDECLARED_FILES);
   }
   for (const rel of candidates) {
@@ -554,6 +684,8 @@ export async function harvestWorkspace(
   // rename detection so every hunk applies to one path. Without: a diff that
   // adds every harvested text file, so the review looks the same.
   let diffText = "";
+  // The names the diff carries, as git spells them.
+  let diffNames: string[] = [];
   if (ws.repo) {
     const head = await git(["rev-parse", "HEAD"], ws.dir);
     if (head.code === 0) out.baseSha = head.stdout.trim() || null;
@@ -564,8 +696,18 @@ export async function harvestWorkspace(
     );
     // A folder git cannot open it passes over with a warning, and adds the rest: that is part of the change.
     const skipped = /^warning: could not open directory .*$/m.exec(add.stderr)?.[0];
-    const diff =
-      add.code === 0 && !skipped
+    const staged = add.code === 0 && !skipped;
+    // Every name the diff will carry, read as bytes: one that is not UTF-8 is no name the review can hold.
+    const { names, notUtf8 } = staged
+      ? decodeNames(
+          (await gitBytes(["diff", "--cached", "--name-only", "-z", "--no-renames"], ws.dir)).stdout,
+        )
+      : { names: [], notUtf8: [] };
+    diffNames = names;
+    if (notUtf8.length)
+      out.unreadable = `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
+    else {
+      const diff = staged
         ? await git(
             // core.quotePath false: a name past ASCII as it is; one with a quote or a control character is
             // still quoted, and parseUnifiedDiff reads it back.
@@ -582,24 +724,52 @@ export async function harvestWorkspace(
             ws.dir,
           )
         : { ...add, code: add.code || 1, stderr: skipped ?? add.stderr };
-    // A part of the change the review would not show (an index.lock a git ended part-way left behind): no diff,
-    // and the run that would complete fails with this rather than send half of it for review.
-    if (diff.code === 0) diffText = diff.stdout;
-    else {
-      const lines = redactGit(diff.stderr).trim().split("\n");
-      let why = lines.find((l) => /^(?:error|fatal|warning):/.test(l)) ?? lines.at(-1) ?? "";
-      // The worker's own folders are none of the run's business: the clone's path as git writes it, `.`.
-      for (const at of await Promise.all([ws.dir, realpath(ws.dir).catch(() => ws.dir)]))
-        for (const form of new Set([at, at.replace(/\\/g, "/")])) why = why.split(form).join(".");
-      out.unreadable = `the run's changes could not be read back for review (git: ${why || "no message"})`;
+      // A part of the change the review would not show (an index.lock a git ended part-way left behind): no
+      // diff, and the run that would complete fails with this rather than send half of it for review.
+      if (diff.code === 0) diffText = diff.stdout;
+      else {
+        let why = gitReason(diff.stderr);
+        // The worker's own folders are none of the run's business: the clone's path as git writes it, `.`.
+        for (const at of await Promise.all([ws.dir, realpath(ws.dir).catch(() => ws.dir)]))
+          for (const form of new Set([at, at.replace(/\\/g, "/")])) why = why.split(form).join(".");
+        out.unreadable = `the run's changes could not be read back for review (git: ${why || "no message"})`;
+      }
     }
   } else {
+    // A file no repository holds (one named .git) is none the review could show: it is not delivered, and a run
+    // that would complete fails, naming it.
+    const outside = out.artifacts.filter(
+      (a) => a.kind !== "handover" && !isTreePath(path.posix.normalize(a.path)),
+    );
+    if (outside.length) {
+      out.artifacts = out.artifacts.filter((a) => !outside.includes(a));
+      out.filesWritten = out.filesWritten.filter((f) => !outside.some((a) => a.path === f));
+      out.unreadable ??= `the run's changes could not be read back for review (a file's name is one no repository can hold: ${spellName(outside[0]!.path)})`;
+    }
+    // Each file once, under the name git would give it (a declared `./report.md` is report.md).
+    const rendered = new Set<string>();
     diffText = out.artifacts
       .filter((a) => a.kind !== "handover" && a.kind !== "diff")
-      .map((a) =>
-        a.encoding === "base64" ? renderBinaryFileDiff(a.path) : renderNewFileDiff(a.path, a.content),
-      )
+      .flatMap((a) => {
+        const name = path.posix.normalize(a.path);
+        if (rendered.has(name)) return [];
+        rendered.add(name);
+        return [a.encoding === "base64" ? renderBinaryFileDiff(name) : renderNewFileDiff(name, a.content)];
+      })
       .join("");
+    diffNames = [...rendered];
+  }
+  // Two files whose names are the same but for spaces or a U+FEFF at either end, which a reviewer cannot tell
+  // apart: a run that would complete fails, naming both. Every name it delivers or its diff carries, as git
+  // spells it (a declared `./report.md ` is `report.md `).
+  const trimmed = new Map<string, string>();
+  for (const name of new Set([...out.filesWritten.map((f) => path.posix.normalize(f)), ...diffNames])) {
+    const other = trimmed.get(name.trim());
+    if (other !== undefined && other !== name) {
+      out.unreadable ??= `the run's changes could not be read back for review (two files' names differ only by spaces or a U+FEFF at an end: ${spellName(other)} and ${spellName(name)})`;
+      break;
+    }
+    trimmed.set(name.trim(), name);
   }
   const fitted = fitDiff(diffText, maxBytes);
   out.diffOmitted = fitted.omitted;

@@ -131,6 +131,20 @@ install built from that tree changes each of these:
   a control character) by git's escaped spelling, and dropped a trailing space from a name: a new
   `résumé.md` was created under its escapes, a change to such a file failed the pull request, and a new
   `README.md ` replaced `README.md`. Names are read back as they are.
+- A review read a deleted line that starts `-- ` (a SQL or Lua comment) or an added one that starts `++ ` as a
+  file's header, and a hunk whose heading held a line separator (U+2028, U+2029, a carriage return) not at
+  all: the review lost the lines, the secrets check never saw them, the file took another name, and the pull
+  request failed, or deleted another file. A file whose diff has no lines (an empty or binary one, added,
+  changed or deleted, or a mode change) in a folder whose name ends in ` b` took another file's name, and a
+  quoted name with an emoji in it another's spelling. The board now reads a diff by its hunks' counts, opens a
+  review of a diff git would not write with none of it and a failing secrets check, and builds a pull request
+  only while the review's diff, read again, reads as the files the review showed. Upgrading: a review open
+  before the upgrade whose diff an older board misread fails its pull request on approval, saying so; a person
+  vetoes the approval and requests changes, for a round the new board reads. Files whose names are not UTF-8
+  (Linux allows any bytes) shared one name in the review; a run that would complete now fails, saying so, as
+  it does on two names that differ only by spaces or a U+FEFF at an end, and, without a repository, on a file
+  named `.git`, which is not delivered. The board kept an artifact's name trimmed of those, so such a file
+  replaced the one without them.
 - On Windows, 0.1.0-rc.1 and 0.1.0-rc.2 ran the repository's tests without the job object: Windows
   PowerShell never made it (kernel32's functions were declared without PreserveSig), so what the tests left
   running when they ended by themselves carried on, as without one. The worker now makes it, and its log

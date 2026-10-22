@@ -46,3 +46,20 @@ scheduled; delete it when it ships.
 - An MCP answer at its 8 MB cap nested about four million levels deep raises the board's memory by about
   600 MB while the MCP SDK parses and checks it, before the board's own depth cut applies. Count the nesting
   in the answer's stream (`egressFetch`) and refuse past a few thousand levels before the SDK reads it.
+- Company model providers (`docs/plan.html`, Company model providers), after its slices:
+  - "Try a model" on a provider, a helper that moves teammates from one provider to another, and providers in
+    template files.
+  - Gateway metrics, and a run token bound to the pod that claimed its run. Fastify trusts the proxy, so the
+    binding must read the socket's address, never `req.ip`; a service mesh that adds `X-Forwarded-For` inside
+    the cluster would trip the gateway's refusal of that header.
+  - Bedrock through AssumeRole, with an external id the board generates, after access keys.
+  - The next kinds, in this order: Claude on Microsoft Foundry, Vertex, then Bedrock's Mantle endpoint (bare
+    `openai.*` ids). Entra ID for Azure OpenAI.
+  - A base-URL override for the Anthropic kind.
+  - A budget that stops a run mid-way at the gateway, and budgets per provider.
+  - The board's own model keys behind the gateway too, so no worker pod holds a model key.
+  - The endpoint seal: an HMAC, with a key only the board holds, over a provider's or a connection's company,
+    kind, endpoint, region and credential names, checked at every use, so a write to the database cannot
+    repoint where a key is sent. It belongs with the worker's own database role (the fleet line above).
+  - Codex on the worker past 0.144.5 (0.157.1 adds `amazon-bedrock-runtime`), in a pull request that records
+    the worker's fixtures again.

@@ -8,6 +8,7 @@
 import {
   type AssignReviewerInput,
   diffStats,
+  DiffError,
   parseUnifiedDiff,
   payloadSha256,
   sha256Hex,
@@ -472,7 +473,15 @@ export async function openReviewRound(
     ),
   };
   const diffText = artifacts.rows.find((a) => a.kind === "diff")?.content ?? "";
-  const files: DiffFile[] = parseUnifiedDiff(diffText);
+  // A diff the parser cannot read whole opens a review with none of it, and a secrets check that says why.
+  let files: DiffFile[] = [];
+  let unread: string | undefined;
+  try {
+    files = parseUnifiedDiff(diffText);
+  } catch (err) {
+    if (!(err instanceof DiffError)) throw err;
+    unread = err.message;
+  }
   const author: ActorRef = { kind: "teammate", id: run.teammate_id };
   const existing = (
     await ctx.client.query<ReviewRow>("SELECT * FROM reviews WHERE task_id = $1 FOR UPDATE", [task.id])
@@ -534,7 +543,7 @@ export async function openReviewRound(
     );
   }
   const checks: CheckResult[] = [
-    secretsCheck(files),
+    secretsCheck(files, unread),
     outputsCheck(
       task.declared_outputs ?? [],
       artifacts.rows.filter((a) => a.kind !== "diff" && a.kind !== "handover").map((a) => a.path),
