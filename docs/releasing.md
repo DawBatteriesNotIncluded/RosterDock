@@ -38,8 +38,8 @@ the `release tags` ruleset forbids moving or deleting a `v*` tag. Fix on `main` 
 version, so a failed `v0.2.0-rc.1` is followed by `v0.2.0-rc.2` and a failed `v0.2.0` by `v0.2.1`. That is
 why a version starts with a dry run and a prerelease tag.
 
-**A dry run.** Actions, release, Run workflow, with any version: CI and every build run for both
-architectures, and nothing logs in or pushes.
+**A dry run.** Actions, release, Run workflow, with any version: CI (all but the smoke install on kind, which
+runs on a tag) and every build run for both architectures, and nothing logs in or pushes.
 
 **What the images leave out.** The board is built with `WITH_MODEL_CLIS=0` and the worker with
 `WITH_CLAUDE_CODE=0`: Claude Code's licence (Anthropic's Commercial Terms) does not allow a public image to
@@ -65,11 +65,13 @@ their parsers' fixtures were recorded with; moving one means recording the fixtu
   reporters to `/security/advisories/new`. Secret scanning and push protection are on, and skip only the
   files `.github/secret_scanning.yml` names. CodeQL runs in its default setup.
 - **Rules.** The `main` ruleset takes changes only through a squash-merged pull request whose required CI
-  checks are green: typecheck, lint, test; build images; helm lint; smoke install on kind (skipped counts);
-  and worker tests on Windows (node 22.16) and (node 22). No force-push, no deletion, nobody exempt. The
-  Windows checks are named by the matrix's Node versions: a change to the matrix changes the ruleset too, or
-  every pull request waits on a check that never runs. The
-  `release tags` ruleset forbids moving or deleting a `v*` tag. Anyone who can push a `v*` tag publishes.
+  checks are green (typecheck, lint, test; build images; helm lint; smoke install on kind, where skipped
+  counts), with no force-push, no deletion and nobody exempt. CI also runs worker tests on Windows (node
+  22.16) and (node 22), on every pull request and on a tag, where a failure stops the release: add both to the
+  required checks, or a pull request that breaks them merges green and the next tag spends its version. They
+  are named by the matrix's Node versions, so a change to the matrix changes the ruleset with it, or every
+  pull request waits on a check that never runs. The `release tags` ruleset forbids moving or deleting a `v*`
+  tag. Anyone who can push a `v*` tag publishes.
 - **The pre-release sentences.** When 0.1.0 ships, delete the sentence in `README.md`'s Status that says
   nothing is published, and the two sentences directly under "Where the images and the chart come from" in
   `docs/install.md`.

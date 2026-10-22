@@ -11,8 +11,9 @@ part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Set up
 
-You need Node.js 22.13 or later, pnpm 10 (`npm install -g pnpm@10`, or `corepack enable` on Node 22 or 24,
-which picks the pinned version) and Docker. Node 25 and later no longer ship corepack.
+You need Node.js 22.13 or a later 22, or 24 or later (not 23: the lint and test tools refuse it), pnpm 10
+(`npm install -g pnpm@10`, or `corepack enable` on Node 22 or 24, which picks the pinned version) and Docker.
+Node 25 and later no longer ship corepack.
 
 ```bash
 pnpm install
