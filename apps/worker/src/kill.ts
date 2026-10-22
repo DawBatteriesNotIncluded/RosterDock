@@ -77,7 +77,10 @@ function jobScript(
     "  if (-not $kernel32::SetInformationJobObject($job, 9, $limits, $limits.Length)) { throw 'no job limits' }",
     "  $self = [Diagnostics.Process]::GetCurrentProcess().Handle",
     "  if (-not $kernel32::AssignProcessToJobObject($job, $self)) { throw 'not in the job' }",
-    noJob === undefined ? "} catch {}" : `} catch { exit ${noJob} }`,
+    // Asked (noJob), PowerShell says why there is no job on stderr before it exits.
+    noJob === undefined
+      ? "} catch {}"
+      : `} catch { [Console]::Error.WriteLine($_.Exception.Message); exit ${noJob} }`,
     ...Object.entries(restore).map(
       ([name, value]) =>
         `[Environment]::SetEnvironmentVariable(${quoted(name)}, ${value === undefined ? "$null" : quoted(value)})`,
@@ -147,8 +150,11 @@ export function probeJob(): Promise<JobProbe> {
     let child: ChildProcess;
     const refused = (err: NodeJS.ErrnoException) =>
       resolve({ works: false, why: `Windows PowerShell did not start (${err.code ?? err.message})` });
+    let said = "";
     try {
-      child = spawn(job.file, job.args, { env, stdio: "ignore", windowsHide: true });
+      child = spawn(job.file, job.args, { env, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+      child.stderr?.setEncoding("utf8");
+      child.stderr?.on("data", (c: string) => (said = (said + c).slice(0, 1000)));
     } catch (err) {
       // Where a rule blocks powershell.exe, the spawn throws (EPERM, UNKNOWN).
       return refused(err as NodeJS.ErrnoException);
@@ -169,7 +175,7 @@ export function probeJob(): Promise<JobProbe> {
           : code === 8
             ? {
                 works: false,
-                why: "Windows PowerShell could not make a job object here (one that cannot nest jobs)",
+                why: `Windows PowerShell could not make a job object here (${said.trim() || "it gave no reason"})`,
               }
             : {
                 works: false,

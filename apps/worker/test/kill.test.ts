@@ -95,3 +95,11 @@ it("keeps a definite answer, says it, and asks again where Windows PowerShell di
     vi.useRealTimers();
   }
 });
+
+it.runIf(process.platform === "win32")(
+  "makes the job on Windows, where it runs the repository's tests",
+  async () => {
+    // The real Windows PowerShell: a definite yes, or the reason it gives.
+    expect(await probeJob()).toEqual({ works: true });
+  },
+);
