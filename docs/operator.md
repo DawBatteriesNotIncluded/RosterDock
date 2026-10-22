@@ -280,6 +280,10 @@ the company sees them by name.
   then saves the provider. A key never replaces another one, nor hides a name you share, and a provider the
   board refuses at its check leaves no key. One refused after the key is set (someone added the same name a
   moment before) leaves the key under its name, listed under Settings > Connections > Secrets.
+- A provider's card changes its label, its endpoint or region and its key's name, and sets the value under its
+  key's name, replacing it for everything that names that secret, as Settings > Connections > Secrets does.
+  Removing asks first, and says the key stays in the company's secrets; Archive keeps everything. Without a
+  secret store a company pastes no key: it names one you share, and the page says so.
 - `board.modelProviders` (`ROSTERDOCK_MODEL_PROVIDERS`) lists the kinds a company may add: `anthropic`,
   `openai`, `azure_openai`, `bedrock`, `openai_compatible`, and `board`, which lends the board's own models to
   every company. Empty: all of them. `[board]` alone: no company providers. The board does not start on an
