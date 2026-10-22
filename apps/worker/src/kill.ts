@@ -39,14 +39,17 @@ export function killTree(child: ChildProcess): void {
  * which joins the job, as does everything it starts; waits for it and exits with its code. kernel32's job
  * functions are declared in memory, so nothing is compiled or written to disk. Without a job (a policy that
  * refuses this, a Windows that cannot nest jobs) the command runs all the same. PSModulePath, which PowerShell
- * sets, is taken out again: the command sees the environment the worker gave it.
+ * sets, is taken out again: the command sees the environment the worker gave it. No cmdlet, only .NET: a
+ * cmdlet loads its module, which in the tests' bare environment had PowerShell analyse every module again
+ * first (12 s and more where this takes under one).
  */
 function jobScript(comspec: string, line: string): string {
   const quoted = (s: string) => `'${s.replace(/'/g, "''")}'`;
   return [
     "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
     "try {",
-    "  $name = New-Object Reflection.AssemblyName 'RosterDockJob'",
+    "  $name = [Reflection.AssemblyName]::new('RosterDockJob')",
     "  $module = [AppDomain]::CurrentDomain.DefineDynamicAssembly($name, 'Run').DefineDynamicModule('RosterDockJob')",
     "  $type = $module.DefineType('Kernel32', 'Public, Class')",
     "  $functions = @(",
@@ -61,14 +64,14 @@ function jobScript(comspec: string, line: string): string {
     "  $job = $kernel32::CreateJobObjectW([IntPtr]::Zero, [IntPtr]::Zero)",
     "  if ($job -eq [IntPtr]::Zero) { throw 'no job object' }",
     // JOBOBJECT_EXTENDED_LIMIT_INFORMATION (class 9), with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE in its LimitFlags.
-    "  $limits = New-Object byte[] $(if ([IntPtr]::Size -eq 8) { 144 } else { 112 })",
+    "  $limits = [byte[]]::new($(if ([IntPtr]::Size -eq 8) { 144 } else { 112 }))",
     "  [BitConverter]::GetBytes([uint32]0x2000).CopyTo($limits, 16)",
     "  if (-not $kernel32::SetInformationJobObject($job, 9, $limits, $limits.Length)) { throw 'no job limits' }",
     "  $self = [Diagnostics.Process]::GetCurrentProcess().Handle",
     "  if (-not $kernel32::AssignProcessToJobObject($job, $self)) { throw 'not in the job' }",
     "} catch {}",
-    "Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue",
-    "$start = New-Object Diagnostics.ProcessStartInfo",
+    "[Environment]::SetEnvironmentVariable('PSModulePath', $null)",
+    "$start = [Diagnostics.ProcessStartInfo]::new()",
     `$start.FileName = ${quoted(comspec)}`,
     `$start.Arguments = ${quoted(`/d /s /c "${line}"`)}`,
     "$start.UseShellExecute = $false",
