@@ -152,10 +152,83 @@ export function stdioListed(lines: readonly string[], typed: string): boolean {
   });
 }
 
+/** An IPv4 address as a number, or null. */
+function v4(address: string): number | null {
+  const parts = address.split(".");
+  if (parts.length !== 4 || !parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255)) return null;
+  return parts.reduce((n, p) => n * 256 + Number(p), 0);
+}
+
+/** Whether an IPv4 address is in a range written as `a.b.c.d/n` (or is the address itself). */
+function inV4Range(address: number, range: string): boolean {
+  const [base, bitsText] = range.split("/");
+  const start = v4(base ?? "");
+  const bits = bitsText === undefined ? 32 : Number(bitsText);
+  if (start === null || !(bits >= 0 && bits <= 32)) return false;
+  const size = 2 ** (32 - bits);
+  return Math.floor(address / size) === Math.floor(start / size);
+}
+
+const PRIVATE_V4 = [
+  "0.0.0.0/8",
+  "10.0.0.0/8",
+  "100.64.0.0/10",
+  "127.0.0.0/8",
+  "169.254.0.0/16",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+];
+const LOCAL_SUFFIXES = [".localhost", ".local", ".internal", ".lan", ".home.arpa", ".svc", ".cluster.local"];
+
+/**
+ * Whether a URL's host looks private and the operator's list does not name it: an address in a private,
+ * loopback or link-local range, localhost, a name of one label or under a local suffix. The board decides by
+ * what a name resolves to; this only says so before its check does.
+ */
+export function privateUnlisted(url: string, listed: readonly string[]): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname
+      .toLowerCase()
+      .replace(/^\[|\]$/g, "")
+      .replace(/\.$/, "");
+  } catch {
+    return false;
+  }
+  if (!host) return false;
+  const entries = listed.map((e) => e.toLowerCase().replace(/^\[|\](?=\/|$)/g, ""));
+  const address = v4(host);
+  if (address !== null)
+    return PRIVATE_V4.some((r) => inV4Range(address, r)) && !entries.some((e) => inV4Range(address, e));
+  if (host.includes(":")) {
+    const looks = host === "::1" || host === "::" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host);
+    return looks && !entries.includes(host);
+  }
+  const looks = host === "localhost" || !host.includes(".") || LOCAL_SUFFIXES.some((s) => host.endsWith(s));
+  return (
+    looks &&
+    !entries.some((e) =>
+      e.startsWith("*.") ? host.endsWith(e.slice(1)) && host.length > e.length - 1 : e === host,
+    )
+  );
+}
+
+/** Under a URL the board would refuse: what this board reaches, and who changes it. */
+function PrivateHint({ listed }: { listed: readonly string[] }) {
+  return (
+    <span className="hint" style={{ color: "var(--warn-ink)" }}>
+      This board reaches public addresses, and private ones only where its operator lists them
+      {listed.length ? `: ${listed.join(" · ")}` : ": none so far"}. A connection here is refused until the
+      operator adds it (board.privateDestinations on the chart, or ROSTERDOCK_PRIVATE_DESTINATIONS).
+    </span>
+  );
+}
+
 function AddMcpForm({
   catalog,
   oauthOffered,
   stdioCommands,
+  privateDestinations,
   onCreate,
   onSetSecret,
 }: {
@@ -163,6 +236,8 @@ function AddMcpForm({
   oauthOffered: boolean;
   /** The command lines the board runs for stdio connections; undefined until the board says. */
   stdioCommands?: string[];
+  /** The private destinations the board reaches; undefined until the board says. */
+  privateDestinations?: string[];
   /** Resolves true when the connection was made; the form then clears. */
   onCreate(input: CreateConnectionInput): Promise<boolean>;
   /** Set the credential's value under its name first, when one was typed; absent without a secret store. */
@@ -186,6 +261,9 @@ function AddMcpForm({
   /** A stdio server runs inside the board, so only a command line the operator lists. */
   const stdioRefused =
     transport === "stdio" && stdioCommands !== undefined && !stdioListed(stdioCommands, command);
+  /** The server looks private and the operator lists it nowhere: its check and calls will be refused. */
+  const privateRefused =
+    transport === "http" && privateDestinations !== undefined && privateUnlisted(url, privateDestinations);
   /** The name a typed value would be set under: the client secret's for OAuth, else the credential's. */
   const secretTarget = byOAuth
     ? clientId.trim()
@@ -260,7 +338,11 @@ function AddMcpForm({
                   : stdioListed(stdioCommands, e.commandExample ?? "")
                     ? " · runs on this board"
                     : " · its command must be one the operator allows"
-                : ""}
+                : e.transport === "http" &&
+                    privateDestinations &&
+                    privateUnlisted(e.urlExample ?? "", privateDestinations)
+                  ? " · usually on a private address, which the operator must allow"
+                  : ""}
             </option>
           ))}
         </select>
@@ -304,6 +386,7 @@ function AddMcpForm({
           </datalist>
         </Field>
       )}
+      {privateRefused ? <PrivateHint listed={privateDestinations ?? []} /> : null}
       {stdioRefused ? (
         <span className="hint" style={{ color: "var(--warn-ink)" }}>
           {stdioCommands?.length
@@ -379,10 +462,13 @@ function AddMcpForm({
 }
 
 function AddOpenApiForm({
+  privateDestinations,
   onPreview,
   onCreate,
   onSetSecret,
 }: {
+  /** The private destinations the board reaches; undefined until the board says. */
+  privateDestinations?: string[];
   onPreview(spec: string): Promise<OpenApiScan>;
   /** Resolves true when the connection was made; the form then clears. */
   onCreate(input: CreateOpenApiConnectionInput): Promise<boolean>;
@@ -479,6 +565,9 @@ function AddOpenApiForm({
             style={{ width: 240 }}
           />
         </Field>
+        {privateDestinations && privateUnlisted(url, privateDestinations) ? (
+          <PrivateHint listed={privateDestinations} />
+        ) : null}
         <Field label="Credential env var NAME">
           <input
             value={authEnvName}
@@ -1026,11 +1115,13 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
               catalog={catalog}
               oauthOffered={!!p.features?.oauth}
               stdioCommands={p.features?.stdioCommands}
+              privateDestinations={p.features?.privateDestinations}
               onCreate={(i) => wrap(() => p.createConnection(i))()}
               onSetSecret={setSecret}
             />
           ) : (
             <AddOpenApiForm
+              privateDestinations={p.features?.privateDestinations}
               onPreview={p.previewOpenApi}
               onCreate={(i) => wrap(() => p.createOpenApiConnection(i))()}
               onSetSecret={setSecret}

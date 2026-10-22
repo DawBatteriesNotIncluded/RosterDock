@@ -13,7 +13,11 @@
 // shares (secrets/company.ts), never the rest of the board's environment.
 // The URL is never logged and never appears in an event. Email is the same
 // shape: an SMTP URL (credentials inside) by env var NAME, the recipients and
-// the sender, per company in settings.notify.email or board-wide.
+// the sender, per company in settings.notify.email or board-wide. A company's
+// own webhook and SMTP server are destinations it chose, reached through the
+// board's egress (web/egress.ts): a public address, or a private one the
+// operator lists, and no redirect followed. The board's own are the operator's
+// and are reached as they are.
 
 import { type ActorRef, type EventRecord, type EventType } from "@rosterdock/shared";
 import type { Db } from "../db/pool.js";
@@ -21,6 +25,7 @@ import type { EventBus } from "../events/bus.js";
 import { mutate } from "../mutate.js";
 import { companyEnv, notSetForCompany } from "../secrets/company.js";
 import type { SecretStore } from "../secrets/store.js";
+import { defaultEgress, egressFetch, egressSocket, type Egress } from "../web/egress.js";
 import { sendMail, type SmtpOptions } from "./smtp.js";
 
 export const NEEDS_YOU_EVENTS: readonly EventType[] = [
@@ -37,8 +42,13 @@ export const NEEDS_YOU_EVENTS: readonly EventType[] = [
 
 export interface NotifyDeps {
   db: Db;
-  /** Injected in tests; never the real network there. */
+  /** What the board's own webhook (ROSTERDOCK_NOTIFY_WEBHOOK_URL) is posted with; injected in tests. Default: global fetch. */
   fetch?: typeof fetch;
+  /**
+   * How a company's own webhook and SMTP server are reached (web/egress.ts); tests inject its transport and
+   * resolver. Default: the board's own, with nothing private allowed.
+   */
+  egress?: Egress;
   /** The names the board shares with every company (secrets/company.ts sharedEnv). Default: none. */
   env?: NodeJS.ProcessEnv;
   /** Where each company's own secrets live; they resolve before the shared names. */
@@ -153,6 +163,8 @@ export interface NotifyTarget {
   url: string;
   /** Where the URL came from, by name only. */
   source: string;
+  /** The board's own, the operator's: reached as it is. A company's goes through the egress. */
+  operator: boolean;
 }
 
 /** Where the company's names resolve: its secrets over the names the board shares. */
@@ -171,14 +183,14 @@ export async function webhookFor(deps: NotifyDeps, companyId: string): Promise<N
   const settings = notifySettings(row?.settings);
   if (settings.webhookEnvName) {
     const url = (await envFor(deps, companyId))[settings.webhookEnvName]?.trim();
-    if (url) return { url, source: settings.webhookEnvName };
+    if (url) return { url, source: settings.webhookEnvName, operator: false };
     deps.log.warn(
       `${notSetForCompany(settings.webhookEnvName)}; ${row?.name ?? companyId} gets no notifications`,
     );
     return null;
   }
   return deps.defaultWebhookUrl
-    ? { url: deps.defaultWebhookUrl, source: "ROSTERDOCK_NOTIFY_WEBHOOK_URL" }
+    ? { url: deps.defaultWebhookUrl, source: "ROSTERDOCK_NOTIFY_WEBHOOK_URL", operator: true }
     : null;
 }
 
@@ -188,6 +200,8 @@ export interface EmailTarget {
   from: string;
   /** Where the URL came from, by name only. */
   source: string;
+  /** The board's own, the operator's: reached as it is. A company's goes through the egress. */
+  operator: boolean;
 }
 
 /** The email target for a company: its own SMTP URL env var NAME when set (and set for the company), else the board's. */
@@ -214,6 +228,7 @@ export async function emailFor(deps: NotifyDeps, companyId: string): Promise<Ema
         to: settings.email.to,
         from: settings.email.from ?? `rosterdock@${host}`,
         source: settings.email.smtpUrlEnvName,
+        operator: false,
       };
     }
     deps.log.warn(
@@ -221,7 +236,9 @@ export async function emailFor(deps: NotifyDeps, companyId: string): Promise<Ema
     );
     return null;
   }
-  return deps.defaultEmail ? { ...deps.defaultEmail, source: "ROSTERDOCK_NOTIFY_SMTP_URL" } : null;
+  return deps.defaultEmail
+    ? { ...deps.defaultEmail, source: "ROSTERDOCK_NOTIFY_SMTP_URL", operator: true }
+    : null;
 }
 
 export interface SendOutcome {
@@ -242,7 +259,11 @@ async function mail(
     await sendMail(
       target.smtpUrl,
       { from: target.from, to: target.to, subject, text },
-      { timeoutMs: deps.timeoutMs ?? 15_000, ...deps.smtp },
+      {
+        timeoutMs: deps.timeoutMs ?? 15_000,
+        ...deps.smtp,
+        ...(target.operator ? {} : { guard: egressSocket(deps.egress ?? defaultEgress()) }),
+      },
     );
     return { sent: true, target: target.source, error: null };
   } catch (err) {
@@ -286,13 +307,17 @@ async function post(
     // A malformed URL would put its (token-bearing) value into fetch's error message; say only where it came from.
     return { sent: false, target: target.source, error: `the webhook URL in ${target.source} is not a URL` };
   }
-  const doFetch = deps.fetch ?? fetch;
+  const timeoutMs = deps.timeoutMs ?? 15_000;
+  // A company's webhook follows no redirect: its URL may carry a token, and the post goes there or nowhere.
+  const doFetch = target.operator
+    ? (deps.fetch ?? fetch)
+    : egressFetch(deps.egress ?? defaultEgress(), { redirect: "error", timeoutMs });
   try {
     const res = await doFetch(target.url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(deps.timeoutMs ?? 15_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok)
       return { sent: false, target: target.source, error: `the webhook answered HTTP ${res.status}` };

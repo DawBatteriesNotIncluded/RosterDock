@@ -5,14 +5,23 @@
 // the board registers a client there when it was not given one (RFC 7591),
 // then authorization code with PKCE (RFC 7636) and the server URL as the
 // resource (RFC 8707), and refresh when the access token is about to expire.
-// No client library: a few requests over an injected fetch. Nothing here
+// No client library: a few requests through the board's egress (web/egress.ts),
+// since every URL here is one the MCP server or its authorization server named:
+// each reaches only a public address or a private one the operator lists.
+// Discovery follows a redirect, every hop checked again; registration and the
+// token requests, which carry a secret or a code, follow none. Nothing here
 // stores anything: the caller keeps the tokens in the secret store, and every
 // error text is free of them.
 import { trimTrailingSlashes } from "@rosterdock/shared";
 import { codeChallenge } from "../auth/oidc.js";
+import { egressFetch, type Egress } from "../web/egress.js";
+
+/** One request to an authorization server: its names, its answer and its body. */
+export const OAUTH_TIMEOUT_MS = 15_000;
 
 export interface OAuthDeps {
-  fetch: typeof fetch;
+  /** How the servers are reached; tests inject its transport and resolver. */
+  egress: Egress;
   now?: () => number;
   log: { warn(msg: string): void };
 }
@@ -76,7 +85,9 @@ async function getJson(
   deps: OAuthDeps,
 ): Promise<{ status: number; json: Record<string, unknown> | null }> {
   try {
-    const res = await deps.fetch(url, { headers: { accept: "application/json" } });
+    const res = await egressFetch(deps.egress, { redirect: "follow", timeoutMs: OAUTH_TIMEOUT_MS })(url, {
+      headers: { accept: "application/json" },
+    });
     const json = res.ok ? ((await res.json().catch(() => null)) as Record<string, unknown> | null) : null;
     return { status: res.status, json };
   } catch (err) {
@@ -180,17 +191,20 @@ export async function registerClient(
     );
   let res: Response;
   try {
-    res = await deps.fetch(as.registration_endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
-        client_name: "RosterDock",
-        redirect_uris: [redirectUri],
-        grant_types: ["authorization_code", "refresh_token"],
-        response_types: ["code"],
-        token_endpoint_auth_method: tokenAuth === "post" ? "client_secret_post" : "client_secret_basic",
-      }),
-    });
+    res = await egressFetch(deps.egress, { redirect: "error", timeoutMs: OAUTH_TIMEOUT_MS })(
+      as.registration_endpoint,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({
+          client_name: "RosterDock",
+          redirect_uris: [redirectUri],
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+          token_endpoint_auth_method: tokenAuth === "post" ? "client_secret_post" : "client_secret_basic",
+        }),
+      },
+    );
   } catch (err) {
     throw new OAuthError(
       "registration",
@@ -258,7 +272,11 @@ async function tokenRequest(
   }
   let res: Response;
   try {
-    res = await deps.fetch(tokenEndpoint, { method: "POST", headers, body: form.toString() });
+    res = await egressFetch(deps.egress, { redirect: "error", timeoutMs: OAUTH_TIMEOUT_MS })(tokenEndpoint, {
+      method: "POST",
+      headers,
+      body: form.toString(),
+    });
   } catch (err) {
     throw new OAuthError("token", `could not reach the token endpoint: ${(err as Error).message}`);
   }

@@ -2,15 +2,19 @@
 // merge reach a webhook as one sentence each; the target is the board's own URL
 // or a per-company env var NAME resolved at send time; nothing about the URL
 // lands on the board. The webhook is a fake fetch that records what it got.
+import { once } from "node:events";
+import { createServer, type AddressInfo, type Socket } from "node:net";
 import type { EventRecord } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { proposeApproval } from "../src/approvals/service.js";
 import { emailFor, needsYouText, notifySettings, sendNeedsYou, startNotifier } from "../src/notify/notify.js";
-import { parseSmtpUrl } from "../src/notify/smtp.js";
+import { parseSmtpUrl, sendMail } from "../src/notify/smtp.js";
+import { parsePrivateDestinations } from "../src/web/address.js";
 import { SMTP_CERT, startFakeSmtp, type FakeSmtp } from "./smtp-fake.js";
 import {
   addProject,
   addTeammate,
+  PUBLIC_TEST_ADDRESS,
   seedCompany,
   startTestBoard,
   workerClaim,
@@ -29,7 +33,9 @@ const env: NodeJS.ProcessEnv = {
   GTM_SLACK_WEBHOOK: "https://hooks.slack.test/services/T000/B000/secret-token-000",
 };
 
-// Three fake SMTP servers on localhost: in the clear, in the clear with STARTTLS, and TLS from the start.
+// Three fake SMTP servers on localhost: in the clear, in the clear with STARTTLS, and TLS from the start. A
+// company's SMTP server is a destination it chose, so the board reaches them because the operator allows
+// loopback here (ROSTERDOCK_PRIVATE_DESTINATIONS), as a dev board does.
 let plain: FakeSmtp;
 let upgrade: FakeSmtp;
 let tlsServer: FakeSmtp;
@@ -44,8 +50,14 @@ beforeAll(async () => {
     {
       notifyWebhookUrl: "https://hooks.example.test/board-default",
       sharedEnvNames: ["GTM_SLACK_WEBHOOK", "GTM_SMTP_URL", "GTM_SMTP_STARTTLS", "GTM_SMTPS"],
+      privateDestinations: parsePrivateDestinations("127.0.0.1,localhost"),
     },
-    { notifyFetch: webhook, env, smtp: { tls: { ca: SMTP_CERT } } },
+    {
+      notifyFetch: webhook,
+      env,
+      smtp: { tls: { ca: SMTP_CERT } },
+      egressResolve: async (host) => (host === "localhost" ? ["127.0.0.1"] : [PUBLIC_TEST_ADDRESS]),
+    },
   );
 });
 afterAll(async () => {
@@ -234,6 +246,47 @@ describe("needs-you notifications", () => {
 });
 
 describe("needs-you by email", () => {
+  it("gives up at the deadline in a TLS handshake or after STARTTLS, and closes its side", async () => {
+    // One server takes the connection and says nothing; the other agrees to STARTTLS, then says nothing.
+    const held: Socket[] = [];
+    const take = (s: Socket) => {
+      held.push(s);
+      // Read and drop what arrives, so the close is seen.
+      s.on("error", () => {}).resume();
+    };
+    const silent = createServer(take);
+    const stalls = createServer((s) => {
+      take(s);
+      s.write("220 stall ESMTP\r\n");
+      s.on("data", (d: Buffer) => {
+        const line = d.toString("latin1");
+        if (line.startsWith("EHLO")) s.write("250-stall\r\n250 STARTTLS\r\n");
+        else if (line.startsWith("STARTTLS")) s.write("220 go ahead\r\n");
+      });
+    });
+    await Promise.all([silent, stalls].map((srv) => new Promise<void>((r) => srv.listen(0, "127.0.0.1", r))));
+    const port = (srv: typeof silent) => (srv.address() as AddressInfo).port;
+    const message = { from: "board@example.test", to: ["ops@example.test"], subject: "s", text: "t" };
+    const opts = { timeoutMs: 1000, tls: { ca: SMTP_CERT, servername: "localhost" } };
+    try {
+      const started = Date.now();
+      const outcomes = await Promise.allSettled([
+        sendMail(`smtps://owner:pw@127.0.0.1:${port(silent)}/`, message, opts),
+        sendMail(`smtp://owner:pw@127.0.0.1:${port(stalls)}/`, message, opts),
+      ]);
+      expect(outcomes.map((o) => (o.status === "rejected" ? (o.reason as Error).message : "sent"))).toEqual([
+        "the server gave no answer in 1s",
+        "the server gave no answer in 1s",
+      ]);
+      expect(Date.now() - started).toBeLessThan(3000);
+      // The board closed its side of both.
+      await Promise.all(held.map((s) => (s.readableEnded || s.destroyed ? null : once(s, "close"))));
+    } finally {
+      for (const s of held) s.destroy();
+      await Promise.all([silent, stalls].map((srv) => new Promise((r) => srv.close(r))));
+    }
+  });
+
   it("sends the sentence through the company's SMTP URL by NAME, alongside the webhook, and records each channel", async () => {
     const { api, base, companyId } = await seedCompany(board, "nt4@example.com");
     env.GTM_SMTP_URL = `smtp://owner:pw@127.0.0.1:${plain.port}/?plainAuth=1`;
@@ -358,6 +411,7 @@ describe("needs-you by email", () => {
       to: ["a@x.test"],
       from: "p@x.test",
       source: "ROSTERDOCK_NOTIFY_SMTP_URL",
+      operator: true,
     });
     expect(parseSmtpUrl("smtps://u:p%40ss@mail.test/")).toEqual({
       secure: true,
