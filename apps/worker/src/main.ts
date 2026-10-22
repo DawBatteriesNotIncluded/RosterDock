@@ -129,3 +129,6 @@ const stop = async () => {
 };
 process.on("SIGINT", () => void stop());
 process.on("SIGTERM", () => void stop());
+// The terminal `pnpm dev:worker` runs in, closed: the repository's tests lead a session of their own, which its
+// hangup no longer reaches, so the stop ends them.
+process.on("SIGHUP", () => void stop());

@@ -13,7 +13,6 @@ import {
   createCodexEngine,
   errorText,
   parseCodexStream,
-  resolveCodexBin,
 } from "../src/engines/codex.js";
 
 /** What the department's list leaves Codex; the list must be one Codex keeps to. */
@@ -190,22 +189,6 @@ describe("invocation", () => {
       "-c",
       'web_search="disabled"',
     ]);
-  });
-
-  it("resolves the Windows npm shim to codex.js run by this Node", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-codex-shim-"));
-    try {
-      const js = path.join(dir, "node_modules", "@openai", "codex", "bin", "codex.js");
-      await (await import("node:fs/promises")).mkdir(path.dirname(js), { recursive: true });
-      await writeFile(js, "", "utf8");
-      expect(resolveCodexBin("codex", { PATH: dir }, "win32")).toEqual({
-        bin: process.execPath,
-        prefix: [js],
-      });
-      expect(resolveCodexBin("codex", { PATH: dir }, "linux")).toEqual({ bin: "codex", prefix: [] });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
   });
 
   it("runs a stub binary the way it would run Codex: prompt on stdin, JSONL on stdout, the token in the environment only", async () => {

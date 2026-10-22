@@ -4,11 +4,12 @@
 // Usage: node apps/worker/scripts/record-claude-fixture.mjs [model]
 //        node apps/worker/scripts/record-claude-fixture.mjs --unknown-model claude-opus-5.5
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveWindowsBin } from "@rosterdock/shared";
 
 const unknown = process.argv[2] === "--unknown-model";
 const model = (unknown ? process.argv[3] : process.argv[2]) ?? (unknown ? "claude-opus-5.5" : "haiku");
@@ -21,13 +22,27 @@ const out = path.join(
   unknown ? "claude-code-model-error.ndjson" : "claude-code-success.ndjson",
 );
 
+// On Windows npm's .cmd shim is passed over for what it runs, as the worker does (engines/bin.ts).
 function resolveBin() {
   if (process.platform !== "win32") return { bin: "claude", prefix: [] };
-  for (const dir of (process.env.Path || process.env.PATH || "").split(path.delimiter)) {
-    const js = path.join(dir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
-    if (dir && existsSync(js)) return { bin: process.execPath, prefix: [js] };
-  }
-  return { bin: "claude", prefix: [] };
+  const quietly = (f) => (p) => {
+    try {
+      return f(p);
+    } catch {
+      return null;
+    }
+  };
+  return resolveWindowsBin(
+    "claude",
+    (process.env.Path || process.env.PATH || "").split(path.delimiter),
+    process.execPath,
+    {
+      isFile: (p) => quietly((q) => statSync(q).isFile())(p) ?? false,
+      read: quietly((p) => readFileSync(p, "utf8")),
+      join: path.join,
+      dirname: path.dirname,
+    },
+  );
 }
 
 const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-fixture-"));
