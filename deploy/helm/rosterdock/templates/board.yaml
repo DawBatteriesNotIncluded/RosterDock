@@ -95,6 +95,11 @@ spec:
             - name: ROSTERDOCK_STDIO_COMMANDS
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- with .Values.board.privateDestinations }}
+            # The private destinations a company may make the board reach; everything else it chooses is public.
+            - name: ROSTERDOCK_PRIVATE_DESTINATIONS
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- if .Values.board.oauth.enabled }}
             - name: ROSTERDOCK_SECRET_STORE
               value: kubernetes

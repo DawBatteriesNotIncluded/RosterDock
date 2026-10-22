@@ -186,7 +186,8 @@ governs. The web is one too.
 - **The Playwright browser** as a service: the `mcr.microsoft.com/playwright/mcp` image, or
   `npx -y @playwright/mcp@0.0.83 --headless --isolated --browser chromium --port 8931 --host 0.0.0.0` with
   `--allowed-hosts` naming the service, in a pod whose network policy reaches public addresses only; then a
-  connection to `http://<service>:8931/mcp`. Snapshots and screenshots read; navigating, clicking and typing
+  connection to `http://<service>:8931/mcp`, with the service's name in `board.privateDestinations` (Private
+  destinations, below). Snapshots and screenshots read; navigating, clicking and typing
   are writes, as the server marks them, so under a read grant the browser can only look at the page it is on.
   To let teammates move between pages without asking, a person flips `browser_navigate` and
   `browser_navigate_back` to read on the connection's card; clicks and typing stay writes, proposed for a
@@ -199,6 +200,33 @@ governs. The web is one too.
   WebFetch fetches from the worker pod, so what it reaches is what the pod reaches; a web search runs at the
   model's provider. Prefer the web connection; where you use WebFetch, give its department a pool whose
   egress is public HTTPS only.
+
+## Private destinations
+
+A company's connections, the OAuth endpoints their servers name, and its own webhook and SMTP server reach
+public addresses only: the board refuses a loopback, private, link-local (cloud metadata) or other non-public
+address, and a name that resolves to one, before it sends anything (`docs/security.md`, What a company's
+connections reach). An MCP server inside the cluster, a model on a host of yours or an n8n on the office
+network is listed in `board.privateDestinations` (`ROSTERDOCK_PRIVATE_DESTINATIONS`):
+
+```yaml
+board:
+  privateDestinations:
+    - "playwright-mcp.tools.svc.cluster.local" # one service
+    - "*.ai.svc.cluster.local" # every service in a namespace of yours
+    - "10.20.0.0/16" # a range, whatever name leads to it
+```
+
+- Every company on the board may use what you list, and a listed name is trusted with whatever it resolves
+  to: list services every company may reach, by names whose DNS you control.
+- A connection that points at an unlisted private address fails its Check, and its calls fail, with
+  "refused: … which this board's operator has not allowed"; Activity shows the same. Nothing else about it
+  changes: list the destination, or give the connection a public URL, and press Check.
+- Your own destinations are not checked: the git hosts, OIDC, OTLP, the bucket, the Kubernetes API, the model
+  API, `board.notifySecret` and `board.notifyEmail`. A company that names its own webhook or SMTP server in
+  Settings is checked.
+- The board does not start on an entry it cannot read (a typo, a range past /32 or /128).
+- The network policy (`networkPolicy.board.egressTo`) still applies on top; the check is the board's own.
 
 ## Upgrades and backups
 
@@ -225,6 +253,12 @@ governs. The web is one too.
   its calls fail, and it can still be switched off or removed. Only the people `board.companyCreators`
   lists create companies, besides the first on an empty board. And a public sign-in provider (Google and
   the like) with no `board.oidc.allowedDomains` does not start: list your domains, or `"*"`.
+- From a board before `ROSTERDOCK_PRIVATE_DESTINATIONS`, what a company chooses reaches public addresses
+  only. A connection, its OAuth or a company's webhook or SMTP server at a private address (a service in
+  the cluster, a host on your network) fails until `board.privateDestinations` lists it (Private
+  destinations, above), and a connection whose server answers with a redirect fails and names where it
+  pointed: give it that address. A local `apps/board/.env` copied before this change needs the
+  `ROSTERDOCK_PRIVATE_DESTINATIONS` line from `.env.example` to reach servers on your machine.
 
 ## Environment reference
 
@@ -236,6 +270,7 @@ setting with no value of its own from `board.extraEnv`. The ones an operator cha
 | `ROSTERDOCK_DEV_LOGIN`                       | Off in production.                                                                                                                                                                                                                                                                                                                                                     |
 | `ROSTERDOCK_SECRET_STORE`                    | A secret store the board may write to: the tokens a connection's OAuth flow obtains, and the values people set under Settings > Connections > Secrets (`rosterdock-company-<id>`, one key per name; resolved for that company before the shared names). `kubernetes` (the chart sets it with `board.oauth.enabled`) or `file:<dir>`. Unset: only shared names resolve. |
 | `ROSTERDOCK_SHARED_ENV_NAMES`                | Env var names on the board every company may name besides its own secrets (chart `board.sharedEnvNames`), comma-separated; nothing else on the board reaches a company. Any company's admins can send a shared value anywhere, so share only what every company may hold; the board will not start with one of its own names (`docs/security.md`). Empty: none.        |
+| `ROSTERDOCK_PRIVATE_DESTINATIONS`            | The private destinations a company may make the board reach (chart `board.privateDestinations`), comma-separated: host names (`*.` for the names under one), addresses and ranges. Unset: public addresses only. The board does not start on an entry it cannot read (Private destinations, above).                                                                    |
 | `ROSTERDOCK_STDIO_COMMANDS`                  | The command lines a stdio connection may run inside the board (chart `board.stdioCommands`), comma-separated: the command and its arguments, matched exactly; a final `*` lets a company add arguments. The server runs as the board and reads what it can, so list only what every company's admins may run (`docs/security.md`). Empty: none runs.                   |
 | `ROSTERDOCK_COMPANY_CREATORS`                | Who may create a company (chart `board.companyCreators`): emails and `@domain`s, comma-separated, or `*` for anyone who signs in. Unset: the first person to create one on an empty board owns it and nobody creates another (with the dev login on, anyone may). Everyone else joins a company when an owner invites their email.                                     |
 | `ROSTERDOCK_OIDC_*`, `ROSTERDOCK_PUBLIC_URL` | Sign-in (`docs/install.md`).                                                                                                                                                                                                                                                                                                                                           |

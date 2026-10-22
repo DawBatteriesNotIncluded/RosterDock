@@ -12,9 +12,6 @@ scheduled; delete it when it ships.
 - A stdio connection's server runs inside the board pod as the board, so it can read the board's environment,
   a file secret store and the service account token (`docs/security.md`, What they can reach). Run those
   servers as another user, or in a sidecar, without any of them.
-- An HTTP or OpenAPI connection, its OAuth discovery and a notification webhook reach any address the board pod
-  can, cluster-internal ones included; only `networkPolicy.board.egressTo` narrows them. Refuse private and
-  link-local addresses unless the operator lists them.
 - The worker fleet is shared by every company on a board, and code a company controls (the repository's
   `test` script, an engine's shell) can read the worker's environment, the board's `DATABASE_URL` included
   (`docs/security.md`, Companies on one board). Give the worker a database role of its own that reaches

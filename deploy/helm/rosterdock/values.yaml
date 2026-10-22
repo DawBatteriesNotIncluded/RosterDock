@@ -109,6 +109,17 @@ board:
   # The board reads the public web: the sources a research review's documents cite, and the pages teammates
   # read through a company's web connection (ROSTERDOCK_FETCH_SOURCES). false keeps the board off the web.
   fetchSources: true
+  # The private destinations companies may make the board reach (ROSTERDOCK_PRIVATE_DESTINATIONS). What a
+  # company chooses (an MCP server or OpenAPI service, the OAuth endpoints its server names, its own webhook
+  # and SMTP server) must be at a public address: loopback, private, link-local (where cloud metadata lives),
+  # the cluster's own and the other special ranges are refused, a name that resolves to one included, unless
+  # it is listed here. Host names ("*.tools.svc.cluster.local" for the names under one), addresses and ranges
+  # ("10.20.0.0/16"); a listed name is trusted with whatever it resolves to, so list names you control. What
+  # you configure yourself (the git hosts, OIDC, OTLP, the bucket, the API server, the model API, notifySecret
+  # and notifyEmail above) is not held to it. Empty: public addresses only.
+  #  - "playwright-mcp.tools.svc.cluster.local"
+  #  - "ollama.ai.svc.cluster.local"
+  privateDestinations: []
   # More environment for the board container, as Kubernetes env entries, for the settings with no value of
   # their own above (docs/operator.md, Environment reference): ROSTERDOCK_DB_POOL_MAX,
   # ROSTERDOCK_RUN_STALE_AFTER_MS, ROSTERDOCK_SESSION_TTL_SECONDS and the like. A credential belongs in a

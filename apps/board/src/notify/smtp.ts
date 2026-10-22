@@ -5,10 +5,13 @@
 // env var whose NAME is configuration: smtp://user:pass@host:587 (plain, then
 // STARTTLS when the server offers it) or smtps://user:pass@host:465 (TLS from
 // the start). Credentials travel only over TLS unless the URL says
-// ?plainAuth=1 (a relay on localhost).
+// ?plainAuth=1 (a relay on localhost). A company's server is reached through
+// the board's egress check (web/egress.ts egressSocket): its name resolves
+// through a lookup that admits only a public address or a private one the
+// operator lists, and an address written as the host is checked the same way.
 
 import { randomUUID } from "node:crypto";
-import { connect as netConnect, type Socket } from "node:net";
+import { isIP, connect as netConnect, type LookupFunction, type Socket } from "node:net";
 import { connect as tlsConnect, type ConnectionOptions } from "node:tls";
 
 export interface SmtpMessage {
@@ -22,6 +25,8 @@ export interface SmtpOptions {
   timeoutMs?: number;
   /** For the TLS handshake: a private CA, or a servername that differs from the host. */
   tls?: Pick<ConnectionOptions, "ca" | "rejectUnauthorized" | "servername">;
+  /** A company's server: the lookup its name resolves through, and why an address as the host is refused. */
+  guard?: { lookup: LookupFunction; literal(address: string): string | null };
 }
 
 export class SmtpError extends Error {}
@@ -106,6 +111,7 @@ class Session {
     private readonly target: SmtpTarget,
     private readonly tls: SmtpOptions["tls"],
     timeoutMs: number,
+    private readonly lookup?: LookupFunction,
   ) {
     this.secure = target.secure;
     this.timer = setTimeout(
@@ -211,10 +217,11 @@ class Session {
 
   async open(): Promise<void> {
     const { host, port } = this.target;
+    const via = this.lookup ? { lookup: this.lookup } : {};
     await new Promise<void>((resolve, reject) => {
       const socket = this.target.secure
-        ? tlsConnect({ host, port, servername: host, ...this.tls }, resolve)
-        : netConnect({ host, port }, resolve);
+        ? tlsConnect({ host, port, servername: host, ...this.tls, ...via }, resolve)
+        : netConnect({ host, port, ...via }, resolve);
       socket.once("error", reject);
       this.attach(socket);
     });
@@ -273,7 +280,10 @@ export async function sendMail(
   for (const a of [message.from, ...message.to])
     if (!ADDRESS_RE.test(a)) throw new SmtpError(`${a.slice(0, 80)} is not an email address`);
   if (!message.to.length) throw new SmtpError("no recipient");
-  const session = new Session(target, opts.tls, opts.timeoutMs ?? 15_000);
+  // No lookup sees an address written as the host, so the guard checks it here.
+  const refused = opts.guard && isIP(target.host) ? opts.guard.literal(target.host) : null;
+  if (refused) throw new SmtpError(refused);
+  const session = new Session(target, opts.tls, opts.timeoutMs ?? 15_000, opts.guard?.lookup);
   try {
     await session.open();
     await session.send(message);

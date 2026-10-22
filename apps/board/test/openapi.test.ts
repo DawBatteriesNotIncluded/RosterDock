@@ -22,6 +22,7 @@ import {
   addTeammate,
   seedCompany,
   startTestBoard,
+  testEgress,
   workerClaim,
   workerComplete,
   type TestBoard,
@@ -141,7 +142,7 @@ describe("the OpenAPI runtime", () => {
     const list = await callOpenApiOperation(
       target,
       manifest,
-      { fetch: service.fetch, env },
+      { egress: testEgress(service.fetch), env },
       "list_contacts",
       {
         query: { domain: "globex.example" },
@@ -157,24 +158,50 @@ describe("the OpenAPI runtime", () => {
       headers: { authorization: "Bearer fixture-crm-secret-000", accept: "application/json" },
       body: null,
     });
-    const one = await callOpenApiOperation(target, manifest, { fetch: service.fetch, env }, "get_contact", {
-      pathParams: { contactId: "c 101" },
-    });
+    const one = await callOpenApiOperation(
+      target,
+      manifest,
+      { egress: testEgress(service.fetch), env },
+      "get_contact",
+      {
+        pathParams: { contactId: "c 101" },
+      },
+    );
     expect(one.ok).toBe(true);
     expect(service.requests[1]!.url).toBe("https://crm.example.test/v1/contacts/c%20101");
     // Missing path parameter, unknown operation, missing credential: nothing is called.
     const n = service.requests.length;
     expect(
-      await callOpenApiOperation(target, manifest, { fetch: service.fetch, env }, "get_contact", {}),
+      await callOpenApiOperation(
+        target,
+        manifest,
+        { egress: testEgress(service.fetch), env },
+        "get_contact",
+        {},
+      ),
     ).toEqual({
       ok: false,
       error: "path parameter contactId is required and must be a scalar; nothing was called",
     });
     expect(
-      (await callOpenApiOperation(target, manifest, { fetch: service.fetch, env }, "delete_contact", {})).ok,
+      (
+        await callOpenApiOperation(
+          target,
+          manifest,
+          { egress: testEgress(service.fetch), env },
+          "delete_contact",
+          {},
+        )
+      ).ok,
     ).toBe(false);
     expect(
-      await callOpenApiOperation(target, manifest, { fetch: service.fetch, env: {} }, "list_contacts", {}),
+      await callOpenApiOperation(
+        target,
+        manifest,
+        { egress: testEgress(service.fetch), env: {} },
+        "list_contacts",
+        {},
+      ),
     ).toEqual({
       ok: false,
       error:
@@ -186,7 +213,7 @@ describe("the OpenAPI runtime", () => {
     const down = await callOpenApiOperation(
       target,
       manifest,
-      { fetch: service.fetch, env },
+      { egress: testEgress(service.fetch), env },
       "list_contacts",
       {},
     );
@@ -196,7 +223,7 @@ describe("the OpenAPI runtime", () => {
     const big = await callOpenApiOperation(
       target,
       manifest,
-      { fetch: service.fetch, env },
+      { egress: testEgress(service.fetch), env },
       "list_contacts",
       {},
     );
@@ -209,7 +236,7 @@ describe("the OpenAPI runtime", () => {
     const huge = await callOpenApiOperation(
       target,
       manifest,
-      { fetch: service.fetch, env },
+      { egress: testEgress(service.fetch), env },
       "create_contact",
       {
         body: { blob: "x".repeat(manifest.maxRequestBytes + 10) },

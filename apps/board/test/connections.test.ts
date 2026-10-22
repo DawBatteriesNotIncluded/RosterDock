@@ -11,7 +11,14 @@ import { migrate } from "../src/db/migrate.js";
 import { callMcpTool, discoverTools, mcpClientPool } from "../src/mcp/client.js";
 import type { ConnectionRow } from "../src/mcp/connections.js";
 import { fakeMcp } from "./mcp-fake.js";
-import { addProject, addTeammate, seedCompany, startTestBoard, type TestBoard } from "./helpers.js";
+import {
+  addProject,
+  addTeammate,
+  seedCompany,
+  startTestBoard,
+  testEgress,
+  type TestBoard,
+} from "./helpers.js";
 
 let board: TestBoard;
 const mcp = fakeMcp();
@@ -223,7 +230,7 @@ describe("connections", () => {
       discoverTools(
         { transport: "http", url: "https://mcp.gong.test/mcp", authEnvName: "GONG_MCP_TOKEN" },
         {
-          fetch: mcp.fetch,
+          egress: testEgress(mcp.fetch),
           env,
         },
       ),
@@ -237,7 +244,7 @@ describe("connections", () => {
       authEnvName: "HUBSPOT_MCP_TOKEN",
     };
     mcp.calls.length = 0;
-    const read = await callMcpTool(target, { fetch: mcp.fetch, env }, "search_crm_objects", {
+    const read = await callMcpTool(target, { egress: testEgress(mcp.fetch), env }, "search_crm_objects", {
       objectType: "company",
       query: "warm",
     });
@@ -252,7 +259,7 @@ describe("connections", () => {
       name: "search_crm_objects",
       arguments: { objectType: "company", query: "warm" },
     });
-    const write = await callMcpTool(target, { fetch: mcp.fetch, env }, "manage_crm_objects", {
+    const write = await callMcpTool(target, { egress: testEgress(mcp.fetch), env }, "manage_crm_objects", {
       action: "create",
       objectType: "company",
       properties: { name: "Q3 warm accounts" },
@@ -260,14 +267,14 @@ describe("connections", () => {
     expect(write.ok).toBe(true);
     expect((write as { result: { id: string } }).result.id).toBe("301");
     mcp.errorTools.add("whoami");
-    const failed = await callMcpTool(target, { fetch: mcp.fetch, env }, "whoami", {});
+    const failed = await callMcpTool(target, { egress: testEgress(mcp.fetch), env }, "whoami", {});
     mcp.errorTools.delete("whoami");
     expect(failed).toEqual({ ok: false, error: "unauthorized: no credential was presented" });
-    const unknown = await callMcpTool(target, { fetch: mcp.fetch, env }, "no_such_tool", {});
+    const unknown = await callMcpTool(target, { egress: testEgress(mcp.fetch), env }, "no_such_tool", {});
     expect(unknown.ok).toBe(false);
     expect((unknown as { error: string }).error).toContain("unknown tool");
     mcp.failWith = 503;
-    const down = await callMcpTool(target, { fetch: mcp.fetch, env }, "whoami", {});
+    const down = await callMcpTool(target, { egress: testEgress(mcp.fetch), env }, "whoami", {});
     mcp.failWith = null;
     expect(down.ok).toBe(false);
     expect((down as { error: string }).error).not.toContain("fixture-token");
@@ -315,7 +322,7 @@ describe("connections", () => {
     // HTTP is never pooled.
     await callMcpTool(
       { transport: "http", url: "https://mcp.hubspot.test/mcp", authEnvName: "HUBSPOT_MCP_TOKEN" },
-      { fetch: mcp.fetch, env, pool },
+      { egress: testEgress(mcp.fetch), env, pool },
       "whoami",
       {},
     );
