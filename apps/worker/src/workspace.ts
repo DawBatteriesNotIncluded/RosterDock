@@ -314,8 +314,8 @@ export function sameFile(
 
 /**
  * A directory's device, by a handle on it. On Windows the harvest compares devices this way: with libuv 1.49
- * and 1.50 (Node 22.12 to 22.16) on Windows 11 24H2 and later, a stat by path reads the device from the
- * wrong field (0 on NTFS), and a stat by handle is right on every version.
+ * and 1.50 (Node 22.12 to 22.16), where Windows has GetFileInformationByName (11 24H2, Server 2025), a stat
+ * by path reads the device from the wrong field (0 on NTFS), and a stat by handle is right on every version.
  */
 async function deviceOf(dir: string): Promise<bigint> {
   const handle = await open(dir, constants.O_RDONLY);
