@@ -71,6 +71,8 @@ export async function runCli(call: CliCall): Promise<CliResult> {
       child.stdin.end(call.stdin);
     });
   } finally {
-    await rm(cwd, { recursive: true, force: true });
+    // A CLI killed at the timeout holds its directory a moment longer on Windows (EBUSY): retry, and never
+    // let the cleanup stand in for the call's own answer or error.
+    await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
   }
 }

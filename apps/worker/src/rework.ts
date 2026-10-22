@@ -3,8 +3,9 @@
 // harvest still diffs against the base branch and the next round carries the whole change, which keeps
 // the review's hunks and the pull request right. git apply is all or nothing: when the base branch moved
 // and any part no longer applies, the clone stays as it was and the run says which files. It writes
-// nothing outside the clone, into .git or through a link; and a round that would leave a link behind is
-// undone, so the engine never starts with one the run did not make (the harvest refuses links anyway).
+// nothing outside the clone, into .git or through a link; and a round that would leave a link behind, or
+// whose diff makes one, is undone, so the engine never starts with one the run did not make (the harvest
+// refuses links anyway).
 
 import { lstat, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -117,6 +118,20 @@ async function linksLeft(ws: Workspace): Promise<string[] | null> {
   return links;
 }
 
+/**
+ * What the diff makes a symbolic link (mode 120000), as git apply reads it. Where the clone has no symlink
+ * support (Windows, core.symlinks false) git writes such a link as a plain file holding its target, which
+ * linksLeft never sees. Null when git cannot say.
+ */
+async function linksDeclared(ws: Workspace, patch: string): Promise<string[] | null> {
+  const summary = await git(["apply", "--summary", patch], ws.dir);
+  if (summary.code !== 0) return null;
+  return summary.stdout.split("\n").flatMap((line) => {
+    const link = /^ (?:create mode 120000|mode change \d+ => 120000) (.+)$/.exec(line);
+    return link ? [link[1]!] : [];
+  });
+}
+
 /** Back to the clean clone: tracked files as committed, the rest removed (git removes a link, never its target). */
 async function undoApply(ws: Workspace): Promise<void> {
   const reset = await git(["reset", "--hard", "--quiet"], ws.dir);
@@ -141,9 +156,11 @@ export async function applyPreviousRound(
   const patch = path.join(ws.dir, ".git", PATCH_FILE);
   await writeFile(patch, rework.diff, "utf8");
   const res = await git(["apply", "--whitespace=nowarn", patch], ws.dir);
+  const [left, declared] =
+    res.code === 0 ? await Promise.all([linksLeft(ws), linksDeclared(ws, patch)]) : [null, null];
   await rm(patch, { force: true });
   if (res.code === 0) {
-    const links = await linksLeft(ws);
+    const links = left && declared && [...new Set([...left, ...declared])].sort();
     if (links?.length === 0) return { round, applied: true, files: parseUnifiedDiff(rework.diff).length };
     await undoApply(ws);
     return {
