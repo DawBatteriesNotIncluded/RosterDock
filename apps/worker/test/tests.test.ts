@@ -170,9 +170,31 @@ describe("runRepoTests", () => {
       env: { PATH: process.env.PATH ?? "" },
       timeoutMs: 10_000,
     });
-    expect(res.code).toBe(0);
+    expect(res.code, res.output.slice(-2000)).toBe(0);
     expect(res.output.includes("\ufffd")).toBe(false);
     expect(res.output.endsWith("— ✅ 😀 ")).toBe(true);
+  });
+
+  it("gives a command the environment it was given, and nothing the job's PowerShell adds on Windows", async () => {
+    await writeFile(
+      path.join(root, "env.js"),
+      [
+        "const { PATHEXT, PSModulePath, GIVEN } = process.env;",
+        "process.stdout.write(JSON.stringify({ PATHEXT: PATHEXT ?? null, PSModulePath: PSModulePath ?? null, GIVEN }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const res = await execCommand("node", ["env.js"], {
+      cwd: root,
+      env: { PATH: process.env.PATH ?? "", GIVEN: "yes" },
+      timeoutMs: 10_000,
+    });
+    expect(res.code, res.output).toBe(0);
+    const seen = JSON.parse(res.output) as Record<string, string | null>;
+    expect(seen).toMatchObject({ PSModulePath: null, GIVEN: "yes" });
+    // cmd.exe sets its own PATHEXT where it is given none; PowerShell's .CPL is not in it.
+    expect(seen.PATHEXT ?? "").not.toMatch(/\.CPL/i);
   });
 
   it("ends a command past its time limit, with what a Windows shim started under it", async () => {
@@ -193,91 +215,119 @@ describe("runRepoTests", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 
-  /** A Node that stands in for a test runner: it starts one that holds its output open, as a worker would. */
-  async function holder(name: string): Promise<{ script: string; pidFile: string; held(): number }> {
+  /**
+   * A Node that stands in for a test runner: it starts one that holds its output open, as a worker or a server
+   * would, and then waits, or with `exit` ends at once and leaves it running. `stubborn`: the one it starts
+   * writes its output elsewhere and lives through SIGTERM, as a server started `> log 2>&1 &` that handles it.
+   */
+  async function holder(
+    name: string,
+    { exit, stubborn = false }: { exit?: number; stubborn?: boolean } = {},
+  ): Promise<{ script: string; pidFile: string; held(): number; started(): Promise<void> }> {
     const script = path.join(root, `${name}.cjs`);
     const pidFile = path.join(root, `${name}.pid`);
     await writeFile(
       script,
       [
         'const { spawn } = require("node:child_process");',
-        'const held = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "inherit" });',
-        'require("node:fs").writeFileSync(process.argv[2], String(held.pid));',
-        "setTimeout(() => {}, 60000);",
+        stubborn
+          ? 'const held = spawn(process.execPath, ["-e", "process.on(`SIGTERM`, () => {}); setTimeout(() => {}, 60000)"], { stdio: "ignore" });'
+          : 'const held = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "inherit" });',
+        // Whole or not at all: a stop between the file's creation and its write left it empty.
+        'require("node:fs").writeFileSync(`${process.argv[2]}.part`, String(held.pid));',
+        'require("node:fs").renameSync(`${process.argv[2]}.part`, process.argv[2]);',
+        exit === undefined ? "setTimeout(() => {}, 60000);" : `process.exit(${exit});`,
         "",
       ].join("\n"),
     );
-    return { script, pidFile, held: () => Number(readFileSync(pidFile, "utf8")) };
+    const held = () => {
+      const pid = Number(readFileSync(pidFile, "utf8"));
+      // Never 0 or less: process.kill(0) is this process on Windows, and its whole group elsewhere.
+      if (!Number.isInteger(pid) || pid <= 0) throw new Error(`${pidFile} holds no process id`);
+      return pid;
+    };
+    const started = async () => {
+      while (!existsSync(pidFile)) await new Promise((r) => setTimeout(r, 50));
+    };
+    return { script, pidFile, held, started };
   }
 
-  /** Whether a process is still there; it is ended either way, so no test leaves one behind. */
-  function endIfAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return false;
+  /** Whether a process ended within a few seconds; one still there is ended, so no test leaves one behind. */
+  async function ended(pid: number): Promise<boolean> {
+    if (!Number.isInteger(pid) || pid <= 0) throw new Error(`no process id: ${pid}`);
+    for (const until = Date.now() + 5000; Date.now() < until;) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, 100));
     }
     process.kill(pid, "SIGKILL");
-    return true;
+    return false;
   }
 
-  it("ends a command past its time limit though a process it started holds its output open", async () => {
+  // On Windows the command starts once PowerShell has made its job; elsewhere at once.
+  const STARTS_WITHIN_MS = process.platform === "win32" ? 5000 : 500;
+
+  it("ends a command past its time limit, and every process it started, though one holds its output open", async () => {
     const h = await holder("held-open");
     const started = Date.now();
     const res = await execCommand(process.execPath, [h.script, h.pidFile], {
       cwd: root,
-      env: { PATH: process.env.PATH ?? "" },
-      timeoutMs: 500,
+      env: testEnvironment(process.env),
+      timeoutMs: STARTS_WITHIN_MS,
     });
     expect(res.timedOut).toBe(true);
-    expect(Date.now() - started).toBeLessThan(10_000);
-    endIfAlive(h.held());
+    expect(Date.now() - started).toBeLessThan(STARTS_WITHIN_MS + 10_000);
+    expect(await ended(h.held())).toBe(true);
   });
 
-  it.runIf(process.platform === "win32")(
-    "on Windows ends a command past its time limit with every process under it",
-    async () => {
-      const h = await holder("tree");
-      const res = await execCommand(process.execPath, [h.script, h.pidFile], {
-        cwd: root,
-        env: testEnvironment(process.env),
-        timeoutMs: 500,
-      });
-      expect(res.timedOut).toBe(true);
-      // taskkill /t ends the tree before the worker reads on; give Windows a moment to tear it down.
-      const until = Date.now() + 5000;
-      let alive = true;
-      while (alive && Date.now() < until) {
-        try {
-          process.kill(h.held(), 0);
-          await new Promise((r) => setTimeout(r, 100));
-        } catch {
-          alive = false;
-        }
-      }
-      expect(endIfAlive(h.held())).toBe(false);
-    },
-  );
-
-  it("ends a command at once when the run stops", async () => {
-    const h = await holder("stopped");
-    const stop = new AbortController();
-    setTimeout(() => stop.abort(), 300);
+  it("ends what a command left running when it ends by itself, and reports the command's own exit", async () => {
+    // A test script that passes and leaves its server running: the server holds the output open.
+    const h = await holder("left-running", { exit: 7 });
     const started = Date.now();
     const res = await execCommand(process.execPath, [h.script, h.pidFile], {
       cwd: root,
-      env: { PATH: process.env.PATH ?? "" },
+      env: testEnvironment(process.env),
+      timeoutMs: 60_000,
+    });
+    expect(res).toMatchObject({ code: 7, timedOut: false });
+    expect(Date.now() - started).toBeLessThan(STARTS_WITHIN_MS + 10_000);
+    expect(await ended(h.held())).toBe(true);
+  });
+
+  it("ends a process the command left that outlives SIGTERM and holds no output, at the time limit or when it ends", async () => {
+    for (const exit of [undefined, 0]) {
+      const h = await holder(`stubborn-${exit ?? "limit"}`, { exit, stubborn: true });
+      const res = await execCommand(process.execPath, [h.script, h.pidFile], {
+        cwd: root,
+        env: testEnvironment(process.env),
+        timeoutMs: exit === undefined ? STARTS_WITHIN_MS : 60_000,
+      });
+      expect(res.timedOut).toBe(exit === undefined);
+      // Its SIGKILL comes STOP_GRACE_MS after the SIGTERM, though the step has read on.
+      expect(await ended(h.held())).toBe(true);
+    }
+  });
+
+  it("ends a command, and every process it started, at once when the run stops", async () => {
+    const h = await holder("stopped");
+    const stop = new AbortController();
+    void h.started().then(() => stop.abort());
+    const res = await execCommand(process.execPath, [h.script, h.pidFile], {
+      cwd: root,
+      env: testEnvironment(process.env),
       timeoutMs: 60_000,
       signal: stop.signal,
     });
     expect(res.timedOut).toBe(false);
-    expect(Date.now() - started).toBeLessThan(10_000);
-    endIfAlive(h.held());
+    expect(await ended(h.held())).toBe(true);
     // Already stopped: nothing starts.
     expect(
       await execCommand(process.execPath, [h.script, path.join(root, "never.pid")], {
         cwd: root,
-        env: { PATH: process.env.PATH ?? "" },
+        env: testEnvironment(process.env),
         timeoutMs: 60_000,
         signal: stop.signal,
       }),

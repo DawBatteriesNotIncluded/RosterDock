@@ -12,4 +12,5 @@ export * from "./queue.js";
 export * from "./operator.js";
 export * from "./text.js";
 export * from "./web.js";
+export * from "./windows-bin.js";
 export * from "./address.js";

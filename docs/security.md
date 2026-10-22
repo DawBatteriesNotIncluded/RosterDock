@@ -121,8 +121,9 @@ the git token (`worker.gitSecret`) and the model keys, and code running as the s
 from its environment (`/proc/1/environ`). The database URL is the board's own and the worker's network
 policy lets the pod reach Postgres, so with it that code reads and writes every company's rows,
 memberships and tokens included. The worker token claims any company's queued run (the queue names them
-all), and with it that run's pack and run token. The worker ends the engine and test processes it
-starts, not what they start in turn: a process a run leaves running carries on beside the next runs the
+all), and with it that run's pack and run token. The worker ends the engine it starts, not what the
+engine starts in turn, and the repository's tests with their whole process group, not a process that
+leaves the group (`setsid`, a daemon): a process a run leaves running carries on beside the next runs the
 pod takes, whichever company they are for, and so does whatever a run leaves in the pod's home and temp
 directories.
 
@@ -234,7 +235,10 @@ their own, each with its own database and workers.
   locale and `CI=1`, and no model key, board token or git token. It still runs as the worker's user in
   the worker's pod, so it reaches what that user reaches, the worker process's own environment under
   `/proc` included, and its output becomes the review's tests check as written. Turn the step off on a
-  fleet that runs repositories you would not run yourself.
+  fleet that runs repositories you would not run yourself. The script leads a process group of its own,
+  which the step ends (SIGTERM, then SIGKILL two seconds later) past its time limit, on Stop and when the
+  script ends by itself, so a server or a watcher it starts does not outlive the step; a process that
+  leaves the group (`setsid`, a daemon) is not reached.
 - The engine reaches no external MCP server. Every tool call goes to the board (`board_tool_call`),
   where the broker decides: run a read, propose a write, or refuse. A tool is a read only when the
   connector's catalog lists it as one, a person classified it so, or its name starts with a reading verb
@@ -268,13 +272,18 @@ their own, each with its own database and workers.
   the real one. Windows has no `O_NOFOLLOW`: a symbolic link or a junction anywhere on a file's way is
   refused, and the file is read only when the one opened has the file id of the one checked, compared whole
   (a file without one is refused), on the workspace's volume as a handle reads it (by path, Node 22.12 to
-  22.16 misread the volume there). A stopped git ends with the helpers it started (`taskkill /t`, where
-  Linux has the process group), and a test past its time limit with everything cmd.exe started for it. File
+  22.16 misread the volume there). A stopped git ends with the helpers it started that still run
+  (`taskkill /t`, where Linux has the process group). The repository's tests run in a job object, which
+  ends every process they started, one whose parent has already ended included (not a program started for
+  them by a service, WMI or the task scheduler). Without the job (Windows PowerShell blocked, or in the
+  Constrained Language mode AppLocker and WDAC put it in, and the tests run under cmd.exe as before; or a
+  Windows that cannot nest jobs), taskkill ends what it can still walk to past the time limit or on Stop,
+  and what the tests leave running when they end by themselves carries on. File
   modes do nothing there: the MCP config that carries the run token is private because the temp directory
   is, as a user's profile is. What does not carry over is the pod: the engine, its shell and the
   repository's tests run as your Windows user, with your files, your credentials and your other programs
-  within reach, and nothing they leave ends with the run. Run anything but your own repositories in Docker
-  or WSL2.
+  within reach, and nothing the engine leaves running ends with the run. Run anything but your own
+  repositories in Docker or WSL2.
 
 ## The board
 
