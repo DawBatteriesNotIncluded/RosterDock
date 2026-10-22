@@ -3,6 +3,11 @@
 Things noticed while building that are outside the current milestone. Move a line into the plan when it is
 scheduled; delete it when it ships.
 
+- CI builds the images for amd64 only, so a break that only arm64 shows first appears in a release's dry run.
+  Build the three on `ubuntu-24.04-arm` in CI too, unpushed, with a cache scope per image and architecture
+  that the release's arm64 builds can read.
+- ci.yml's test, images and helm jobs have no `timeout-minutes`, and every release runs them first: a hang
+  there holds a release for six hours. Give each one.
 - OpenCode, the plan's third engine, has a row in `engines` (disabled) and no worker adapter. The hire form and
   the teammate editor do not offer it, and the built-in 'Cody 3' template moved to Claude Code. Shipping it
   means an adapter in `apps/worker/src/engines/` tested against recorded OpenCode output, and enabling the row.

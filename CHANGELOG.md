@@ -30,9 +30,10 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
 - The Helm chart: board, web and worker against your Postgres and S3-compatible bucket, every credential by
   Secret name, network policies, KEDA scaling and worker pools.
 - Published releases. A `v*` tag runs CI on the tagged commit, then pushes the three images for linux/amd64
-  and linux/arm64 to GHCR, tagged with the version (and `MAJOR.MINOR` and `latest` unless a prerelease),
-  and the chart to `oci://ghcr.io/dawbatteriesnotincluded/charts` at the same version, whose appVersion
-  names those images (`.github/workflows/release.yml`). Run by hand, it is a dry run that pushes nothing.
+  and linux/arm64 to GHCR, each architecture built on a runner of its own (no emulation) with its provenance
+  and SBOM, tagged with the version (and `MAJOR.MINOR` and `latest` unless a prerelease), and the chart to
+  `oci://ghcr.io/dawbatteriesnotincluded/charts` at the same version, whose appVersion names those images
+  (`.github/workflows/release.yml`). Run by hand, it is a dry run that pushes nothing.
 - The web image carries the licence of every package bundled into the UI, each with its text, in
   `third-party-licenses.txt`, which it also serves at `/third-party-licenses.txt`.
 - Web access for teammates, through the board. The web connection (Settings > Connections > Web) reads public
