@@ -123,12 +123,12 @@ menu (owners and admins); a cancelled task is reopened from Details.
   (`worker.gitSecret`). The token goes only to the hosts in `worker.gitSecret.hosts` (github.com unless you
   list others), so a private repository on GitLab or GitHub Enterprise Server needs its host listed there.
   A clone that moves under 1 KB a second for a minute gives up, and the run's time limit counts from the
-  start of the clone.
+  start of the clone to the end of the repository's tests.
 - **The board was down when a run finished.** The worker retries the report for about five minutes,
   heartbeating meanwhile, then leaves the run to pg-boss's retry, which runs it again. A report the board
   refuses outright is replaced by a failed run that says why.
 - **Stop a run.** The run panel's Stop: a queued run stops at once; a running one at its next heartbeat,
-  a clone in progress included.
+  a clone or the repository's tests in progress included.
 
 ## Changing the company from files
 

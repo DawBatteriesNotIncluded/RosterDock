@@ -17,6 +17,7 @@ import { stubEngine } from "../src/engines/stub.js";
 import type { EngineAdapter } from "../src/engines/types.js";
 import { engineEnvironment, executeRun, fitCompletion, RunInterrupted, type RunDeps } from "../src/run.js";
 import { runRootSpanId, traceIdForRun } from "@rosterdock/shared";
+import type { Exec } from "../src/tests.js";
 import { git } from "../src/workspace.js";
 import { skipWithoutSymlinks } from "./helpers.js";
 
@@ -496,6 +497,27 @@ describe("a stalled clone", () => {
       expect(outcome.status).toBe("failed");
       expect(board.completion?.blocker?.code).toBe("timeout");
       expect(board.completion?.error).toMatch(/time limit/);
+      expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
+    } finally {
+      await host.close();
+    }
+  });
+
+  it("leaves nothing of a clone stopped part-way, the git token in its config included", async () => {
+    const host = await silentHost();
+    try {
+      // https to a host the token is for: git writes the URL, token and all, into .git/config before it connects.
+      const { port } = new URL(host.url);
+      const board = fakeBoard(PACK(), [], {
+        repoUrl: `https://127.0.0.1:${port}/stalled.git`,
+        stopAfterHeartbeats: 4,
+      });
+      const outcome = await executeRun(
+        { runId: "run-1", jobId: "job-1" },
+        deps(board, { gitCredential: { token: "partial-clone-token", hosts: [`127.0.0.1:${port}`] } }),
+      );
+      expect(outcome.status).toBe("stopped");
+      expect(existsSync(path.join(workRoot, "run-1"))).toBe(false);
     } finally {
       await host.close();
     }
@@ -503,10 +525,10 @@ describe("a stalled clone", () => {
 });
 
 describe("repository tests", () => {
-  it("runs the repository's test script after the harvest and ships the result as a check", async () => {
-    // A bare repository with a package.json test script; the runner is a recorded exec, never npm.
-    const src = path.join(workRoot, "src-repo");
-    const bare = path.join(workRoot, "origin.git");
+  /** A bare repository with a package.json test script; the runner is a recorded exec, never npm. */
+  async function repoWithTests(name: string): Promise<string> {
+    const src = path.join(workRoot, `src-${name}`);
+    const bare = path.join(workRoot, `${name}.git`);
     await (await import("node:fs/promises")).mkdir(src, { recursive: true });
     const env = {
       // An identity only: never the caller's environment, which under a rebase or a hook points at this repository.
@@ -524,7 +546,22 @@ describe("repository tests", () => {
     await git(["add", "."], src, env);
     await git(["commit", "-m", "init"], src, env);
     await git(["clone", "--bare", src, bare], workRoot, env);
+    return bare;
+  }
 
+  /** Tests that never finish on their own: they end when the run's signal does, or after 20 s. */
+  const hanging: Exec = (_command, _args, opts) =>
+    new Promise((resolve) => {
+      const done = () => resolve({ code: null, output: "", timedOut: false });
+      const timer = setTimeout(done, 20_000);
+      opts.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        done();
+      });
+    });
+
+  it("runs the repository's test script after the harvest and ships the result as a check", async () => {
+    const bare = await repoWithTests("origin");
     const board = fakeBoard(PACK(), ["notes.md"], { repoUrl: bare });
     const commands: string[] = [];
     const envs: Record<string, string>[] = [];
@@ -553,6 +590,55 @@ describe("repository tests", () => {
     // The diff was captured before the tests ran.
     expect(board.artifacts.find((a) => a.kind === "diff")?.content).toContain("+++ b/notes.md");
     expect(board.shipped.some((e) => e.type === "check")).toBe(true);
+  });
+
+  it("ends the tests when the run is stopped, and reports the run stopped", async () => {
+    const bare = await repoWithTests("stop-tests");
+    const board = fakeBoard(PACK(), ["notes.md"], { repoUrl: bare });
+    let testing = false;
+    board.heartbeat = async () => ({ stopRequested: testing });
+    const started = Date.now();
+    await executeRun(
+      { runId: "run-1", jobId: "job-1" },
+      deps(board, {
+        repoTests: {
+          timeoutMs: 60_000,
+          exec: (command, args, opts) => {
+            testing = true;
+            return hanging(command, args, opts);
+          },
+        },
+      }),
+    );
+    expect(testing).toBe(true);
+    expect(board.completion?.status).toBe("stopped");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("counts the tests against the run's time limit", async () => {
+    const bare = await repoWithTests("slow-tests");
+    const board = fakeBoard(PACK(), ["notes.md"], {
+      repoUrl: bare,
+      // Long enough for the clone, the engine and the harvest, on Windows too, so the limit falls in the tests.
+      sandbox: { allowedTools: null, envNames: null, timeoutSeconds: 4 },
+    });
+    let testing = false;
+    await executeRun(
+      { runId: "run-1", jobId: "job-1" },
+      deps(board, {
+        heartbeatMs: 10_000,
+        repoTests: {
+          timeoutMs: 60_000,
+          exec: (command, args, opts) => {
+            testing = true;
+            return hanging(command, args, opts);
+          },
+        },
+      }),
+    );
+    expect(testing).toBe(true);
+    expect(board.completion?.status).toBe("failed");
+    expect(board.completion?.blocker?.code).toBe("timeout");
   });
 });
 

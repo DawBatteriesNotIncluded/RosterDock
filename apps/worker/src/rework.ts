@@ -6,8 +6,12 @@
 // nothing outside the clone, into .git or through a link; and a round that would leave a link behind, or
 // whose diff makes one, is undone, so the engine never starts with one the run did not make (the harvest
 // refuses links anyway).
+// The clone is read whole for that, a submodule's folder included: git status and git clean never look
+// inside one, and a clone leaves it empty. A round that copies or renames a file is refused before it is
+// applied: the harvest diffs with --no-renames, so a real round never does, and a copy is how a link the
+// repository holds would land where git does not look.
 
-import { lstat, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseUnifiedDiff, sha256Hex, type RunCompleteInput } from "@rosterdock/shared";
 import { clip } from "./text.js";
@@ -142,12 +146,74 @@ async function linksDeclared(ws: Workspace, patch: string, diff: string): Promis
   ];
 }
 
-/** Back to the clean clone: tracked files as committed, the rest removed (git removes a link, never its target). */
-async function undoApply(ws: Workspace): Promise<void> {
+/** Where a diff copies or renames files to (or from, where it names no destination). */
+function copiedOrRenamed(diff: string): string[] {
+  const moved = [...diff.matchAll(/^(?:copy|rename) (from|to|old|new) (.+)$/gm)];
+  const to = moved.filter((m) => m[1] === "to" || m[1] === "new");
+  return (to.length ? to : moved).map((m) => m[2]!);
+}
+
+/**
+ * Every symbolic link in the clone, by its path, with its target: every folder read, .git apart, where git
+ * status would list nothing inside a submodule's. Null when a folder cannot be read.
+ */
+async function linksOnDisk(dir: string): Promise<Map<string, string> | null> {
+  const links = new Map<string, string>();
+  const walk = async (rel: string): Promise<void> => {
+    for (const entry of await readdir(path.join(dir, rel), { withFileTypes: true })) {
+      if (!rel && entry.name === ".git") continue;
+      const at = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isSymbolicLink()) links.set(at, await readlink(path.join(dir, at)));
+      else if (entry.isDirectory()) await walk(at);
+    }
+  };
+  try {
+    await walk("");
+    return links;
+  } catch {
+    return null;
+  }
+}
+
+/** The links in the clone that it did not hold `before` (the repository's own) or that point elsewhere now. */
+async function linksMade(dir: string, before: Map<string, string>): Promise<string[] | null> {
+  const now = await linksOnDisk(dir);
+  return now && [...now].filter(([at, target]) => before.get(at) !== target).map(([at]) => at);
+}
+
+/**
+ * Back to the clean clone: tracked files as committed, the rest removed (git removes a link, never its
+ * target), and each submodule's folder empty again, as the clone left it (it never fetches one). Checked
+ * after: a link the clone did not hold before means the clone is not clean, and the run goes no further.
+ */
+async function undoApply(ws: Workspace, before: Map<string, string>): Promise<void> {
+  const failed = new Error("the previous round's changes could not be undone in the clone");
   const reset = await git(["reset", "--hard", "--quiet"], ws.dir);
   const clean = await git(["clean", "-ffdxq"], ws.dir);
-  if (reset.code !== 0 || clean.code !== 0)
-    throw new Error("the previous round's changes could not be undone in the clone");
+  const index = await git(["ls-files", "--stage", "-z"], ws.dir);
+  if (reset.code !== 0 || clean.code !== 0 || index.code !== 0) throw failed;
+  for (const entry of index.stdout.split("\0")) {
+    const sub = /^160000 [0-9a-f]+ \d\t(.+)$/s.exec(entry)?.[1];
+    if (!sub) continue;
+    // The folders on its way are the clone's own, never a link (reset put them back), so nothing outside
+    // is touched; rm removes a link it meets inside, never what it points at.
+    let at = ws.dir;
+    for (const part of sub.split("/").slice(0, -1)) {
+      at = path.join(at, part);
+      if (!(await lstat(at).catch(() => null))?.isDirectory()) throw failed;
+    }
+    await rm(path.join(ws.dir, sub), { recursive: true, force: true });
+    await mkdir(path.join(ws.dir, sub));
+  }
+  if ((await linksMade(ws.dir, before))?.length !== 0) throw failed;
+}
+
+function linksReason(links: string[]): string {
+  return clip(
+    `${names(links)} ${links.length === 1 ? "is a symbolic link" : "are symbolic links"}, which a rework run does not carry over`,
+    MAX_REASON_CHARS,
+    "…",
+  );
 }
 
 /** Apply the round sent back to the run's fresh clone (of a repository), or say why the run starts from the clean clone. */
@@ -163,26 +229,35 @@ export async function applyPreviousRound(
       applied: false,
       reason: `the changes the board sent do not match its record of round ${round}`,
     };
-  const patch = path.join(ws.dir, ".git", PATCH_FILE);
-  await writeFile(patch, rework.diff, "utf8");
-  const res = await git(["apply", "--whitespace=nowarn", patch], ws.dir);
-  const [left, declared] =
-    res.code === 0 ? await Promise.all([linksLeft(ws), linksDeclared(ws, patch, rework.diff)]) : [null, null];
-  await rm(patch, { force: true });
-  if (res.code === 0) {
-    const links = left && declared && [...new Set([...left, ...declared])].sort();
-    if (links?.length === 0) return { round, applied: true, files: parseUnifiedDiff(rework.diff).length };
-    await undoApply(ws);
+  const copies = copiedOrRenamed(rework.diff);
+  if (copies.length)
     return {
       round,
       applied: false,
-      reason: links
-        ? clip(
-            `${names(links)} ${links.length === 1 ? "is a symbolic link" : "are symbolic links"}, which a rework run does not carry over`,
-            MAX_REASON_CHARS,
-            "…",
-          )
-        : "git could not list what they changed",
+      reason: clip(
+        `${names(copies)} ${copies.length === 1 ? "is a copy or a rename" : "are copies or renames"} of another file, which a rework run does not carry over`,
+        MAX_REASON_CHARS,
+        "…",
+      ),
+    };
+  const before = await linksOnDisk(ws.dir);
+  if (!before) return { round, applied: false, reason: "the clone could not be read to check them" };
+  const patch = path.join(ws.dir, ".git", PATCH_FILE);
+  await writeFile(patch, rework.diff, "utf8");
+  const res = await git(["apply", "--whitespace=nowarn", patch], ws.dir);
+  const [left, declared, made] =
+    res.code === 0
+      ? await Promise.all([linksLeft(ws), linksDeclared(ws, patch, rework.diff), linksMade(ws.dir, before)])
+      : [null, null, null];
+  await rm(patch, { force: true });
+  if (res.code === 0) {
+    const links = left && declared && made && [...new Set([...left, ...declared, ...made])].sort();
+    if (links?.length === 0) return { round, applied: true, files: parseUnifiedDiff(rework.diff).length };
+    await undoApply(ws, before);
+    return {
+      round,
+      applied: false,
+      reason: links ? linksReason(links) : "git could not list what they changed",
     };
   }
   const head = (await git(["rev-parse", "HEAD"], ws.dir)).stdout.trim();

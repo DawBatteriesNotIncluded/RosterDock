@@ -509,3 +509,157 @@ describe("a rework run and links", () => {
     }
   });
 });
+
+describe("a rework run and a submodule's folder", () => {
+  // A clone leaves a submodule's folder empty, and git status and git clean never look inside it. The
+  // repository holds a link of its own (l -> a), which a copy or a rename could carry in there. The diffs
+  // are what a run holding its token could post: the harvest diffs with --no-renames and never writes one.
+  let subRepo: string;
+  let subBase: string;
+  const target = () => path.join(root, "secret.env");
+
+  beforeAll(async () => {
+    const src = path.join(root, "sub-src");
+    await mkdir(src, { recursive: true });
+    await run(["init", "--quiet", "-b", "main"], src);
+    await writeTree(src, {
+      "README.md": "hello\n",
+      a: "a\n",
+      ".gitmodules": '[submodule "sub"]\n\tpath = sub\n\turl = https://example.com/sub.git\n',
+    });
+    await run(["add", "."], src);
+    // Committed without the OS: the link as git stores it, and the submodule as a commit id.
+    await writeFile(path.join(root, "link-blob"), "a", "utf8");
+    const blob = await run(["hash-object", "-w", path.join(root, "link-blob")], src);
+    await run(["update-index", "--add", "--cacheinfo", `120000,${blob},l`], src);
+    await run(["update-index", "--add", "--cacheinfo", `160000,${baseSha},sub`], src);
+    await run(["commit", "--quiet", "-m", "base"], src);
+    subBase = await run(["rev-parse", "HEAD"], src);
+    subRepo = path.join(root, "sub.git");
+    await run(["clone", "--quiet", "--bare", src, subRepo], root);
+  });
+
+  const subRound = (diff: string): Rework => ({
+    round: 1,
+    diffSha256: sha256Hex(diff),
+    baseSha: subBase,
+    diff,
+  });
+  const fresh = (name: string) =>
+    prepareWorkspace(
+      path.join(root, `work-${name}`),
+      `run-${name}`,
+      { repoUrl: subRepo, defaultBranch: "main" },
+      null,
+    );
+
+  /** The clone as it was: nothing git sees, nothing in the submodule's folder, the repository's link in place. */
+  async function asCloned(dir: string): Promise<void> {
+    expect((await git(["status", "--porcelain", "--ignored", "-uall"], dir, GIT_ENV)).stdout).toBe("");
+    expect(await readdir(path.join(dir, "sub"))).toEqual([]);
+    expect(await lstat(path.join(dir, "l"))).toBeTruthy();
+  }
+
+  it("refuses a round that copies or renames a file, which would carry the repository's link into the folder", async () => {
+    const copy = [
+      "diff --git a/l b/sub/l",
+      "similarity index 10%",
+      "copy from l",
+      "copy to sub/l",
+      "--- a/l",
+      "+++ b/sub/l",
+      "@@ -1 +1 @@",
+      "-a",
+      "\\ No newline at end of file",
+      `+${target()}`,
+      "\\ No newline at end of file",
+      "",
+    ].join("\n");
+    const rename = [
+      "diff --git a/l b/sub/l",
+      "similarity index 100%",
+      "rename from l",
+      "rename to sub/l",
+      "",
+    ].join("\n");
+    for (const [name, diff] of [
+      ["copy", copy],
+      ["rename", rename],
+    ] as const) {
+      const ws = await fresh(`sub-${name}`);
+      expect(await applyPreviousRound(ws, subRound(diff), "main")).toEqual({
+        round: 1,
+        applied: false,
+        reason: "sub/l is a copy or a rename of another file, which a rework run does not carry over",
+      });
+      await asCloned(ws.dir);
+    }
+  });
+
+  it("refuses a link a round makes inside the folder, and the undo leaves the folder empty", async () => {
+    const diff = [
+      "diff --git a/sub/evil b/sub/evil",
+      "new file mode 120000",
+      "--- /dev/null",
+      "+++ b/sub/evil",
+      "@@ -0,0 +1 @@",
+      `+${target()}`,
+      "\\ No newline at end of file",
+      "",
+    ].join("\n");
+    const ws = await fresh("sub-link");
+    expect(await applyPreviousRound(ws, subRound(diff), "main")).toEqual({
+      round: 1,
+      applied: false,
+      reason: "sub/evil is a symbolic link, which a rework run does not carry over",
+    });
+    await asCloned(ws.dir);
+  });
+
+  it("undoes what a refused round wrote into the folder, so the clean clone the brief names is one", async () => {
+    const diff = [
+      "diff --git a/report.md b/report.md",
+      "new file mode 120000",
+      "--- /dev/null",
+      "+++ b/report.md",
+      "@@ -0,0 +1 @@",
+      `+${target()}`,
+      "\\ No newline at end of file",
+      "diff --git a/sub/notes.md b/sub/notes.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/sub/notes.md",
+      "@@ -0,0 +1 @@",
+      "+written into the submodule's folder",
+      "",
+    ].join("\n");
+    const ws = await fresh("sub-undo");
+    expect(await applyPreviousRound(ws, subRound(diff), "main")).toEqual({
+      round: 1,
+      applied: false,
+      reason: "report.md is a symbolic link, which a rework run does not carry over",
+    });
+    await asCloned(ws.dir);
+    expect(existsSync(path.join(ws.dir, "report.md"))).toBe(false);
+  });
+
+  it("carries over a round beside the repository's own link and submodule", async () => {
+    const diff = [
+      "diff --git a/README.md b/README.md",
+      "--- a/README.md",
+      "+++ b/README.md",
+      "@@ -1 +1 @@",
+      "-hello",
+      "+hello again",
+      "",
+    ].join("\n");
+    const ws = await fresh("sub-ok");
+    expect(await applyPreviousRound(ws, subRound(diff), "main")).toEqual({
+      round: 1,
+      applied: true,
+      files: 1,
+    });
+    expect(await readFile(path.join(ws.dir, "README.md"), "utf8")).toBe("hello again\n");
+    expect(await readdir(path.join(ws.dir, "sub"))).toEqual([]);
+  });
+});

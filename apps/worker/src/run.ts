@@ -220,6 +220,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
   }, deps.heartbeatMs);
 
   let ws: Workspace | null = null;
+  let timeoutTimer: NodeJS.Timeout | undefined;
   let reworkStart: ReworkStart | null = null;
   /** Null: the worker's shutdown cut the run short, and the queue's retry finishes it. */
   let completion: RunCompleteInput | null;
@@ -255,8 +256,9 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
         blocker: { code: "adapter_unavailable", what: refused.what, why: refused.why },
       };
     } else {
-      // The time limit runs from here: a clone that stalls counts against it like the engine.
-      const timeoutTimer = setTimeout(() => {
+      // The time limit runs from here to the end of the repository's tests: a clone that stalls counts
+      // against it like the engine, and so do tests that hang.
+      timeoutTimer = setTimeout(() => {
         timedOut = true;
         emit({
           type: "stderr",
@@ -264,59 +266,54 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
         });
         abort.abort();
       }, sandbox.timeoutSeconds * 1000);
-      let result;
-      try {
-        emit({
-          type: "step",
-          payload: { text: spec.project.repoUrl ? "cloning the repository" : "preparing the workspace" },
-        });
-        phases.begin("workspace", { "rosterdock.repo": !!spec.project.repoUrl });
-        ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitCredential, abort.signal);
-        // Rework: the round sent back carries over into the clone, or the run says why it starts clean.
-        if (spec.rework && ws.repo) {
-          reworkStart = await applyPreviousRound(ws, spec.rework, spec.project.defaultBranch);
-          emit(
-            reworkStart.applied
-              ? {
-                  type: "step",
-                  payload: {
-                    text: `starting from round ${reworkStart.round}'s changes (${reworkStart.files} files)`,
-                  },
-                }
-              : {
-                  type: "stderr",
-                  payload: {
-                    text: `round ${reworkStart.round}'s changes did not carry over: ${reworkStart.reason}; starting from a fresh clone of ${spec.project.defaultBranch}`,
-                  },
+      emit({
+        type: "step",
+        payload: { text: spec.project.repoUrl ? "cloning the repository" : "preparing the workspace" },
+      });
+      phases.begin("workspace", { "rosterdock.repo": !!spec.project.repoUrl });
+      ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitCredential, abort.signal);
+      // Rework: the round sent back carries over into the clone, or the run says why it starts clean.
+      if (spec.rework && ws.repo) {
+        reworkStart = await applyPreviousRound(ws, spec.rework, spec.project.defaultBranch);
+        emit(
+          reworkStart.applied
+            ? {
+                type: "step",
+                payload: {
+                  text: `starting from round ${reworkStart.round}'s changes (${reworkStart.files} files)`,
                 },
-          );
-        }
-        phases.end();
-        emit({ type: "step", payload: { text: `running ${engine.id}` } });
-        phases.begin(`engine ${engine.id}`, {
-          "rosterdock.engine": engine.id,
-          "rosterdock.model": run.model,
-        });
-        result = await engine.run({
-          workdir: ws.dir,
-          pack:
-            reworkStart && !reworkStart.applied
-              ? `${claimed.pack}\n\n${freshStartBrief(reworkStart, spec.project.defaultBranch)}\n`
-              : claimed.pack,
-          model: run.model,
-          effort: claimed.spec.teammate.effort ?? null,
-          signal: abort.signal,
-          emit,
-          onUsage: (u) => {
-            usage = { ...usage, ...u };
-          },
-          env: narrowEnv(deps.engineEnv, sandbox.envNames),
-          allowedTools: sandbox.allowedTools,
-          mcp: { url: `${deps.boardUrl}/api/mcp`, token },
-        });
-      } finally {
-        clearTimeout(timeoutTimer);
+              }
+            : {
+                type: "stderr",
+                payload: {
+                  text: `round ${reworkStart.round}'s changes did not carry over: ${reworkStart.reason}; starting from a fresh clone of ${spec.project.defaultBranch}`,
+                },
+              },
+        );
       }
+      phases.end();
+      emit({ type: "step", payload: { text: `running ${engine.id}` } });
+      phases.begin(`engine ${engine.id}`, {
+        "rosterdock.engine": engine.id,
+        "rosterdock.model": run.model,
+      });
+      const result = await engine.run({
+        workdir: ws.dir,
+        pack:
+          reworkStart && !reworkStart.applied
+            ? `${claimed.pack}\n\n${freshStartBrief(reworkStart, spec.project.defaultBranch)}\n`
+            : claimed.pack,
+        model: run.model,
+        effort: claimed.spec.teammate.effort ?? null,
+        signal: abort.signal,
+        emit,
+        onUsage: (u) => {
+          usage = { ...usage, ...u };
+        },
+        env: narrowEnv(deps.engineEnv, sandbox.envNames),
+        allowedTools: sandbox.allowedTools,
+        mcp: { url: `${deps.boardUrl}/api/mcp`, token },
+      });
       usage = { ...usage, ...result.usage };
       phases.end(result.ok ? null : (result.error ?? "the engine failed"));
       emit({ type: "step", payload: { text: "collecting outputs" } });
@@ -354,6 +351,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
           exec: deps.repoTests.exec,
           env: deps.engineEnv,
           timeoutMs: deps.repoTests.timeoutMs,
+          signal: abort.signal,
         });
         if (check) {
           checks = [check];
@@ -428,6 +426,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
             durationMs: Date.now() - startedAt,
           };
   } finally {
+    clearTimeout(timeoutTimer);
     phases.end();
     clearInterval(flushTimer);
     deps.shutdown.removeEventListener("abort", onShutdown);

@@ -1,4 +1,5 @@
 // The repository test runner against recorded npm output. No npm is spawned.
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -190,6 +191,119 @@ describe("runRepoTests", () => {
     });
     expect(res.timedOut).toBe(true);
     expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  /** A Node that stands in for a test runner: it starts one that holds its output open, as a worker would. */
+  async function holder(name: string): Promise<{ script: string; pidFile: string; held(): number }> {
+    const script = path.join(root, `${name}.cjs`);
+    const pidFile = path.join(root, `${name}.pid`);
+    await writeFile(
+      script,
+      [
+        'const { spawn } = require("node:child_process");',
+        'const held = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "inherit" });',
+        'require("node:fs").writeFileSync(process.argv[2], String(held.pid));',
+        "setTimeout(() => {}, 60000);",
+        "",
+      ].join("\n"),
+    );
+    return { script, pidFile, held: () => Number(readFileSync(pidFile, "utf8")) };
+  }
+
+  /** Whether a process is still there; it is ended either way, so no test leaves one behind. */
+  function endIfAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return false;
+    }
+    process.kill(pid, "SIGKILL");
+    return true;
+  }
+
+  it("ends a command past its time limit though a process it started holds its output open", async () => {
+    const h = await holder("held-open");
+    const started = Date.now();
+    const res = await execCommand(process.execPath, [h.script, h.pidFile], {
+      cwd: root,
+      env: { PATH: process.env.PATH ?? "" },
+      timeoutMs: 500,
+    });
+    expect(res.timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    endIfAlive(h.held());
+  });
+
+  it.runIf(process.platform === "win32")(
+    "on Windows ends a command past its time limit with every process under it",
+    async () => {
+      const h = await holder("tree");
+      const res = await execCommand(process.execPath, [h.script, h.pidFile], {
+        cwd: root,
+        env: testEnvironment(process.env),
+        timeoutMs: 500,
+      });
+      expect(res.timedOut).toBe(true);
+      // taskkill /t ends the tree before the worker reads on; give Windows a moment to tear it down.
+      const until = Date.now() + 5000;
+      let alive = true;
+      while (alive && Date.now() < until) {
+        try {
+          process.kill(h.held(), 0);
+          await new Promise((r) => setTimeout(r, 100));
+        } catch {
+          alive = false;
+        }
+      }
+      expect(endIfAlive(h.held())).toBe(false);
+    },
+  );
+
+  it("ends a command at once when the run stops", async () => {
+    const h = await holder("stopped");
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 300);
+    const started = Date.now();
+    const res = await execCommand(process.execPath, [h.script, h.pidFile], {
+      cwd: root,
+      env: { PATH: process.env.PATH ?? "" },
+      timeoutMs: 60_000,
+      signal: stop.signal,
+    });
+    expect(res.timedOut).toBe(false);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    endIfAlive(h.held());
+    // Already stopped: nothing starts.
+    expect(
+      await execCommand(process.execPath, [h.script, path.join(root, "never.pid")], {
+        cwd: root,
+        env: { PATH: process.env.PATH ?? "" },
+        timeoutMs: 60_000,
+        signal: stop.signal,
+      }),
+    ).toEqual({ code: null, output: "", timedOut: false });
+    expect(existsSync(path.join(root, "never.pid"))).toBe(false);
+  });
+
+  it("hands the run's stop to every command, and gives no check for tests a stop cut short", async () => {
+    const ws = await repo("stop-install", { "package.json": PKG });
+    const stop = new AbortController();
+    const signals: (AbortSignal | undefined)[] = [];
+    const exec: Exec = async (_command, _args, opts) => {
+      signals.push(opts.signal);
+      stop.abort();
+      return { code: null, output: "", timedOut: false };
+    };
+    expect(await runRepoTests(ws, { exec, env, timeoutMs: 1000, signal: stop.signal })).toBeNull();
+    // Stopped during the install: the tests never start.
+    expect(signals).toEqual([stop.signal]);
+    const ran = await repo("stop-test", { "package.json": PKG, "node_modules/.keep": "" });
+    const late = new AbortController();
+    const test: Exec = async () => {
+      late.abort();
+      return { code: 1, output: "", timedOut: false };
+    };
+    expect(await runRepoTests(ran, { exec: test, env, timeoutMs: 1000, signal: late.signal })).toBeNull();
   });
 
   it("detects the package manager from the lockfile", async () => {
