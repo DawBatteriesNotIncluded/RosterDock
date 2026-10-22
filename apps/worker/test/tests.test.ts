@@ -230,12 +230,19 @@ describe("runRepoTests", () => {
       [
         'const { spawn } = require("node:child_process");',
         'const held = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "inherit" });',
-        'require("node:fs").writeFileSync(process.argv[2], String(held.pid));',
+        // Whole or not at all: a stop between the file's creation and its write left it empty.
+        'require("node:fs").writeFileSync(`${process.argv[2]}.part`, String(held.pid));',
+        'require("node:fs").renameSync(`${process.argv[2]}.part`, process.argv[2]);',
         exit === undefined ? "setTimeout(() => {}, 60000);" : `process.exit(${exit});`,
         "",
       ].join("\n"),
     );
-    const held = () => Number(readFileSync(pidFile, "utf8"));
+    const held = () => {
+      const pid = Number(readFileSync(pidFile, "utf8"));
+      // Never 0 or less: process.kill(0) is this process on Windows, and its whole group elsewhere.
+      if (!Number.isInteger(pid) || pid <= 0) throw new Error(`${pidFile} holds no process id`);
+      return pid;
+    };
     const started = async () => {
       while (!existsSync(pidFile)) await new Promise((r) => setTimeout(r, 50));
     };
@@ -244,6 +251,7 @@ describe("runRepoTests", () => {
 
   /** Whether a process ended within a few seconds; one still there is ended, so no test leaves one behind. */
   async function ended(pid: number): Promise<boolean> {
+    if (!Number.isInteger(pid) || pid <= 0) throw new Error(`no process id: ${pid}`);
     for (const until = Date.now() + 5000; Date.now() < until;) {
       try {
         process.kill(pid, 0);
