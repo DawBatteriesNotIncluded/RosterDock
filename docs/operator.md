@@ -238,7 +238,8 @@ networkPolicy:
   through a reused connection or a name that changes its answer). Its owners and admins find the id under
   Settings > Connections, where they see your entries for every company and their own, marked; no other
   company sees them. The board warns at start about an id that names no company, whose entries allow
-  nothing.
+  nothing. A stdio command you list with free arguments (a final `*`) runs inside the board pod, where no
+  list applies: one that fetches or proxies lets any company's admins point it at that destination too.
 
   ```yaml
   board:

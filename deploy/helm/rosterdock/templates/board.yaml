@@ -99,9 +99,17 @@ spec:
             {{- $entries := list }}
             {{- range . }}
             {{- if kindIs "map" . }}
-            {{- $company := required "a board.privateDestinations entry with a destination names its company" .company }}
-            {{- $destination := required "a board.privateDestinations entry with a company names its destination" .destination }}
-            {{- $entries = append $entries (printf "%s=%s" (toString $company) (toString $destination)) }}
+            {{- $company := toString (required "a board.privateDestinations entry with a destination names its company" .company) }}
+            {{- $destinations := required "a board.privateDestinations entry with a company names its destination" .destination }}
+            {{- if regexMatch "[,=]" $company }}
+            {{- fail (printf "board.privateDestinations: company %q holds a comma or =; give its id alone" $company) }}
+            {{- end }}
+            {{- range (kindIs "slice" $destinations | ternary $destinations (list $destinations)) }}
+            {{- if regexMatch "[,=]" (toString .) }}
+            {{- fail (printf "board.privateDestinations: destination %q holds a comma or =; give one per entry, or a list" (toString .)) }}
+            {{- end }}
+            {{- $entries = append $entries (printf "%s=%s" $company (toString .)) }}
+            {{- end }}
             {{- else }}
             {{- $entries = append $entries (toString .) }}
             {{- end }}

@@ -375,7 +375,12 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
           [p.actor.id, companyId],
         )
       ).rowCount;
-    const own = managesCompany ? (config.privateDestinations.companies?.[companyId!]?.entries ?? []) : [];
+    // What the company has alone: an entry every company has too is not shown as its own.
+    const own = managesCompany
+      ? (config.privateDestinations.companies?.[companyId!]?.entries ?? []).filter(
+          (e) => !config.privateDestinations.entries.includes(e),
+        )
+      : [];
     return {
       oauth: !!secrets,
       objectStore: !!store,

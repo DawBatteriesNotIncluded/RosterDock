@@ -23,6 +23,7 @@ import {
 } from "../src/mcp/oauth.js";
 import { rawUrl, STYLE_PACKS } from "../src/styles/catalog.js";
 import { parsePrivateDestinations } from "../src/web/address.js";
+import { companyEgress } from "../src/web/egress.js";
 import { fakeMcp } from "./mcp-fake.js";
 import { createOAuthFake } from "./oauth-fake.js";
 import { fakeOpenApi } from "./openapi-fake.js";
@@ -42,6 +43,7 @@ const names: Record<string, string[]> = {
   "smtp.intranet.test": ["10.0.0.25"],
   "mcp.only-a.test": ["10.0.0.71"],
   "hooks.only-a.test": ["10.0.0.72"],
+  "auth.only-a.test": ["10.0.0.73"],
 };
 const resolve = async (host: string) => names[host] ?? [PUBLIC_TEST_ADDRESS];
 
@@ -570,8 +572,9 @@ describe("a private destination the operator gives one company", () => {
   it("is that company's alone: its connections, OAuth and webhook reach it, another company's are refused", async () => {
     const a = await seedCompany(board, "egress-company-a@example.com");
     const b = await seedCompany(board, "egress-company-b@example.com");
+    // 10.9.0.0/16 is every company's already: listed for A too, it is not shown as A's own.
     allow.companies = parsePrivateDestinations(
-      `${a.companyId}=mcp.only-a.test,${a.companyId}=hooks.only-a.test`,
+      `${a.companyId}=mcp.only-a.test,${a.companyId}=hooks.only-a.test,${a.companyId}=10.9.0.0/16`,
     ).companies;
     try {
       const refused = (host: string) => `refused: ${host} resolves to a private address, ${NOT_ALLOWED}`;
@@ -629,6 +632,31 @@ describe("a private destination the operator gives one company", () => {
     } finally {
       delete allow.companies;
     }
+  });
+  it("never hands one company an authorization server's metadata the board read for another", async () => {
+    resetOAuthCaches();
+    const a = "4f1aee73-e65e-4c8d-83f7-aa1169379d7f";
+    const b = "0b6c1f0e-27f4-4a8e-9a43-3d5c4c6c1d2e";
+    const fake = (async (input: RequestInfo | URL) =>
+      String(input) === "https://auth.only-a.test/.well-known/oauth-authorization-server"
+        ? new Response(
+            JSON.stringify({
+              issuer: "https://auth.only-a.test",
+              authorization_endpoint: "https://auth.only-a.test/authorize",
+              token_endpoint: "https://auth.only-a.test/token",
+            }),
+            { headers: { "content-type": "application/json" } },
+          )
+        : new Response("{}", { status: 404 })) as typeof fetch;
+    const egress = testEgress(fake, { resolve, allow: `${a}=auth.only-a.test` });
+    const as = (company: string) => ({ egress: companyEgress(egress, company), log: { warn() {} } });
+    expect((await discoverAuthorizationServer("https://auth.only-a.test", as(a))).token_endpoint).toBe(
+      "https://auth.only-a.test/token",
+    );
+    // Read for A a moment ago, cached: B is still refused, as if nothing were cached.
+    await expect(discoverAuthorizationServer("https://auth.only-a.test", as(b))).rejects.toThrow(
+      `could not reach auth.only-a.test: refused: auth.only-a.test resolves to a private address, ${NOT_ALLOWED}`,
+    );
   });
 });
 

@@ -367,7 +367,9 @@ their own, each with its own database and workers.
   company on the board may use what is listed, except an entry given to one company (`<company id>=<entry>`):
   only that company reaches it, through a lookup and kept connections of its own, so another company's
   request never rides a connection opened for it or a name that answers differently between the check and
-  the socket; and only that company's owners and admins see it in Settings. Unset, nothing private is: the
+  the socket; and only that company's owners and admins see it in Settings. A stdio server is not held to
+  any of this (What is not checked, below): one the operator lists with free arguments that fetches or
+  proxies reaches whatever the board pod reaches, for any company. Unset, nothing private is: the
   board refuses to start on an entry it cannot read rather than guess. `apps/board/.env.example` lists
   loopback for development only.
 - **What is not checked.** What the operator configures: the git hosts' APIs, the OIDC provider, the OTLP

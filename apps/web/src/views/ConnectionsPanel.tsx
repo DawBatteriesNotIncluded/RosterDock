@@ -219,13 +219,22 @@ function listedPhrase(listed: readonly string[], own: readonly string[] = []): s
 }
 
 /** Under a URL the board refuses, or would if its name resolves privately: what this board reaches, and who changes it. */
-function PrivateHint({ flag, listed }: { flag: "refused" | "unless-listed"; listed: readonly string[] }) {
+function PrivateHint({
+  flag,
+  listed,
+  own,
+}: {
+  flag: "refused" | "unless-listed";
+  listed: readonly string[];
+  /** The company's own entries among them, marked as such. */
+  own?: readonly string[];
+}) {
   return (
     <span className="hint" style={{ color: "var(--warn-ink)" }}>
       {flag === "refused"
         ? "The board refuses this address: it is not public, and no private destination its operator lists covers it."
         : "This name looks private. If it resolves to a private address, the board refuses it unless its operator lists the name, or a range its address is in."}{" "}
-      Private destinations here: {listedPhrase(listed)} (board.privateDestinations on the chart, or
+      Private destinations here: {listedPhrase(listed, own)} (board.privateDestinations on the chart, or
       ROSTERDOCK_PRIVATE_DESTINATIONS).
     </span>
   );
@@ -236,6 +245,7 @@ function AddMcpForm({
   oauthOffered,
   stdioCommands,
   privateDestinations,
+  ownPrivateDestinations,
   onCreate,
   onSetSecret,
 }: {
@@ -245,6 +255,8 @@ function AddMcpForm({
   stdioCommands?: string[];
   /** The private destinations the board reaches; undefined until the board says. */
   privateDestinations?: string[];
+  /** Of those, the company's own. */
+  ownPrivateDestinations?: string[];
   /** Resolves true when the connection was made; the form then clears. */
   onCreate(input: CreateConnectionInput): Promise<boolean>;
   /** Set the credential's value under its name first, when one was typed; absent without a secret store. */
@@ -393,7 +405,9 @@ function AddMcpForm({
           </datalist>
         </Field>
       )}
-      {privateNote ? <PrivateHint flag={privateNote} listed={privateDestinations ?? []} /> : null}
+      {privateNote ? (
+        <PrivateHint flag={privateNote} listed={privateDestinations ?? []} own={ownPrivateDestinations} />
+      ) : null}
       {stdioRefused ? (
         <span className="hint" style={{ color: "var(--warn-ink)" }}>
           {stdioCommands?.length
@@ -470,12 +484,15 @@ function AddMcpForm({
 
 function AddOpenApiForm({
   privateDestinations,
+  ownPrivateDestinations,
   onPreview,
   onCreate,
   onSetSecret,
 }: {
   /** The private destinations the board reaches; undefined until the board says. */
   privateDestinations?: string[];
+  /** Of those, the company's own. */
+  ownPrivateDestinations?: string[];
   onPreview(spec: string): Promise<OpenApiScan>;
   /** Resolves true when the connection was made; the form then clears. */
   onCreate(input: CreateOpenApiConnectionInput): Promise<boolean>;
@@ -573,7 +590,11 @@ function AddOpenApiForm({
           />
         </Field>
         {privateDestinations && privateFlag(url, privateDestinations) ? (
-          <PrivateHint flag={privateFlag(url, privateDestinations)!} listed={privateDestinations} />
+          <PrivateHint
+            flag={privateFlag(url, privateDestinations)!}
+            listed={privateDestinations}
+            own={ownPrivateDestinations}
+          />
         ) : null}
         <Field label="Credential env var NAME">
           <input
@@ -1126,12 +1147,14 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
               oauthOffered={!!p.features?.oauth}
               stdioCommands={p.features?.stdioCommands}
               privateDestinations={p.features?.privateDestinations}
+              ownPrivateDestinations={p.features?.companyPrivateDestinations}
               onCreate={(i) => wrap(() => p.createConnection(i))()}
               onSetSecret={setSecret}
             />
           ) : (
             <AddOpenApiForm
               privateDestinations={p.features?.privateDestinations}
+              ownPrivateDestinations={p.features?.companyPrivateDestinations}
               onPreview={p.previewOpenApi}
               onCreate={(i) => wrap(() => p.createOpenApiConnection(i))()}
               onSetSecret={setSecret}

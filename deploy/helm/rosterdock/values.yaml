@@ -125,7 +125,8 @@ board:
   # bucket, the API server, the model API, notifySecret and notifyEmail above) is not held to it. Empty:
   # public addresses only.
   # An entry for one company alone takes its id (Settings > Connections shows it to its owners and admins):
-  # no other company reaches it or sees it.
+  # no other company reaches it through a connection or sees it (a stdio command with free arguments, above,
+  # is not held to this list at all). A destination may be a list of entries for that company.
   #  - "playwright-mcp.tools.svc.cluster.local" # http://playwright-mcp.tools.svc.cluster.local:8931/mcp
   #  - company: "4f1aee73-e65e-4c8d-83f7-aa1169379d7f"
   #    destination: "ollama.acme.svc.cluster.local"
