@@ -513,6 +513,8 @@ describe("a file's identity", () => {
     // Another device, or no id at all, is never the same file.
     expect(sameFile({ dev: 8n, ino: a }, { dev: 7n, ino: a })).toBe(false);
     expect(sameFile({ dev: 7n, ino: 0n }, { dev: 7n, ino: 0n })).toBe(false);
+    // ReFS's id for a file whose own does not fit in 64 bits, all ones, which Node reads as -1.
+    expect(sameFile({ dev: 7n, ino: -1n }, { dev: 7n, ino: -1n })).toBe(false);
   });
 
   it("finds a file's device by a handle the same as its directory's, as the harvest compares them on Windows", async () => {
@@ -559,6 +561,18 @@ describe("removing a run's directory", () => {
       }),
     ).rejects.toBe(denied);
     expect(calls).toBe(1);
+  });
+
+  it("tries again after a first try that took longer than its time, as a large tree's does", async () => {
+    let calls = 0;
+    await removeTree(path.join(root, "large"), 200, async () => {
+      // A node_modules takes seconds to walk before the file still held stops it.
+      if (++calls === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        throw busy();
+      }
+    });
+    expect(calls).toBe(2);
   });
 
   it("removes a directory a program ran from once it ends, and on Windows gives up in time while it runs", async () => {

@@ -262,19 +262,25 @@ their own, each with its own database and workers.
   harvest's diffs never do, and a copy could carry a link the repository holds into such a folder.
 - A worker run natively on Windows (`pnpm dev:worker` there, not in Docker or WSL2) keeps the rules above by
   other means. git's global config is `/dev/null`, which Git for Windows reads as its NUL device, and git
-  looks for hooks under that device (`\\.\nul`), where no file can be. git there checks a link out as a
-  plain file holding its target, so a rework round whose diff makes or changes a link is refused by the
-  diff. Windows looks for a program in the directory it starts in before PATH; the worker turns that off
-  (`NoDefaultCurrentDirectoryInExePath`), so a `git.exe` or `claude.exe` in a clone never runs in place of
-  the real one. Windows has no `O_NOFOLLOW`: a symbolic link or a junction anywhere on a file's way is
-  refused, and the file is read only when the one opened has the file id of the one checked, compared whole
-  (a file without one is refused), on the workspace's volume as a handle reads it (by path, Node 22.12 to
-  22.16 misread the volume there). A stopped git ends with the helpers it started that still run
-  (`taskkill /t`, where Linux has the process group). The repository's tests run in a job object, which
-  ends every process they started, one whose parent has already ended included; where Windows PowerShell
-  cannot make the job (a policy refuses it), taskkill ends what it can still walk to. File
-  modes do nothing there: the MCP config that carries the run token is private because the temp directory
-  is, as a user's profile is. What does not carry over is the pod: the engine, its shell and the
+  looks for hooks under that device (`\\.\nul`), where no file can be. git there checks a link out as a plain
+  file holding its target, so a rework round is refused by its diff alone: by a link it makes, or a change to
+  one the repository holds, which HEAD's tree names whatever mode the diff spells. A round that deletes such a
+  link or replaces it with a file carries over, as on Linux, and the harvest records a link the run changed as
+  the file it now is (git add would keep it a link). Windows looks for a program in the directory it starts in
+  before PATH; the worker turns that off (`NoDefaultCurrentDirectoryInExePath`), so a `git.exe` or
+  `claude.exe` in a clone never runs in place of the real one. Windows has no `O_NOFOLLOW`: a symbolic link or
+  a junction anywhere on a file's way is refused, and the file is read only when the one opened has the file
+  id of the one checked, compared whole, on the workspace's volume as a handle reads it. A file without an id
+  is refused: 0, or the all-ones id ReFS gives a file whose own does not fit in 64 bits, so on a Dev Drive
+  such a file is not delivered. By path, libuv 1.49 and 1.50 (Node 22.12 to 22.16, 23.1 to 23.11 and 24.0 to
+  24.1) misread the volume on Windows 11 24H2 and Server 2025. A stopped git ends with the helpers it started
+  that still run (`taskkill /t`, where Linux has the process group). The repository's tests run in a job
+  object, which ends every process they started, one whose parent has already ended included; where Windows
+  PowerShell cannot make the job (a policy refuses it), taskkill ends what it can still walk to. File modes do
+  nothing there: the MCP config that carries the run token is written to the temp directory and is private
+  only while that directory is, as `%TEMP%` in your profile is by default. A `TEMP` outside the profile
+  (`C:\Temp`) takes its folder's permissions, which under a drive's root let other users read it: keep the
+  worker's `TEMP` in its profile. What does not carry over is the pod: the engine, its shell and the
   repository's tests run as your Windows user, with your files, your credentials and your other programs
   within reach, and nothing the engine leaves running ends with the run. Run anything but your own
   repositories in Docker or WSL2.
