@@ -11,8 +11,9 @@ part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Set up
 
-You need Node.js 22.12 or later, pnpm 10 (`npm install -g pnpm@10`, or `corepack enable` on Node 22 or 24,
-which picks the pinned version) and Docker. Node 25 and later no longer ship corepack.
+You need Node.js 22.13 or a later 22, or 24 or later (not 23: the lint and test tools refuse it), pnpm 10
+(`npm install -g pnpm@10`, or `corepack enable` on Node 22 or 24, which picks the pinned version) and Docker.
+Node 25 and later no longer ship corepack.
 
 ```bash
 pnpm install
@@ -38,7 +39,8 @@ pnpm typecheck && pnpm lint && pnpm format:check && pnpm test
 start it with `docker compose up -d postgres` first. If your Postgres is elsewhere, point
 `ROSTERDOCK_TEST_ADMIN_URL` at a role that may `CREATE DATABASE`. `pnpm format` fixes what `format:check`
 finds. CI runs the same commands, then builds the web app and the images. On Windows, with Node 22.16 and the
-newest 22, it runs the worker's and the shared package's tests and the board's `test/peter-cli-bin.test.ts`. There the worker's tests need Git for Windows on PATH, and the ones that make
+Node 22 the runner has cached, it runs the worker's and the shared package's tests and the board's
+`test/peter-cli-bin.test.ts`. There the worker's tests need Git for Windows on PATH, and the ones that make
 symbolic links run only with Developer Mode on or as an administrator: without, they are skipped and say
 why. In WSL2 or a Linux container they all run, as on Linux.
 
