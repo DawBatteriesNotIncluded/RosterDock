@@ -561,18 +561,22 @@ describe("removing a run's directory", () => {
     expect(calls).toBe(1);
   });
 
-  it("removes a directory a process holds as soon as it lets go, and gives up in time while it does not", async () => {
+  it("removes a directory a program ran from once it ends, and on Windows gives up in time while it runs", async () => {
     const dir = await mkdtemp(path.join(root, "held-"));
     await writeFile(path.join(dir, "f.md"), "f\n", "utf8");
-    // A process left running in it, as a run's dev server or a git being stopped would be.
-    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
-      cwd: dir,
-      stdio: "ignore",
-    });
+    // A program running from the directory, as a run's dev server would be. Windows removes no file a process
+    // holds, and a running program's own file is one; elsewhere it goes like any other.
+    let child;
+    if (process.platform === "win32") {
+      const program = path.join(dir, "held.exe");
+      await copyFile(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "PING.EXE"), program);
+      child = spawn(program, ["-n", "60", "127.0.0.1"], { cwd: dir, stdio: "ignore" });
+    } else {
+      child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { cwd: dir, stdio: "ignore" });
+    }
     await new Promise((resolve) => child.once("spawn", resolve));
     try {
       if (process.platform === "win32") {
-        // Windows removes no directory a process holds: Node's rm fails, and removeTree stops trying in time.
         await expect(rm(dir, { recursive: true, force: true })).rejects.toMatchObject({
           code: expect.stringMatching(/^(EBUSY|EPERM)$/),
         });
@@ -583,7 +587,6 @@ describe("removing a run's directory", () => {
         expect(Date.now() - started).toBeLessThan(3000);
         expect(existsSync(dir)).toBe(true);
       } else {
-        // Elsewhere a process's directory goes like any other.
         await removeTree(dir, 500);
         expect(existsSync(dir)).toBe(false);
       }
