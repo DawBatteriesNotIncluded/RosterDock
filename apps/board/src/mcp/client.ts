@@ -27,7 +27,7 @@ import { notSetForCompany } from "../secrets/company.js";
 import { entryFor, type SecretStore } from "../secrets/store.js";
 import { isExpiring, refreshTokens, resourceAllowed, type TokenAuth } from "./oauth.js";
 import { defaultEgress, egressFetch, READ_NO_FURTHER, readBudget, type Egress } from "../web/egress.js";
-import { jsonPrefix, scrubber, type Scrubber } from "./scrub.js";
+import { scrubber, type Scrubber } from "./scrub.js";
 import type { WebReader } from "../web/transport.js";
 
 export const MCP_CALL_TIMEOUT_MS = 30_000;
@@ -407,8 +407,8 @@ export async function discoverTools(target: McpTarget, deps: McpClientDeps = {})
       for (const t of page.tools) {
         // Kept on the row and shown to every teammate: what the server says of its tools is scrubbed too.
         out.push({
-          name: clean.head(t.name, 2000),
-          description: clean.head(t.description ?? "", 2000),
+          name: clean.prefix(t.name, 2000),
+          description: clean.prefix(t.description ?? "", 2000),
           annotations: t.annotations
             ? { readOnlyHint: t.annotations.readOnlyHint, destructiveHint: t.annotations.destructiveHint }
             : null,
@@ -447,20 +447,15 @@ export async function callMcpTool(
         MCP_RESULT_MAX_CHARS,
       );
       if (res.isError) return { ok: false, error: text || `${name} returned an error` };
-      if (res.structuredContent == null) return { ok: true, result: parseMaybeJson(text) };
-      // Structured content as the broker keeps it (levels past 12 are "[depth]"), and no larger than the text
-      // would be; a larger one comes back as its JSON, cut, as an OpenAPI answer past its cap does.
-      const json = jsonPrefix(res.structuredContent, MCP_RESULT_MAX_CHARS + 1);
-      return {
-        ok: true,
-        result:
-          json.length <= MCP_RESULT_MAX_CHARS
-            ? clean.value(JSON.parse(json))
-            : {
-                truncated: true,
-                text: clean.cut(jsonPrefix(res.structuredContent, MCP_RESULT_MAX_CHARS + clean.tail)),
-              },
-      };
+      // Text that is JSON is a value like structured content: its numbers are looked at too.
+      if (res.structuredContent == null) {
+        const parsed = parseMaybeJson(text);
+        return { ok: true, result: typeof parsed === "string" ? parsed : clean.value(parsed) };
+      }
+      // Structured content as the broker keeps it (levels past 12 are "[depth]"), walked as a value within
+      // what a teammate reads of a text: what is past it is left out, and the result says so.
+      const { value, cut } = clean.bounded(res.structuredContent, MCP_RESULT_MAX_CHARS);
+      return { ok: true, result: cut ? { truncated: true, value } : value };
     });
   } catch (err) {
     return { ok: false, error: (err as Error).message.slice(0, 2000) };

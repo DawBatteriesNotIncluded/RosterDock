@@ -12,6 +12,7 @@ import type { EventRecord } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { callConnectionTool } from "../src/mcp/call.js";
 import { callMcpTool, discoverTools } from "../src/mcp/client.js";
+import { scrubbedChars } from "../src/mcp/scrub.js";
 import { loadConnection } from "../src/mcp/connections.js";
 import {
   authorizationUrl,
@@ -324,21 +325,46 @@ describe("a company's MCP server over HTTP", () => {
       if (body?.method !== "tools/call") return transport(input, init);
       // A server error whose body the SDK repeats in its own words.
       if (body.params?.name === "broken") return json(500, { error: echoed });
-      // Structured content past what a teammate reads, and nested past what the broker keeps.
-      let structured: unknown = undefined;
-      if (body.params?.name === "large")
-        structured = { log: Array.from({ length: 4000 }, (_, i) => ({ i, echoed })) };
-      if (body.params?.name === "deep") {
-        structured = echoed;
-        for (let i = 0; i < 100_000; i++) structured = [structured];
-      }
-      const result = {
-        ...error.result,
-        content: [{ type: "text", text: echoed }],
-        isError: body.params?.name === "failing",
-        ...(structured === undefined ? {} : { structuredContent: { nested: structured } }),
-      };
-      return json(200, { ...error, id: body.id, result });
+      // The recorded error answer's shape, its text and any structured content written in as JSON text: Node
+      // 22's JSON.stringify would overflow its stack on the 100,000 levels below.
+      const tool = body.params?.name;
+      const shaped = (text: string, structured: string | null) =>
+        new Response(
+          JSON.stringify({
+            ...error,
+            id: body.id,
+            result: {
+              ...error.result,
+              content: [{ type: "text", text: "@T" }],
+              isError: tool === "failing",
+              ...(structured === null ? {} : { structuredContent: { nested: "@S" } }),
+            },
+          })
+            .replace('"@T"', () => text)
+            .replace('"@S"', () => structured ?? ""),
+          { headers: { "content-type": "application/json" } },
+        );
+      // Structured content past what a teammate reads, nested past what the broker keeps; and 7 MB of text or
+      // of structured content, the credential echoed all through it beside chains of escapes.
+      const chain = `${echoed} ${"\\".repeat(256)}x and some plain words between the runs `;
+      if (tool === "large")
+        return shaped(
+          JSON.stringify(echoed),
+          JSON.stringify({ log: Array.from({ length: 4000 }, (_, i) => ({ i, echoed })) }),
+        );
+      if (tool === "deep")
+        return shaped(
+          JSON.stringify(echoed),
+          `${"[".repeat(100_000)}${JSON.stringify(echoed)}${"]".repeat(100_000)}`,
+        );
+      if (tool === "huge-text")
+        return shaped(JSON.stringify(chain.repeat(Math.ceil(3_600_000 / chain.length))), null);
+      if (tool === "huge-structured")
+        return shaped(
+          JSON.stringify(echoed),
+          JSON.stringify({ log: Array(Math.ceil(3_600_000 / chain.length)).fill(chain) }),
+        );
+      return shaped(JSON.stringify(echoed), null);
     }) as typeof fetch;
     const target = {
       transport: "http" as const,
@@ -350,16 +376,26 @@ describe("a company's MCP server over HTTP", () => {
     expect((await discoverTools(target, deps))[0]!.description).toBe(clean);
     expect(await call("failing")).toEqual({ ok: false, error: clean });
     expect(await call("answering")).toEqual({ ok: true, result: clean });
-    // Larger than a teammate reads: its JSON, cut, as an OpenAPI answer past its cap, the credential out.
-    const large = (await call("large")) as { ok: true; result: { truncated: boolean; text: string } };
+    // Larger than a teammate reads: walked as a value as far as it goes, the credential out, and said to be cut.
+    const large = (await call("large")) as { ok: true; result: { truncated: boolean; value: unknown } };
     expect(large.result.truncated).toBe(true);
-    expect(large.result.text.length).toBeLessThanOrEqual(200_000);
-    expect(large.result.text).toContain("[redacted]");
-    expect(large.result.text).not.toMatch(/AbC|dEf|GhI/);
+    expect(JSON.stringify(large.result.value).length).toBeLessThan(260_000);
+    expect(JSON.stringify(large.result.value)).toContain("[redacted]");
+    expect(JSON.stringify(large.result.value)).not.toMatch(/AbC|dEf|GhI/);
     // Nested past twelve levels: written "[depth]" there, as the broker would, never read whole.
     let deep = ((await call("deep")) as { ok: true; result: { nested: unknown } }).result.nested;
     for (let i = 0; i < 12; i++) deep = (deep as unknown[])[0];
     expect(deep).toBe("[depth]");
+    // 3.6 MB of either, a run of 256 backslashes all through it so every level is read, is cut before it is
+    // scrubbed: what the server sent does not set the work. Scrubbing all of it reads 14 million characters.
+    for (const tool of ["huge-text", "huge-structured"]) {
+      const before = scrubbedChars();
+      const huge = (await call(tool)) as { ok: true; result: unknown };
+      expect(scrubbedChars() - before, tool).toBeLessThan(3_000_000);
+      expect(huge.ok, tool).toBe(true);
+      expect(JSON.stringify(huge), tool).not.toMatch(/AbC|dEf|GhI/);
+    }
+    expect(((await call("huge-text")) as { result: string }).result.length).toBeLessThanOrEqual(200_000);
     const broken = await call("broken");
     expect(broken.ok).toBe(false);
     expect(JSON.stringify(broken)).toContain("[redacted]");

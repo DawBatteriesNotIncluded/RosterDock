@@ -399,16 +399,20 @@ their own, each with its own database and workers.
   those again) is scrubbed too. A number goes too when its digits hold a credential, or when its value is
   a credential of digits (leading zeros dropped, or rounded past fifteen digits). Other encodings are not
   read: percent-encoding in a URL, HTML entities, a body in UTF-16 or Latin-1, an echo split across two of
-  an MCP answer's text items. What is kept is cut before it is scrubbed: an OpenAPI answer at its
-  manifest's cap, an MCP answer's text at 200,000 characters, and an MCP answer's structured content,
-  levels past twelve written `[depth]`, kept whole only within 200,000 characters of JSON, else that JSON
-  cut. A cut drops its last 256 characters, or sixteen times the credential's length if that is more, so
-  the text is the same whatever a guess at the credential matched, and a credential cut in two shows no
-  part of itself when JSON nests it at most four levels deep, each level doubling the backslashes of the
-  one inside it (an encoder that writes every character of an escape as `\uXXXX` again needs more than
-  that). In an answer that is JSON (an OpenAPI answer whole or line by line, a byte order mark first
-  dropped, or an MCP answer), the values of keys that look secret (`authorization`, `token`, `password` and
-  the like) are redacted too; a cut answer and other text keep theirs. An OpenAPI refusal repeats the
+  an MCP answer's text items. What is kept is bounded before it is scrubbed: an OpenAPI answer is cut at
+  its manifest's cap, an MCP answer's text at 200,000 characters and an error at 2,000, and an MCP answer's
+  structured content is walked as a value, levels past twelve written `[depth]`, as far as 200,000
+  characters of it go; what is past that is left out, and the result says it was cut. A text cut where a
+  teammate's words may be echoed drops its last 256 characters, or sixteen times the credential's length
+  if that is more, and any escape the cut broke, so the text is the same whatever a guess at the credential
+  matched, and a credential cut in two shows no part of itself when JSON nests it at most four levels deep,
+  each level doubling the backslashes of the one inside it (an encoder that writes every character of an
+  escape as `\uXXXX` again needs more than that). A tool's name and description, which no teammate writes,
+  are cut at 2,000 characters and lose their end from wherever a credential may begin that the cut fell
+  inside, at any level read. In an answer that is JSON (an OpenAPI answer whole or line by line, a byte
+  order mark first dropped, or an MCP answer, cut or not), the values of keys that look secret
+  (`authorization`, `token`, `password` and the like) are redacted too; a cut OpenAPI answer and other
+  text keep theirs. An OpenAPI refusal repeats the
   status alone, never the server's reason phrase or body. A credential shorter than 6 characters is never
   scrubbed, since that would blank ordinary text: give such a service a longer one.
 - **Time.** One deadline per request, looking names up included: an MCP request's is the call's timeout
