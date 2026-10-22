@@ -156,12 +156,18 @@ describe("runRepoTests", () => {
   });
 
   it("reads a command's output as a stream, so a character on a pipe boundary arrives whole", async () => {
-    // This Node stands in for the package manager: no npm runs here.
-    const res = await execCommand(
-      process.execPath,
-      ["-e", 'process.stdout.write("— ✅ 😀 ".repeat(20000))'],
-      { cwd: root, env: { PATH: process.env.PATH ?? "" }, timeoutMs: 10_000 },
+    // This Node stands in for the package manager: no npm runs here. By name and with a script file, as a
+    // package manager is run: on Windows the command goes through cmd, which splits a path or code with spaces.
+    await writeFile(
+      path.join(root, "stream.js"),
+      'process.stdout.write("— ✅ 😀 ".repeat(20000));\n',
+      "utf8",
     );
+    const res = await execCommand("node", ["stream.js"], {
+      cwd: root,
+      env: { PATH: process.env.PATH ?? "" },
+      timeoutMs: 10_000,
+    });
     expect(res.code).toBe(0);
     expect(res.output.includes("\ufffd")).toBe(false);
     expect(res.output.endsWith("— ✅ 😀 ")).toBe(true);

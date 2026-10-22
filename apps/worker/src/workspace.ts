@@ -49,6 +49,12 @@ const GIT_ENV_KEYS = [
   "TZ",
 ];
 
+/**
+ * The global config git reads: none. Not os.devNull, which is \\.\nul on Windows and a path Git for Windows
+ * refuses to read config from; it takes /dev/null as the null device itself.
+ */
+export const GIT_NO_CONFIG = "/dev/null";
+
 /** git's environment: the keys above, no prompt, and no system or global config (a credential helper, an include, a ~/.gitconfig an earlier run wrote). */
 export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
@@ -56,7 +62,7 @@ export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<str
     const v = env[key];
     if (v !== undefined) out[key] = v;
   }
-  return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull };
+  return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: GIT_NO_CONFIG };
 }
 
 /**
@@ -162,7 +168,8 @@ export async function prepareWorkspace(
   signal?: AbortSignal,
 ): Promise<Workspace> {
   const dir = path.join(workRoot, runId);
-  await rm(dir, { recursive: true, force: true });
+  // Retried as cleanupWorkspace is: a git just stopped in it holds the directory a moment on Windows (EBUSY).
+  await rm(dir, { recursive: true, force: true, maxRetries: 3 });
   await mkdir(dir, { recursive: true });
   if (!project.repoUrl) return { dir, repo: false };
   const res = await git(
@@ -296,7 +303,10 @@ async function readInWorkspace(
     const handle = await open(at, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const s = await handle.stat();
-      if (s.dev !== last.dev || s.ino !== last.ino) {
+      // On Windows a stat by path reports device 0 and one by handle the volume's serial, so only the file
+      // id compares there; realpath above has already kept the file on the workspace's volume.
+      const sameDev = process.platform === "win32" || s.dev === last.dev;
+      if (!sameDev || s.ino !== last.ino) {
         refused.push(rel);
         return null;
       }

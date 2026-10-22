@@ -13,7 +13,7 @@ import type { BoardClient, ClaimedRun } from "../src/board-client.js";
 import type { EngineAdapter } from "../src/engines/types.js";
 import { applyPreviousRound, whyNotApplied, type Rework } from "../src/rework.js";
 import { executeRun, type RunDeps } from "../src/run.js";
-import { git, prepareWorkspace } from "../src/workspace.js";
+import { git, GIT_NO_CONFIG, prepareWorkspace } from "../src/workspace.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixtures = path.resolve(here, "../../../packages/shared/test/fixtures");
@@ -38,7 +38,7 @@ const GIT_ENV = {
   GIT_COMMITTER_NAME: "t",
   GIT_COMMITTER_EMAIL: "t@example.com",
   GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: os.devNull,
+  GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
 };
 
 let root: string;
