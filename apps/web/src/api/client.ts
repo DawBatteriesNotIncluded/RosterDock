@@ -243,7 +243,8 @@ export interface Client {
   checkConnection(companyId: string, connectionId: string): Promise<Connection>;
   /** Where to send the browser to authorise the connection; it comes back to the board's callback. */
   startOAuth(companyId: string, connectionId: string): Promise<{ url: string }>;
-  features(): Promise<Features>;
+  /** With a company: what applies to it too (the private destinations the operator gave it alone). */
+  features(companyId?: string): Promise<Features>;
   /** Company secrets: names only; the PUT body is the one value the board accepts, write-only. */
   secrets(companyId: string): Promise<CompanySecret[]>;
   setSecret(companyId: string, name: string, value: string): Promise<CompanySecret>;
@@ -359,7 +360,8 @@ export const httpClient: Client = {
   discoverConnection: (id, cn) => request("POST", `${c(id)}/connections/${cn}/discover`, {}),
   checkConnection: (id, cn) => request("POST", `${c(id)}/connections/${cn}/check`, {}),
   startOAuth: (id, cn) => request("POST", `${c(id)}/connections/${cn}/oauth/start`, { returnTo: "/" }),
-  features: () => request("GET", "/api/features"),
+  features: (companyId) =>
+    request("GET", `/api/features${companyId ? `?companyId=${encodeURIComponent(companyId)}` : ""}`),
   secrets: (id) => request("GET", `${c(id)}/secrets`),
   setSecret: (id, name, value) => request("PUT", `${c(id)}/secrets/${encodeURIComponent(name)}`, { value }),
   deleteSecret: (id, name) => request("DELETE", `${c(id)}/secrets/${encodeURIComponent(name)}`),

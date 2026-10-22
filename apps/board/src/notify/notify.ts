@@ -25,7 +25,7 @@ import type { EventBus } from "../events/bus.js";
 import { mutate } from "../mutate.js";
 import { companyEnv, notSetForCompany } from "../secrets/company.js";
 import type { SecretStore } from "../secrets/store.js";
-import { defaultEgress, egressFetch, egressSocket, type Egress } from "../web/egress.js";
+import { companyEgress, defaultEgress, egressFetch, egressSocket, type Egress } from "../web/egress.js";
 import { sendMail, type SmtpOptions } from "./smtp.js";
 
 export const NEEDS_YOU_EVENTS: readonly EventType[] = [
@@ -296,6 +296,11 @@ function merge(outcomes: SendOutcome[]): SendOutcome {
   };
 }
 
+/** The deps as one company sends with them: its egress, the private destinations it may reach. */
+function forCompanyDeps(deps: NotifyDeps, companyId: string): NotifyDeps {
+  return { ...deps, egress: companyEgress(deps.egress ?? defaultEgress(), companyId) };
+}
+
 async function post(
   deps: NotifyDeps,
   target: NotifyTarget,
@@ -360,11 +365,13 @@ export async function sendNeedsYou(deps: NotifyDeps, ev: EventRecord): Promise<S
   if (!(await claimNeedsYou(deps.db, ev.companyId, ev.seq)))
     return { sent: false, target: null, error: "another replica is sending it" };
   const [webhook, email] = await Promise.all([webhookFor(deps, ev.companyId), emailFor(deps, ev.companyId)]);
+  // A company's own webhook and SMTP server are reached as that company: its private destinations alone.
+  const as = forCompanyDeps(deps, ev.companyId);
   const outcomes: { channel: "webhook" | "email"; outcome: SendOutcome }[] = [];
   if (webhook)
     outcomes.push({
       channel: "webhook",
-      outcome: await post(deps, webhook, {
+      outcome: await post(as, webhook, {
         text: `${company.name} · ${text}`,
         company: company.name,
         companyId: ev.companyId,
@@ -376,7 +383,7 @@ export async function sendNeedsYou(deps: NotifyDeps, ev: EventRecord): Promise<S
   if (email)
     outcomes.push({
       channel: "email",
-      outcome: await mail(deps, email, `${company.name} · needs you`, `${text}\n\n(${ev.type})`),
+      outcome: await mail(as, email, `${company.name} · needs you`, `${text}\n\n(${ev.type})`),
     });
   for (const { channel, outcome } of outcomes) {
     if (outcome.sent) {
@@ -401,12 +408,13 @@ export async function sendTest(deps: NotifyDeps, companyId: string, actor: Actor
     await deps.db.query<{ name: string }>("SELECT name FROM companies WHERE id = $1", [companyId])
   ).rows[0];
   const [webhook, email] = await Promise.all([webhookFor(deps, companyId), emailFor(deps, companyId)]);
+  const as = forCompanyDeps(deps, companyId);
   const name = company?.name ?? "RosterDock";
   const outcomes: { channel: "webhook" | "email"; outcome: SendOutcome }[] = [];
   if (webhook)
     outcomes.push({
       channel: "webhook",
-      outcome: await post(deps, webhook, {
+      outcome: await post(as, webhook, {
         text: `${name} · Needs-you notifications reach you here.`,
         company: company?.name,
         companyId,
@@ -417,7 +425,7 @@ export async function sendTest(deps: NotifyDeps, companyId: string, actor: Actor
     outcomes.push({
       channel: "email",
       outcome: await mail(
-        deps,
+        as,
         email,
         `${name} · a test from RosterDock`,
         "Needs-you notifications reach you here.",

@@ -96,9 +96,20 @@ spec:
               value: {{ join "," . | quote }}
             {{- end }}
             {{- with .Values.board.privateDestinations }}
+            {{- $entries := list }}
+            {{- range . }}
+            {{- if kindIs "map" . }}
+            {{- $company := required "a board.privateDestinations entry with a destination names its company" .company }}
+            {{- $destination := required "a board.privateDestinations entry with a company names its destination" .destination }}
+            {{- $entries = append $entries (printf "%s=%s" (toString $company) (toString $destination)) }}
+            {{- else }}
+            {{- $entries = append $entries (toString .) }}
+            {{- end }}
+            {{- end }}
             # The private destinations a company may make the board reach; everything else it chooses is public.
+            # An entry <company id>=<destination> is that company's alone.
             - name: ROSTERDOCK_PRIVATE_DESTINATIONS
-              value: {{ join "," . | quote }}
+              value: {{ join "," $entries | quote }}
             {{- end }}
             {{- if .Values.board.oauth.enabled }}
             - name: ROSTERDOCK_SECRET_STORE

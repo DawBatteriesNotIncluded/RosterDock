@@ -359,8 +359,12 @@ their own, each with its own database and workers.
   `pods insecure`, the kubeadm, kind and EKS default), so `*.cluster.local` or `*.pod.cluster.local` hands
   every company `169-254-169-254.default.pod.cluster.local`, the cloud's metadata; and an ExternalName
   service is a CNAME to anywhere. List each service, or a namespace only you create services in. Every
-  company on the board may use what is listed. Unset, nothing private is: the board refuses to start on an
-  entry it cannot read rather than guess. `apps/board/.env.example` lists loopback for development only.
+  company on the board may use what is listed, except an entry given to one company (`<company id>=<entry>`):
+  only that company reaches it, through a lookup and kept connections of its own, so another company's
+  request never rides a connection opened for it or a name that answers differently between the check and
+  the socket; and only that company's owners and admins see it in Settings. Unset, nothing private is: the
+  board refuses to start on an entry it cannot read rather than guess. `apps/board/.env.example` lists
+  loopback for development only.
 - **What is not checked.** What the operator configures: the git hosts' APIs, the OIDC provider, the OTLP
   collector, the object store, the Kubernetes API, the model API, the board's own webhook
   (`ROSTERDOCK_NOTIFY_WEBHOOK_URL`) and SMTP server (`ROSTERDOCK_NOTIFY_SMTP_URL`). Those are often
@@ -440,7 +444,8 @@ their own, each with its own database and workers.
 - Who may reach the web (the ingress and `networkPolicy.webIngressFrom`), and which email domains may
   sign in.
 - The private destinations you list for companies (`ROSTERDOCK_PRIVATE_DESTINATIONS`): every company on the
-  board may make the board reach each one, so list a service only when every company may use it, and a
+  board may make the board reach each one you list for all of them, so list a service for all only when every
+  company may use it, give it to one company (`<company id>=<entry>`) when it is that company's, and list a
   name only when you control its DNS. The board's own destinations (the git hosts, OIDC, OTLP, the bucket,
   the API server, the model API, its webhook and SMTP server) are yours to point at what you trust.
 - Rate limiting. The board limits only its sign-in routes (the dev login and the OpenID Connect start and

@@ -19,7 +19,14 @@ import {
   RefusedAddress,
   refuseDestination,
 } from "../src/web/address.js";
-import { boardEgress, egressFetch, egressSocket, readCapped, type Egress } from "../src/web/egress.js";
+import {
+  boardEgress,
+  companyEgress,
+  egressFetch,
+  egressSocket,
+  readCapped,
+  type Egress,
+} from "../src/web/egress.js";
 import { pinnedFetch } from "../src/web/transport.js";
 import { PUBLIC_TEST_ADDRESS, testEgress } from "./helpers.js";
 
@@ -566,6 +573,46 @@ describe("the pinned transport for a company's destinations", () => {
     for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read())
       rest += decoder.decode(chunk.value);
     expect(rest).toBe("event: message\ndata: two\n\n");
+  });
+
+  it("gives a company what the operator listed for it alone, on a transport of its own, and no other company", async () => {
+    const a = "4f1aee73-e65e-4c8d-83f7-aa1169379d7f";
+    const b = "0b6c1f0e-27f4-4a8e-9a43-3d5c4c6c1d2e";
+    const board = boardEgress(parsePrivateDestinations(`${a}=only-a.test`), toServer);
+    const forA = companyEgress(board, a);
+    const forB = companyEgress(board, b);
+    // A company with entries of its own gets its own lookup and kept connections; the rest share the board's.
+    expect(forA.fetch).not.toBe(board.fetch);
+    expect(companyEgress(board, a.toUpperCase()).fetch).toBe(forA.fetch);
+    expect(forB.fetch).toBe(board.fetch);
+    const get = (e: Egress) =>
+      egressFetch(e, { redirect: "error", timeoutMs: 5000, maxBytes: MB })(
+        `http://only-a.test:${port}/echo`,
+        {
+          method: "POST",
+          body: "{}",
+        },
+      );
+    expect((await get(forA)).status).toBe(200);
+    const refused = `refused: only-a.test resolves to a loopback address, ${NOT_ALLOWED}`;
+    await expect(get(forB)).rejects.toThrow(refused);
+    await expect(get(board)).rejects.toThrow(refused);
+    // Narrowed from A's, B still starts from the whole list, never from A's.
+    await expect(get(companyEgress(forA, b))).rejects.toThrow(refused);
+    // And B's transport refuses it at the socket too, whatever the check was told.
+    const checkedPublic: Egress = { ...forB, resolve: async () => [PUBLIC_TEST_ADDRESS] };
+    await expect(get(checkedPublic)).rejects.toThrow(refused);
+    // An injected transport stays itself for each company; only the list narrows.
+    const t = transport();
+    const injected = companyEgress(testEgress(t.fetch, { resolve, allow: `${a}=intranet.example.com` }), a);
+    expect(injected.fetch).toBe(t.fetch);
+    expect(
+      (
+        await egressFetch(injected, { redirect: "error", timeoutMs: 2000, maxBytes: MB })(
+          "https://intranet.example.com/",
+        )
+      ).status,
+    ).toBe(200);
   });
 
   it("carries MCP's streamable HTTP, its answers as event streams, to a listed name and to no other", async () => {

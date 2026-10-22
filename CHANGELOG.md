@@ -80,9 +80,11 @@ Against the images built from the pre-release tree (then called Pharo, not publi
   redirect within its own server is followed as before. An answer is read only up to its call site's cap,
   decoded. OAuth endpoints must be https (http only to a listed destination), and the resource an MCP server
   declares must be on its own origin. The board's own destinations (git hosts, OIDC, OTLP, the bucket, the
-  API server, the model API, its webhook and SMTP server) are not checked. Settings shows owners and admins
-  the list, and flags a URL whose address the board refuses or whose name looks private and is not listed.
-  `docs/operator.md` (Private destinations) says what to list.
+  API server, the model API, its webhook and SMTP server) are not checked. An entry may be one company's
+  alone (`<company id>=<entry>`, or `{ company, destination }` in the chart), which no other company reaches
+  or sees. Settings shows owners and admins the entries that apply to their company, and flags a URL whose
+  address the board refuses or whose name looks private and is not listed. `docs/operator.md` (Private
+  destinations) says what to list.
 
 ### Renamed
 

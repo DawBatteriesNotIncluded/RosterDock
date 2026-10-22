@@ -15,6 +15,7 @@
 import http from "node:http";
 import https from "node:https";
 import { isIP, type LookupFunction } from "node:net";
+import { forCompany } from "@rosterdock/shared";
 import {
   NO_PRIVATE_DESTINATIONS,
   reachableAddresses,
@@ -32,8 +33,26 @@ export interface Egress {
   fetch: typeof fetch;
   /** What every hop's name is checked with. */
   resolve: Resolve;
-  /** The private destinations the operator allows. */
+  /** The private destinations the operator allows; one company's own count only once narrowed to it (companyEgress). */
   allow: PrivateDestinations;
+  /** This egress as one company has it; see companyEgress. */
+  forCompany?(companyId: string): Egress;
+}
+
+/**
+ * What one company reaches: the operator's list narrowed to it (every company's entries and its own). On the
+ * board's own transport, a company with entries of its own also gets a lookup and kept connections that are
+ * its alone, so no other company reaches its destination through a reused connection or a name that changes
+ * its answer. Narrowed again, it starts from the whole list, never from another company's.
+ */
+export function companyEgress(egress: Egress, companyId: string): Egress {
+  if (egress.forCompany) return egress.forCompany(companyId);
+  return {
+    fetch: egress.fetch,
+    resolve: egress.resolve,
+    allow: forCompany(egress.allow, companyId),
+    forCompany: (other) => companyEgress(egress, other),
+  };
 }
 
 /** One call site's terms. */
@@ -266,17 +285,34 @@ export function boardEgress(
   allow: PrivateDestinations = NO_PRIVATE_DESTINATIONS,
   resolve: Resolve = systemResolve,
 ): Egress {
-  const socket = egressSocket({ resolve, allow });
-  return {
-    fetch: pinnedFetch(socket.lookup, {
+  const transport = (list: PrivateDestinations): typeof fetch => {
+    const socket = egressSocket({ resolve, allow: list });
+    return pinnedFetch(socket.lookup, {
       literal: socket.literal,
       agents: {
         // An idle connection closes after a few seconds, as fetch's do; one in use is the caller's.
         http: new http.Agent({ keepAlive: true, maxFreeSockets: 16, timeout: IDLE_MS }),
         https: new https.Agent({ keepAlive: true, maxFreeSockets: 16, timeout: IDLE_MS }),
       },
-    }),
+    });
+  };
+  // Every company's entries: what the rules read of a list nobody narrowed.
+  const shared = transport(allow);
+  const own = new Map<string, typeof fetch>();
+  const board: Egress = {
+    fetch: shared,
     resolve,
     allow,
+    forCompany(companyId) {
+      const id = companyId.toLowerCase();
+      const list = forCompany(allow, id);
+      let fetch = shared;
+      if (allow.companies?.[id]) {
+        fetch = own.get(id) ?? transport(list);
+        own.set(id, fetch);
+      }
+      return { fetch, resolve, allow: list, forCompany: (other) => board.forCompany!(other) };
+    },
   };
+  return board;
 }

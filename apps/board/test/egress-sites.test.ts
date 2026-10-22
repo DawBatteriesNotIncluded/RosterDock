@@ -40,6 +40,8 @@ const names: Record<string, string[]> = {
   "hooks.intranet.test": ["169.254.169.254"],
   "hooks.board.test": ["10.0.0.30"],
   "smtp.intranet.test": ["10.0.0.25"],
+  "mcp.only-a.test": ["10.0.0.71"],
+  "hooks.only-a.test": ["10.0.0.72"],
 };
 const resolve = async (host: string) => names[host] ?? [PUBLIC_TEST_ADDRESS];
 
@@ -99,6 +101,9 @@ const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
 }) as typeof fetch;
 
 const env: NodeJS.ProcessEnv = {};
+// The operator's list. Company ids exist only once the companies do, so a test gives a company its entries
+// after creating it, on this same list the board reads.
+const allow = parsePrivateDestinations("mcp.allowed.test,10.9.0.0/16");
 const dir = mkdtempSync(path.join(os.tmpdir(), "rosterdock-egress-"));
 let board: TestBoard;
 
@@ -106,9 +111,9 @@ beforeAll(async () => {
   resetOAuthCaches();
   board = await startTestBoard(
     {
-      privateDestinations: parsePrivateDestinations("mcp.allowed.test,10.9.0.0/16"),
+      privateDestinations: allow,
       notifyWebhookUrl: "https://hooks.board.test/own",
-      sharedEnvNames: ["GTM_HOOK", "GTM_SMTP", "SLASH_MCP_TOKEN"],
+      sharedEnvNames: ["GTM_HOOK", "GTM_SMTP", "SLASH_MCP_TOKEN", "HOOK_ONLY_A"],
       secretStore: { kind: "file", dir },
     },
     {
@@ -503,6 +508,72 @@ describe("a company's notifications", () => {
     expect(await test()).toMatchObject({
       error: `email: refused: 10.0.0.25 is a private address, ${NOT_ALLOWED}`,
     });
+  });
+});
+
+describe("a private destination the operator gives one company", () => {
+  it("is that company's alone: its connections, OAuth and webhook reach it, another company's are refused", async () => {
+    const a = await seedCompany(board, "egress-company-a@example.com");
+    const b = await seedCompany(board, "egress-company-b@example.com");
+    allow.companies = parsePrivateDestinations(
+      `${a.companyId}=mcp.only-a.test,${a.companyId}=hooks.only-a.test`,
+    ).companies;
+    try {
+      const refused = (host: string) => `refused: ${host} resolves to a private address, ${NOT_ALLOWED}`;
+      // A connection.
+      const check = async (c: typeof a) => {
+        const created = await c.api.post(`${c.base}/connections`, {
+          name: "only-a",
+          transport: "http",
+          url: "https://mcp.only-a.test/mcp",
+        });
+        return (await c.api.post(`${c.base}/connections/${created.body.id}/check`, {})).body.lastCheck;
+      };
+      expect(await check(a)).toMatchObject({ ok: true, error: null });
+      expect(await check(b)).toMatchObject({ ok: false, error: refused("mcp.only-a.test") });
+      // Its OAuth: A reaches the server (which publishes no metadata), B is refused before anything is sent.
+      resetOAuthCaches();
+      const authorise = async (c: typeof a) => {
+        const created = await c.api.post(`${c.base}/connections`, {
+          name: "only-a-oauth",
+          url: "https://mcp.only-a.test/mcp",
+          oauth: {},
+        });
+        return (await c.api.post(`${c.base}/connections/${created.body.id}/oauth/start`, {})).body.error;
+      };
+      expect(await authorise(a)).toBe("mcp.only-a.test publishes no authorization server metadata");
+      expect(await authorise(b)).toBe(`could not reach mcp.only-a.test: ${refused("mcp.only-a.test")}`);
+      // Its webhook.
+      env.HOOK_ONLY_A = "https://hooks.only-a.test/services/T0/B0/secret-000";
+      const notify = async (c: typeof a) => {
+        await c.api.patch(c.base, { settings: { notify: { webhookEnvName: "HOOK_ONLY_A" } } });
+        return (await c.api.post(`${c.base}/notify/test`, {})).body;
+      };
+      expect(await notify(a)).toEqual({ sent: true, target: "HOOK_ONLY_A", error: null });
+      expect(await notify(b)).toEqual({
+        sent: false,
+        target: "HOOK_ONLY_A",
+        error: refused("hooks.only-a.test"),
+      });
+      // What Settings shows: A's owners see A's own entries, asked for A; nobody else sees them.
+      const features = async (c: typeof a, companyId?: string) =>
+        (await c.api.get(`/api/features${companyId ? `?companyId=${companyId}` : ""}`)).body;
+      expect(await features(a, a.companyId)).toMatchObject({
+        privateDestinations: ["mcp.allowed.test", "10.9.0.0/16", "mcp.only-a.test", "hooks.only-a.test"],
+        companyPrivateDestinations: ["mcp.only-a.test", "hooks.only-a.test"],
+      });
+      expect(await features(a)).toMatchObject({
+        privateDestinations: ["mcp.allowed.test", "10.9.0.0/16"],
+        companyPrivateDestinations: [],
+      });
+      for (const asked of [a.companyId, b.companyId, "not-a-company"])
+        expect(await features(b, asked), asked).toMatchObject({
+          privateDestinations: ["mcp.allowed.test", "10.9.0.0/16"],
+          companyPrivateDestinations: [],
+        });
+    } finally {
+      delete allow.companies;
+    }
   });
 });
 

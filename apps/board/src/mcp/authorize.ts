@@ -15,6 +15,7 @@ import {
   type SecretData,
   type SecretStore,
 } from "../secrets/store.js";
+import { companyEgress } from "../web/egress.js";
 import { loadConnection, oauthResource, type ConnectionOAuth, type ConnectionRow } from "./connections.js";
 import {
   authorizationUrl,
@@ -106,6 +107,8 @@ export async function startAuthorization(
     throw new HttpError(422, "OAuth is for MCP servers over HTTP");
   // A secret the person named must be there before anyone is sent to a consent page.
   await namedClientSecret(row, deps);
+  // The company's own: its private destinations, and no other company's.
+  const oauth: OAuthDeps = { ...deps.oauth, egress: companyEgress(deps.oauth.egress, row.company_id) };
   let meta = row.oauth;
   try {
     let scopesHint: string[] | null = null;
@@ -113,18 +116,18 @@ export async function startAuthorization(
     let declared = meta.resource ?? null;
     // The resource identifier is read with the issuer, and again for a row from before it was kept.
     if (!issuer || meta.resource == null) {
-      const found = await discoverResource(row.url, deps.oauth);
+      const found = await discoverResource(row.url, oauth);
       issuer ??= found.authorizationServer;
       scopesHint = found.scopes;
       declared = found.resource;
     }
     const resource = declared ?? row.url;
-    const as = await discoverAuthorizationServer(issuer, deps.oauth);
+    const as = await discoverAuthorizationServer(issuer, oauth);
     const tokenAuth = tokenAuthFor(as);
     let clientId = meta.clientId;
     let registered = meta.registered;
     if (!clientId) {
-      const reg = await registerClient(as, input.redirectUri, deps.oauth, tokenAuth);
+      const reg = await registerClient(as, input.redirectUri, oauth, tokenAuth);
       clientId = reg.clientId;
       registered = true;
       const name = connectionSecretName(row.id);
@@ -234,7 +237,7 @@ export async function finishAuthorization(
       verifier: pending.code_verifier,
       resource: oauthResource(row) ?? row.url,
     },
-    deps.oauth,
+    { ...deps.oauth, egress: companyEgress(deps.oauth.egress, row.company_id) },
   );
   await deps.store.put(name, tokenData(existing, set));
   const authorizedAt = new Date(deps.oauth.now?.() ?? Date.now()).toISOString();

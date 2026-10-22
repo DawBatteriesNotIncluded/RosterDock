@@ -57,6 +57,8 @@ export interface ConnectionsPanelProps {
   deleteSecret?(name: string): Promise<void>;
   /** For headless rendering. */
   initialCatalog?: CatalogEntry[];
+  /** The company's id, which the operator names to give it a private destination of its own. */
+  companyId?: string;
 }
 
 /** How a connection authenticates, in one phrase. */
@@ -209,9 +211,11 @@ export function consentUrl(url: string): string {
   return parsed.toString();
 }
 
-/** What the operator's list is, for a person to read. */
-function listedPhrase(listed: readonly string[]): string {
-  return listed.length ? listed.join(" · ") : "none";
+/** What the operator's list is, for a person to read; the company's own entries say so. */
+function listedPhrase(listed: readonly string[], own: readonly string[] = []): string {
+  return listed.length
+    ? listed.map((e) => (own.includes(e) ? `${e} (this company only)` : e)).join(" · ")
+    : "none";
 }
 
 /** Under a URL the board refuses, or would if its name resolves privately: what this board reaches, and who changes it. */
@@ -937,7 +941,7 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
           {p.features?.sharedEnvNames ? ` (${p.features.sharedEnvNames.join(", ") || "none"})` : ""}; the rest
           of the board&apos;s environment never reaches a company, and no value is stored here.
           {p.features?.privateDestinations
-            ? ` A connection reaches public addresses, and of private ones only those this board's operator lists: ${listedPhrase(p.features.privateDestinations)}.`
+            ? ` A connection reaches public addresses, and of private ones only those this board's operator lists: ${listedPhrase(p.features.privateDestinations, p.features.companyPrivateDestinations)}.${p.companyId ? ` The operator can list one for this company alone by its id, ${p.companyId}.` : ""}`
             : ""}
           {p.features?.oauth
             ? " A value can be set under its name below; it goes into the board's secret store and is never shown again. A connection may authorise by OAuth instead; its tokens live in the same store."

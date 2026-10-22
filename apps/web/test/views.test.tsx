@@ -782,6 +782,19 @@ describe("views render with sample data", () => {
     expect(
       render(<ConnectionsPanel {...props} initialCatalog={playwright} features={nothing} canEdit />),
     ).toContain("Playwright browser · Web · usually on a private address, which the operator must allow");
+    // The operator's list shows to the people who manage connections, the company's own entries marked.
+    const own = {
+      ...none,
+      privateDestinations: ["10.20.0.0/16", "ollama.internal"],
+      companyPrivateDestinations: ["ollama.internal"],
+    };
+    const intro = render(
+      <ConnectionsPanel {...props} features={own} companyId="4f1aee73-e65e-4c8d-83f7-aa1169379d7f" canEdit />,
+    );
+    expect(intro).toContain(
+      "of private ones only those this board&#x27;s operator lists: 10.20.0.0/16 · ollama.internal (this company only).",
+    );
+    expect(intro).toContain("for this company alone by its id, 4f1aee73-e65e-4c8d-83f7-aa1169379d7f.");
     const allowed = { ...none, privateDestinations: ["playwright-mcp"] };
     expect(
       render(<ConnectionsPanel {...props} initialCatalog={playwright} features={allowed} canEdit />),
