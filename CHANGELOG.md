@@ -145,9 +145,11 @@ install built from that tree changes each of these:
   `.git/info/attributes` or `.gitattributes`, or by putting a NUL byte in it, and a teammate could approve it.
   The secrets check now scans every binary file's bytes and binds their sha256, a pull request writes only
   those bytes, and a binary file goes into a pull request only where a person approved (a teammate still
-  approves binary deliverables where no pull request opens); the worker takes out a `.git/info/attributes` the
-  run wrote. Upgrading: a review open before the upgrade with a binary file fails its pull request on approval,
-  saying so; a person vetoes the approval and requests changes.
+  approves binary deliverables where no pull request opens); the worker takes out the `.git/info` the run
+  could write and reads no system attributes file. A pull request now opens only for a review still approved:
+  a person's veto in the moment between an approval and its pull request did not stop it. Upgrading: a review
+  open before the upgrade with a binary file fails its pull request on approval, saying so; a person vetoes the
+  approval and requests changes.
 - On Windows, 0.1.0-rc.1 and 0.1.0-rc.2 ran the repository's tests without the job object: Windows
   PowerShell never made it (kernel32's functions were declared without PreserveSig), so what the tests left
   running when they ended by themselves carried on, as without one. The worker now makes it, and its log

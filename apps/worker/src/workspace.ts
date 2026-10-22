@@ -78,6 +78,8 @@ export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<str
     LC_ALL: "C",
     GIT_TERMINAL_PROMPT: "0",
     GIT_CONFIG_NOSYSTEM: "1",
+    // Nor the system's attributes file, which a run on a worker outside the image may write.
+    GIT_ATTR_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
   };
 }
@@ -358,13 +360,14 @@ async function restoreGitDir(ws: Workspace): Promise<void> {
     throw new Error(
       "the run replaced the repository's .git directory, so its changes cannot be read back for review",
     );
-  // Attributes the run gave this clone alone (`config.json -diff`) would have the diff call a text file binary,
-  // which the review cannot show: they go. The repository's own .gitattributes is part of its change. An info
-  // that is a link goes itself, never what it points at.
+  // What the run gave this clone alone in .git/info goes: attributes (`config.json -diff`) would have the diff
+  // call a text file binary, which the review cannot show, and an exclude would hide a .gitattributes that does
+  // the same, or any file, from the diff. The clone's own holds only comments. A link goes itself, never what it
+  // points at.
   const info = path.join(gitDir, "info");
   const infoSt = await lstat(info).catch(() => null);
   if (infoSt?.isSymbolicLink()) await rm(info, { force: true });
-  else if (infoSt?.isDirectory()) await rm(path.join(info, "attributes"), { force: true, recursive: true });
+  else if (infoSt) await rm(info, { force: true, recursive: true });
   if (ws.gitConfig === undefined) return;
   const config = path.join(gitDir, "config");
   // Removed first: a symlink the run left there must not redirect the write.

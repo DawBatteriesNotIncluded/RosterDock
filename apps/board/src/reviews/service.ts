@@ -852,13 +852,6 @@ function changeTitle(task: { number: number; title: string }): string {
 }
 
 /**
- * The pull request an approval proposes: the exact payload the provider will
- * execute, bound by sha256. Only for build work on a project whose repository
- * is on a host the board opens changes on, and whose run recorded a base sha:
- * research documents are delivered on the board. Executed by the caller after
- * the transaction commits.
- */
-/**
  * Where approving the review opens a pull request: build work on a project whose repository is on a host the
  * board opens changes on, from a run that recorded a base sha. Null where it opens none.
  */
@@ -879,15 +872,22 @@ async function pullRequestTarget(
   return { repo, project };
 }
 
+/**
+ * The pull request an approval proposes: the exact payload the provider will
+ * execute, bound by sha256. Only for build work on a project whose repository
+ * is on a host the board opens changes on, and whose run recorded a base sha:
+ * research documents are delivered on the board. Executed by the caller after
+ * the transaction commits.
+ */
 async function proposePullRequest(
   ctx: MutationContext,
   review: ReviewRow,
   task: { number: number; title: string },
+  approver: ActorRef,
   approverName: string | null,
   summary: string | null,
-  hosts: GitHosts | null = null,
+  target: Awaited<ReturnType<typeof pullRequestTarget>>,
 ): Promise<string | null> {
-  const target = await pullRequestTarget(ctx.client, review, hosts);
   if (!target) return null;
   const { repo, project } = target;
   const checks = await listChecks(ctx.client, review);
@@ -912,6 +912,8 @@ async function proposePullRequest(
     reviewId: review.id,
     round: review.round,
     diffSha256: review.diff_sha256,
+    /** Who approved: a binary file goes into the change only where a person did. */
+    approvedBy: { kind: approver.kind, id: approver.id },
   };
   const sha = payloadSha256(payload);
   const inserted = await ctx.client.query<{ id: string }>(
@@ -979,11 +981,13 @@ export async function approveReview(
         409,
         `#${task.number} has a failed check a teammate cannot approve over (${overrode.map((c) => c.title).join("; ")}): request changes, or leave the decision to a person`,
       );
-    // Nor binary files into a pull request: the review shows none of their bytes.
-    const unshown = (
+    // Nor binary files into a pull request: the review shows none of their bytes. Where the approval opens one
+    // is read once, here, and the proposal below takes it.
+    const target = await pullRequestTarget(ctx.client, review, hosts);
+    const withBytes = (
       (checks.find((c) => c.kind === "secrets")?.detail ?? {}) as Partial<BinaryDetail>
-    ).unshown?.filter((p) => typeof p === "string");
-    const binaries = unshown?.length && (await pullRequestTarget(ctx.client, review, hosts)) ? unshown : [];
+    ).binaries?.map((b) => b.path);
+    const binaries = target && withBytes?.length ? withBytes : [];
     if (binaries.length && actor.kind === "teammate")
       throw new HttpError(
         409,
@@ -1038,9 +1042,10 @@ export async function approveReview(
       ctx,
       updated,
       task,
+      actor,
       who?.name ?? null,
       input.summary ?? null,
-      hosts,
+      target,
     );
     return { id: updated.id, pullRequestId };
   });

@@ -353,6 +353,7 @@ describe("workspace", () => {
       LC_ALL: "C",
       GIT_TERMINAL_PROMPT: "0",
       GIT_CONFIG_NOSYSTEM: "1",
+      GIT_ATTR_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
     });
     // git's messages in English whatever the worker's locale: the harvest and the rework read some of them.
@@ -521,6 +522,31 @@ describe("workspace", () => {
       ["config.json", false],
     ]);
     expect(existsSync(path.join(ws.dir, ".git", "info", "attributes"))).toBe(false);
+    await cleanupWorkspace(ws);
+  });
+
+  it("shows a .gitattributes the run hid with .git/info/exclude, so the review sees why a file is binary", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-info-exclude",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await mkdir(path.join(ws.dir, ".git", "info"), { recursive: true });
+    await writeFile(path.join(ws.dir, ".git", "info", "exclude"), ".gitattributes\n", "utf8");
+    await writeFile(path.join(ws.dir, ".gitattributes"), "config.json -diff\n", "utf8");
+    await writeFile(
+      path.join(ws.dir, "config.json"),
+      '{ "smtp_password": "not-a-real-value-123" }\n',
+      "utf8",
+    );
+    const h = await harvestWorkspace(ws, []);
+    const files = parseUnifiedDiff(h.artifacts.find((a) => a.kind === "diff")!.content);
+    // The attribute is part of the change now, as the review shows; the board scans the file it makes binary.
+    expect(files.map((f) => [f.path, f.binary])).toEqual([
+      [".gitattributes", false],
+      ["config.json", true],
+    ]);
     await cleanupWorkspace(ws);
   });
 

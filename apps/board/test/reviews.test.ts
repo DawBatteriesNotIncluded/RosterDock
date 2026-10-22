@@ -9,6 +9,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { renderBinaryFileDiff, renderNewFileDiff } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { GitHosts } from "../src/git/hosts.js";
+import { executePullRequest } from "../src/reviews/outcomes.js";
+import { approveReview, vetoReview } from "../src/reviews/service.js";
 import { fakeGitHub } from "./github-fake.js";
 import { fakeGitLab } from "./gitlab-fake.js";
 import { addProject, addTeammate, seedCompany, startTestBoard, type Api, type TestBoard } from "./helpers.js";
@@ -1057,9 +1060,9 @@ describe("reviews", () => {
   });
 
   it("scans every file the diff calls binary from the bytes the run sent, and a pull request carries only those bytes", async () => {
-    const { api, base } = await seedCompany(board, "rv-binaries@example.com");
+    const { api, base, owner, companyId } = await seedCompany(board, "rv-binaries@example.com");
     const cody = await addTeammate(api, base, "Cody");
-    await addTeammate(api, base, "Verifier", "reviewer");
+    const verifier = await addTeammate(api, base, "Verifier", "reviewer");
     const project = (
       await api.post(`${base}/projects`, {
         name: "binaries",
@@ -1070,7 +1073,8 @@ describe("reviews", () => {
     ).body;
     const stanza = (p: string) =>
       `diff --git a/${p} b/${p}\nindex 1111111..2222222 100644\nBinary files a/${p} and b/${p} differ\n`;
-    const open = async (title: string, files: { path: string; bytes: Buffer }[]) => {
+    // `without`: binary files in the diff the run sent no bytes for.
+    const open = async (title: string, files: { path: string; bytes: Buffer }[], without: string[] = []) => {
       const task = (
         await api.post(`${base}/tasks`, {
           projectId: project.id,
@@ -1094,7 +1098,7 @@ describe("reviews", () => {
       await asRun.post(`/api/worker/runs/${run.id}/artifacts`, {
         path: "changes.diff",
         kind: "diff",
-        content: files.map((f) => stanza(f.path)).join(""),
+        content: [...files.map((f) => f.path), ...without].map(stanza).join(""),
       });
       await asRun.post(`/api/worker/runs/${run.id}/complete`, {
         status: "completed",
@@ -1188,13 +1192,58 @@ describe("reviews", () => {
     // Where a teammate approved one all the same (a check row that names none), the pull request refuses it.
     const stale = await open("Logo again", [{ path: "logo.png", bytes: png }]);
     await board.db.query(
-      `UPDATE review_checks SET detail = jsonb_set(detail, '{unshown}', '[]') WHERE review_id = $1 AND kind = 'secrets'`,
+      `UPDATE review_checks SET detail = jsonb_set(detail, '{binaries}', '[]') WHERE review_id = $1 AND kind = 'secrets'`,
       [stale.review.id],
     );
     const asVerifier2 = board.api(await reviewerToken(stale.task.id));
     const byTeammate = await asVerifier2.post(`${base}/reviews/${stale.review.id}/approve`, {});
     expect(byTeammate.status).toBe(200);
     expect(byTeammate.body.pullRequests[0]).toMatchObject({
+      status: "failed",
+      error: "logo.png is binary, which the review cannot show: only a person approves it",
+    });
+
+    // A binary file the run sent no bytes for stops no teammate's approval: the pull request refuses it.
+    const noBytes = await open("No bytes", [], ["blob.bin"]);
+    const asVerifier3 = board.api(await reviewerToken(noBytes.task.id));
+    const noBytesApproved = await asVerifier3.post(`${base}/reviews/${noBytes.review.id}/approve`, {});
+    expect(noBytesApproved.status).toBe(200);
+    expect(noBytesApproved.body.pullRequests[0]).toMatchObject({ status: "failed" });
+    // A person who vetoes before the pull request is opened stops it: it opens only for an approved review.
+    const vetoed = await open("Vetoed", [{ path: "yarn.lock", bytes: lock }]);
+    const hosts: GitHosts = {
+      github: { fetch: github.fetch, token: "ghs_test_token", apiBase: "https://api.github.test" },
+      gitlab: null,
+    };
+    const person = { kind: "user" as const, id: owner.userId };
+    const proposed = await approveReview(board.db, companyId, person, "owner", vetoed.review.id, {}, hosts);
+    await vetoReview(board.db, companyId, person, vetoed.review.id, { note: "Not yet." }, hosts);
+    github.requests.length = 0;
+    expect(await executePullRequest(board.db, hosts, companyId, proposed.pullRequestId!)).toMatchObject({
+      status: "failed",
+      error: "the review is no longer approved: a person vetoed it before the pull request was opened",
+    });
+    expect(github.requests).toEqual([]);
+    // Who approved is the one the pull request was proposed by, never who decided the review since: a teammate's,
+    // vetoed and approved again by a person, still carries no binary file.
+    const again = await open("Approved again", [{ path: "logo.png", bytes: png }]);
+    await board.db.query(
+      `UPDATE review_checks SET detail = jsonb_set(detail, '{binaries}', '[]') WHERE review_id = $1 AND kind = 'secrets'`,
+      [again.review.id],
+    );
+    const teammate = { kind: "teammate" as const, id: verifier.id };
+    const byVerifier = await approveReview(
+      board.db,
+      companyId,
+      teammate,
+      "teammate",
+      again.review.id,
+      {},
+      hosts,
+    );
+    await vetoReview(board.db, companyId, person, again.review.id, { note: "Mine to decide." }, hosts);
+    await approveReview(board.db, companyId, person, "owner", again.review.id, {}, hosts);
+    expect(await executePullRequest(board.db, hosts, companyId, byVerifier.pullRequestId!)).toMatchObject({
       status: "failed",
       error: "logo.png is binary, which the review cannot show: only a person approves it",
     });
@@ -1226,8 +1275,8 @@ describe("reviews", () => {
       summary: "Done.",
     });
     const chartReview = (await api.get(`${base}/tasks/${chartTask.id}/review`)).body;
-    const asVerifier3 = board.api(await reviewerToken(chartTask.id));
-    const chartApproved = await asVerifier3.post(`${base}/reviews/${chartReview.id}/approve`, {});
+    const asVerifier4 = board.api(await reviewerToken(chartTask.id));
+    const chartApproved = await asVerifier4.post(`${base}/reviews/${chartReview.id}/approve`, {});
     expect(chartApproved.status).toBe(200);
     expect(chartApproved.body).toMatchObject({ status: "approved", taskStatus: "done", pullRequests: [] });
   });

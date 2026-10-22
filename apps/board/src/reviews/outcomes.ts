@@ -97,17 +97,18 @@ async function approvedFiles(
 
 /**
  * A binary file in the diff travels as the bytes the run reported under that path, base64 by path: only as the
- * bytes its review's secrets check scanned, by their sha256, and only where a person approved, as the review
- * shows none of them. One the run sent no bytes for is left out, and the provider refuses the change naming it.
+ * bytes its review's secrets check scanned, by their sha256, and only where a person approved (as the payload
+ * says), as the review shows none of them. One the run sent no bytes for is left out, and the provider refuses the change naming it.
  * A reason where they are refused.
  */
 async function approvedBinaries(
   db: Db,
   store: ObjectStore | null,
   review: ReviewRow,
-  round: number,
+  payload: { round: number; approvedBy?: ActorRef },
   files: DiffFile[],
 ): Promise<Record<string, string> | string> {
+  const round = payload.round;
   const binaries: Record<string, string> = {};
   const wanted = files.filter((f) => f.binary && f.status !== "deleted");
   if (!wanted.length) return binaries;
@@ -118,13 +119,14 @@ async function approvedBinaries(
     )
   ).rows[0]?.detail ?? {}) as Partial<BinaryDetail>;
   for (const f of wanted) {
+    // Who approved, as the payload bound by sha256 says: not the review as it stands now.
+    if (payload.approvedBy?.kind !== "user")
+      return `${f.path} is binary, which the review cannot show: only a person approves it`;
     const bound = scanned.binaries?.find((b) => b.path === f.path);
     if (!bound) {
       if (scanned.unshown?.includes(f.path)) continue;
       return `the review did not scan the bytes of ${f.path} (an older board opened it): veto the approval and request changes, for a round this board reads`;
     }
-    if (review.decided_by_kind !== "user")
-      return `${f.path} is binary, which the review cannot show: only a person approves it`;
     const art = (
       await db.query<{ content: string | null; object_key: string | null; encoding: string | null }>(
         "SELECT content, object_key, encoding FROM artifacts WHERE run_id = $1 AND path = $2",
@@ -175,6 +177,8 @@ export async function executePullRequest(
     commitMessage: string;
     reviewId: string;
     round: number;
+    /** Who approved; rows from before carry none. */
+    approvedBy?: ActorRef;
   };
   const actor: ActorRef = { kind: "user", id: "00000000-0000-4000-8000-000000000000" };
   const review = (await db.query<ReviewRow>("SELECT * FROM reviews WHERE id = $1", [row.review_id])).rows[0];
@@ -188,6 +192,8 @@ export async function executePullRequest(
     error = "the pull request payload no longer matches the sha256 it was approved with";
   } else if (!review) {
     error = "the review this pull request was approved in is gone";
+  } else if (review.status !== "approved") {
+    error = "the review is no longer approved: a person vetoed it before the pull request was opened";
   } else {
     // Whatever fails from here, the store included, fails the pull request and says why.
     try {
@@ -195,7 +201,7 @@ export async function executePullRequest(
       if (typeof files === "string") {
         error = files;
       } else {
-        const binaries = await approvedBinaries(db, store, review, payload.round, files);
+        const binaries = await approvedBinaries(db, store, review, payload, files);
         if (typeof binaries === "string") throw new Error(binaries);
         outcome = await openChange(
           hosts,

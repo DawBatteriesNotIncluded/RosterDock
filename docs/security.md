@@ -179,12 +179,13 @@ their own, each with its own database and workers.
   nothing of it, and only what the board stores (artifacts, checkpoints, usage) outlives the run. The
   pod's home and temp directories last as long as the pod, so runs the pod takes in turn share them.
 - git in the worker gets PATH, the temp directory and the locale (its messages in English), none of the
-  worker's credentials, and reads no system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`
-  empty), so a `~/.gitconfig` an earlier run left behind changes nothing. It runs no hook and no fsmonitor,
-  and the diff runs no textconv. Before the worker reads a run's changes back, it puts the clone's
-  `.git/config` back as the clone wrote it, so a filter the run added never runs, and takes out any
-  `.git/info/attributes` the run wrote, so a file it marked `-diff` there shows as text; a run that replaced
-  `.git` gets no review of its changes.
+  worker's credentials, and reads no system or global config or attributes (`GIT_CONFIG_NOSYSTEM`,
+  `GIT_ATTR_NOSYSTEM`, `GIT_CONFIG_GLOBAL` empty), so a `~/.gitconfig` an earlier run left behind changes
+  nothing. It runs no hook and no fsmonitor, and the diff runs no textconv. Before the worker reads a run's
+  changes back, it puts the clone's `.git/config` back as the clone wrote it, so a filter the run added never
+  runs, and takes out `.git/info`, so neither an attribute the run gave the clone alone nor an exclude that
+  hides a file (a `.gitattributes` among them) shapes the diff; a run that replaced `.git` gets no review of
+  its changes. What the repository's own `.gitattributes` says still applies, and it is part of the change.
 - The git token (`worker.gitSecret`) goes into a clone's URL only over https and only to the hosts it is for
   (`worker.gitSecret.hosts`, `ROSTERDOCK_GIT_TOKEN_HOSTS`; github.com by default), and the clone's remote is
   set back without it. A clone that fails, or that Stop, the time limit or a shutdown ends part-way, is
@@ -263,11 +264,15 @@ their own, each with its own database and workers.
 - A file the diff calls binary has no lines to show, whatever made git call it so (an attribute, a NUL byte,
   real binary data), and the review shows none of its bytes. The secrets check scans the bytes the run sent for
   it all the same, as text and again without NUL bytes (UTF-16), by the same rules, and records their sha256;
-  a pull request writes those bytes and no others. A binary file goes into a pull request only where a person
-  approved: a teammate's approval that would open one with a binary file in it is refused, a person's records
-  the files, and the pull request refuses a binary file a teammate approved all the same. Where approving
-  opens no pull request (research, a project without a repository), a teammate approves as before. A review an
-  older board opened recorded no bytes, so its pull request refuses its binary files.
+  a pull request writes those bytes and no others. The scan reads text only: a compressed or encoded file's
+  content is not read, so for binary files the person who approves is the control. A binary file goes into a
+  pull request only where a person approved: a teammate's approval that would open one with a binary file in
+  it is refused, a person's records the files, and the pull request, which carries who approved it under its
+  sha256, refuses a binary file a teammate approved all the same. A repository whose `.gitattributes` marks
+  files `-diff` or `binary` (a lock file) therefore needs a person for each change to them. Where approving
+  opens no pull request (research, a project without a repository), a teammate approves as before. A pull
+  request opens only for a review still approved, so a veto before it opens stops it. A review an older board
+  opened recorded no bytes, so its pull request refuses its binary files.
 - A run delivers files, never links. The worker reads a declared output, a changed file, the handover and
   `blocked.md` only as a regular file inside the run's directory, reached without a symbolic link. A link
   (`report.md -> /proc/self/environ`, a linked directory on the way) or a path out of the directory is never
