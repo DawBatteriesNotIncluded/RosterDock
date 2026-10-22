@@ -118,18 +118,28 @@ async function linksLeft(ws: Workspace): Promise<string[] | null> {
   return links;
 }
 
+/** A file's section of a diff that changes a link in place: its `index` line ends in the link's mode. */
+const LINK_CHANGED = /^index [0-9a-f]+\.\.[0-9a-f]+ 120000$/m;
+
 /**
- * What the diff makes a symbolic link (mode 120000), as git apply reads it. Where the clone has no symlink
- * support (Windows, core.symlinks false) git writes such a link as a plain file holding its target, which
- * linksLeft never sees. Null when git cannot say.
+ * What the diff makes a symbolic link (mode 120000), as git apply reads it, and the links it changes in
+ * place: a new target is recorded as `index a..b 120000`, which git apply --summary does not name. Where the
+ * clone has no symlink support (Windows, core.symlinks false) git writes such a link as a plain file holding
+ * its target, which linksLeft never sees. Null when git cannot say.
  */
-async function linksDeclared(ws: Workspace, patch: string): Promise<string[] | null> {
+async function linksDeclared(ws: Workspace, patch: string, diff: string): Promise<string[] | null> {
   const summary = await git(["apply", "--summary", patch], ws.dir);
   if (summary.code !== 0) return null;
-  return summary.stdout.split("\n").flatMap((line) => {
-    const link = /^ (?:create mode 120000|mode change \d+ => 120000) (.+)$/.exec(line);
-    return link ? [link[1]!] : [];
-  });
+  const changed = diff
+    .split(/^(?=diff --git )/m)
+    .flatMap((section) => (LINK_CHANGED.test(section) ? parseUnifiedDiff(section).map((f) => f.path) : []));
+  return [
+    ...summary.stdout.split("\n").flatMap((line) => {
+      const link = /^ (?:create mode 120000|mode change \d+ => 120000) (.+)$/.exec(line);
+      return link ? [link[1]!] : [];
+    }),
+    ...changed,
+  ];
 }
 
 /** Back to the clean clone: tracked files as committed, the rest removed (git removes a link, never its target). */
@@ -157,7 +167,7 @@ export async function applyPreviousRound(
   await writeFile(patch, rework.diff, "utf8");
   const res = await git(["apply", "--whitespace=nowarn", patch], ws.dir);
   const [left, declared] =
-    res.code === 0 ? await Promise.all([linksLeft(ws), linksDeclared(ws, patch)]) : [null, null];
+    res.code === 0 ? await Promise.all([linksLeft(ws), linksDeclared(ws, patch, rework.diff)]) : [null, null];
   await rm(patch, { force: true });
   if (res.code === 0) {
     const links = left && declared && [...new Set([...left, ...declared])].sort();

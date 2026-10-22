@@ -8,7 +8,7 @@
 // credentials.
 
 import { spawn } from "node:child_process";
-import { constants, type Stats } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +18,13 @@ import {
   renderNewFileDiff,
   type RunArtifactInput,
 } from "@rosterdock/shared";
+import { killTree } from "./kill.js";
 import { clip } from "./text.js";
+
+// Windows looks for a program in the directory it starts in before PATH, and the worker starts git and the
+// engine in a run's directory: a git.exe or claude.exe the repository holds would run in their place. With
+// this set, Windows and the libuv under Node look on PATH only, for every program this process starts.
+if (process.platform === "win32") process.env.NoDefaultCurrentDirectoryInExePath = "1";
 
 export const HANDOVER_FILE = "handover-summary.md";
 export const BLOCKED_FILE = "blocked.md";
@@ -72,12 +78,16 @@ export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<str
  */
 const GIT_KEY_ALLOWED = /^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL|DATE)$/;
 
-/** Every command: no fsmonitor and no hooks, whatever the repository's config says. */
+/**
+ * Every command: no fsmonitor and no hooks, whatever the repository's config says. Hooks are looked for under
+ * the null device, where no file can be: on Windows too (`\\.\nul`), though git refuses it as a config file.
+ */
 const GIT_SAFE_ARGS = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${os.devNull}`];
 
 /**
  * Run git with gitEnvironment; `extraEnv` is for the worker's own tests (an author for a commit). An abort
- * kills git and the helpers it started (the network side of a clone is a process of its own).
+ * kills git and the helpers it started (the network side of a clone is a process of its own): its process
+ * group, or on Windows its process tree.
  */
 export function git(
   args: string[],
@@ -117,7 +127,8 @@ export function git(
     };
     const onAbort = () => {
       try {
-        if (group && child.pid) process.kill(-child.pid, "SIGKILL");
+        if (process.platform === "win32") killTree(child);
+        else if (group && child.pid) process.kill(-child.pid, "SIGKILL");
         else child.kill("SIGKILL");
       } catch {
         // gone
@@ -168,8 +179,8 @@ export async function prepareWorkspace(
   signal?: AbortSignal,
 ): Promise<Workspace> {
   const dir = path.join(workRoot, runId);
-  // Retried as cleanupWorkspace is: a git just stopped in it holds the directory a moment on Windows (EBUSY).
-  await rm(dir, { recursive: true, force: true, maxRetries: 3 });
+  // A git just stopped in it holds its files a moment on Windows (EBUSY).
+  await removeTree(dir);
   await mkdir(dir, { recursive: true });
   if (!project.repoUrl) return { dir, repo: false };
   const res = await git(
@@ -223,7 +234,29 @@ async function restoreGitDir(ws: Workspace): Promise<void> {
 }
 
 export async function cleanupWorkspace(ws: Workspace): Promise<void> {
-  await rm(ws.dir, { recursive: true, force: true, maxRetries: 3 });
+  await removeTree(ws.dir);
+}
+
+/** What removing a file says while a process still holds it (Windows) or writes beside it. */
+const BUSY = new Set(["EBUSY", "EPERM", "ENOTEMPTY", "EMFILE", "ENFILE"]);
+
+/**
+ * Remove a directory and everything in it, trying again while something in it is busy, for `withinMs` at
+ * most in all; then throw what the last try threw. Windows removes no file a process still holds, such as a
+ * program running from it. Node's own maxRetries retries at every level of the tree, so one file that stays
+ * held kept a removal going for minutes. `remove` is for the worker's own tests.
+ */
+export async function removeTree(dir: string, withinMs = 2000, remove: typeof rm = rm): Promise<void> {
+  const until = Date.now() + withinMs;
+  for (let wait = 50; ; wait = Math.min(wait * 2, 500)) {
+    try {
+      await remove(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      if (!BUSY.has((err as NodeJS.ErrnoException).code ?? "") || Date.now() + wait > until) throw err;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
 }
 
 export interface Harvest {
@@ -261,11 +294,44 @@ export function fitDiff(diffText: string, maxBytes: number): { text: string; omi
 }
 
 /**
+ * How a checked file is opened: no link at the last step even if one appeared since the check (O_NOFOLLOW),
+ * and a pipe swapped in never blocks the open (O_NONBLOCK). Windows has neither flag, so there the open
+ * follows a link that appeared since, and the identity check after it is what refuses the file.
+ */
+const READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+
+/**
+ * Whether the file opened is the file checked: the same device and file id. The id is compared whole (an
+ * NTFS id does not fit in a number, and rounded it matches its neighbours) and is never 0, which is no id
+ * and would match any file.
+ */
+export function sameFile(
+  opened: { dev: bigint; ino: bigint },
+  checked: { dev: bigint; ino: bigint },
+): boolean {
+  return opened.ino !== 0n && opened.ino === checked.ino && opened.dev === checked.dev;
+}
+
+/**
+ * A directory's device, by a handle on it. On Windows the harvest compares devices this way: with libuv 1.49
+ * and 1.50 (Node 22.12 to 22.16), where Windows has GetFileInformationByName (11 24H2, Server 2025), a stat
+ * by path reads the device from the wrong field (0 on NTFS), and a stat by handle is right on every version.
+ */
+async function deviceOf(dir: string): Promise<bigint> {
+  const handle = await open(dir, constants.O_RDONLY);
+  try {
+    return (await handle.stat({ bigint: true })).dev;
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * A file the run left, by its path in the workspace, read only as a regular file reached without a symbolic
- * link and inside the workspace. A run that leaves `report.md -> /proc/self/environ`, or a linked directory on
- * the way, would otherwise hand the worker's own environment (the database URL, its token, the model keys) to
- * the company as an artifact. Such a path goes into `refused` and is never opened. Null: not there, not a
- * regular file, or over the cap.
+ * link (a junction, on Windows) and inside the workspace. A run that leaves `report.md -> /proc/self/environ`,
+ * or a linked directory on the way, would otherwise hand the worker's own environment (the database URL, its
+ * token, the model keys) to the company as an artifact. Such a path goes into `refused` and is never opened.
+ * Null: not there, not a regular file, or over the cap.
  */
 async function readInWorkspace(
   root: string,
@@ -282,10 +348,10 @@ async function readInWorkspace(
   try {
     // lstat every step, the file included: a link anywhere on the way is refused.
     let at = root;
-    let last: Stats | null = null;
+    let last: BigIntStats | null = null;
     for (const part of inner.split(path.sep)) {
       at = path.join(at, part);
-      last = await lstat(at);
+      last = await lstat(at, { bigint: true });
       if (last.isSymbolicLink()) {
         refused.push(rel);
         return null;
@@ -298,15 +364,13 @@ async function readInWorkspace(
       refused.push(rel);
       return null;
     }
-    // No link at the last step even if one appeared since, a pipe swapped in never blocks the read, and
-    // the file opened must be the one checked above.
-    const handle = await open(at, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const handle = await open(at, READ_FLAGS);
     try {
-      const s = await handle.stat();
-      // On Windows a stat by path reports device 0 and one by handle the volume's serial, so only the file
-      // id compares there; realpath above has already kept the file on the workspace's volume.
-      const sameDev = process.platform === "win32" || s.dev === last.dev;
-      if (!sameDev || s.ino !== last.ino) {
+      // The file opened must be the one checked above. On Windows its device is the workspace's, both read by
+      // a handle (deviceOf); elsewhere the one lstat found.
+      const opened = await handle.stat({ bigint: true });
+      const dev = process.platform === "win32" ? await deviceOf(root) : last.dev;
+      if (!sameFile(opened, { dev, ino: last.ino })) {
         refused.push(rel);
         return null;
       }
