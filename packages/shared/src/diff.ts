@@ -42,7 +42,9 @@ export interface DiffFile {
   hunks: DiffHunk[];
 }
 
-const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
+// The section heading after the range is the nearest line git found above the hunk, whatever it holds (a U+2028,
+// a carriage return): `s`, so `.` takes those too.
+const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/s;
 const NO_NEWLINE = "\\ No newline at end of file";
 
 const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
@@ -56,10 +58,12 @@ function readQuoted(s: string, from: number): { name: string; end: number } | nu
   const bytes: number[] = [];
   const utf8 = new TextEncoder();
   for (let i = from + 1; i < s.length; i++) {
-    const c = s[i]!;
+    // By code point: an emoji is two UTF-16 units, each of which alone would encode as U+FFFD.
+    const c = String.fromCodePoint(s.codePointAt(i)!);
     if (c === '"') return { name: new TextDecoder().decode(new Uint8Array(bytes)), end: i + 1 };
     if (c !== "\\") {
       bytes.push(...utf8.encode(c));
+      i += c.length - 1;
       continue;
     }
     const next = s[++i];
@@ -127,7 +131,42 @@ export function quoteDiffPath(prefixed: string): string {
   return `"${out}"`;
 }
 
-/** Parse a unified diff (as `git diff` prints it) into files, hunks and numbered lines. */
+/** A diff that is not as git writes one: a line it would not print, a hunk longer than its header, a path outside the tree. */
+export class DiffError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DiffError";
+  }
+}
+
+/** The lines git prints between a file's `diff --git` and its first hunk, besides the ones read for what they say. */
+const METADATA = [
+  "index ",
+  "old mode ",
+  "new mode ",
+  "similarity index ",
+  "dissimilarity index ",
+  "rename from ",
+  "rename to ",
+  "copy from ",
+  "copy to ",
+];
+
+/** A path in the tree as git names one: not empty, not absolute, no `.`, `..` or `.git` part. */
+function treePath(p: string): boolean {
+  return (
+    p !== "" &&
+    !p.startsWith("/") &&
+    p.split("/").every((part) => !["", ".", "..", ".git"].includes(part.toLowerCase()))
+  );
+}
+
+/**
+ * Parse a unified diff (as `git diff` prints it) into files, hunks and numbered lines. Strict where it matters:
+ * a line git would not print in a file's stanza, a hunk longer than its header says, or a path that is not in
+ * the tree throws a DiffError, so nothing reads past what it could not read. A hunk cut short is kept as it is;
+ * applyFilePatch refuses it.
+ */
 export function parseUnifiedDiff(text: string): DiffFile[] {
   const files: DiffFile[] = [];
   const lines = text.replace(/\r\n/g, "\n").split("\n");
@@ -141,13 +180,19 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
   // whatever it starts with (a deleted "-- comment" reads "--- comment").
   let oldLeft = 0;
   let newLeft = 0;
+  // Past "GIT binary patch", the file's encoded bytes, until the next file.
+  let binaryPayload = false;
 
+  const named = () => newPath ?? oldPath ?? file?.path ?? "";
   const closeFile = () => {
     oldLeft = 0;
     newLeft = 0;
+    binaryPayload = false;
     if (!file) return;
     if (file.status !== "deleted" && newPath && newPath !== "/dev/null") file.path = newPath;
     else if (file.status === "deleted" && oldPath && oldPath !== "/dev/null") file.path = oldPath;
+    if (!treePath(file.path))
+      throw new DiffError(`a path that is not in the repository: ${JSON.stringify(file.path)}`);
     files.push(file);
     file = null;
     hunk = null;
@@ -155,7 +200,8 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    if (file && hunk && (oldLeft > 0 || newLeft > 0) && !(line === "" && i === lines.length - 1)) {
+    const end = line === "" && i === lines.length - 1;
+    if (file && hunk && (oldLeft > 0 || newLeft > 0) && !end) {
       const mark = line[0];
       if (mark === "+" && newLeft > 0) {
         hunk.lines.push({ kind: "add", old: null, new: newNo++, text: line.slice(1) });
@@ -192,32 +238,18 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
       newPath = paths?.b ?? null;
       continue;
     }
-    if (!file) continue;
-    if (line.startsWith("new file mode")) {
-      file.status = "added";
-      continue;
-    }
-    if (line.startsWith("deleted file mode")) {
-      file.status = "deleted";
-      continue;
-    }
-    if (line.startsWith("Binary files ") || line.startsWith("GIT binary patch")) {
-      file.binary = true;
-      continue;
-    }
-    if (line.startsWith("--- ")) {
-      oldPath = cleanPath(line.slice(4));
-      continue;
-    }
-    if (line.startsWith("+++ ")) {
-      newPath = cleanPath(line.slice(4));
+    // Before the first file (a commit message, a cover note), and a binary file's encoded bytes.
+    if (!file || binaryPayload) continue;
+    if (line === NO_NEWLINE && hunk) {
+      const last = hunk.lines[hunk.lines.length - 1];
+      if (last) last.noNewline = true;
       continue;
     }
     const m = HUNK_RE.exec(line);
     if (m) {
       hunk = {
         index: file.hunks.length,
-        header: line.replace(/ @@.*$/, " @@"),
+        header: line.replace(/ @@.*$/s, " @@"),
         oldStart: Number(m[1]),
         oldLines: m[2] === undefined ? 1 : Number(m[2]),
         newStart: Number(m[3]),
@@ -232,26 +264,21 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
       newLeft = hunk.newLines;
       continue;
     }
-    if (!hunk) continue;
-    if (line === NO_NEWLINE) {
-      const last = hunk.lines[hunk.lines.length - 1];
-      if (last) last.noNewline = true;
-      continue;
-    }
-    const mark = line[0];
-    const body = line.slice(1);
-    if (mark === "+") {
-      hunk.lines.push({ kind: "add", old: null, new: newNo++, text: body });
-      file.additions += 1;
-    } else if (mark === "-") {
-      hunk.lines.push({ kind: "del", old: oldNo++, new: null, text: body });
-      file.deletions += 1;
-    } else if (mark === " " || line === "") {
-      // An empty line inside a hunk is a context line whose text is empty.
-      if (line === "" && i === lines.length - 1) continue;
-      hunk.lines.push({ kind: "ctx", old: oldNo++, new: newNo++, text: body });
-    }
-    // Anything else (index lines, mode lines, similarity) is metadata.
+    // A blank line between files, or the text's own end.
+    if (line === "") continue;
+    if (line.startsWith("@@")) throw new DiffError(`${named()}: a hunk header git does not write`);
+    // Past a hunk's lines, only the next hunk or the next file.
+    if (hunk) throw new DiffError(`${named()}: hunk ${hunk.index + 1} is longer than its header says`);
+    if (line.startsWith("new file mode ")) file.status = "added";
+    else if (line.startsWith("deleted file mode ")) file.status = "deleted";
+    else if (line.startsWith("Binary files ")) file.binary = true;
+    else if (line === "GIT binary patch") {
+      file.binary = true;
+      binaryPayload = true;
+    } else if (line.startsWith("--- ")) oldPath = cleanPath(line.slice(4));
+    else if (line.startsWith("+++ ")) newPath = cleanPath(line.slice(4));
+    else if (!METADATA.some((prefix) => line.startsWith(prefix)))
+      throw new DiffError(`${named()}: a line git does not write in a diff`);
   }
   closeFile();
   return files;
@@ -302,15 +329,18 @@ function joinLines(lines: TextLine[]): string {
  */
 export function applyFilePatch(base: string | null, file: DiffFile): string | null {
   if (file.binary) throw new PatchError(`${file.path}: binary files cannot be patched from a text diff`);
-  if (file.status === "deleted") return null;
-  const src = splitLines(base ?? "");
-  const out: TextLine[] = [];
-  let cursor = 0; // 0-based index into src
+  // Every hunk whole, a deletion's too: one cut short is no record of what it removes.
   for (const hunk of file.hunks) {
     const oldCount = hunk.lines.filter((l) => l.kind !== "add").length;
     const newCount = hunk.lines.filter((l) => l.kind !== "del").length;
     if (oldCount !== hunk.oldLines || newCount !== hunk.newLines)
       throw new PatchError(`${file.path}: hunk ${hunk.index + 1} is incomplete; the diff was cut inside it`);
+  }
+  if (file.status === "deleted") return null;
+  const src = splitLines(base ?? "");
+  const out: TextLine[] = [];
+  let cursor = 0; // 0-based index into src
+  for (const hunk of file.hunks) {
     const start = Math.max(0, hunk.oldStart - 1);
     // Hunks with oldLines = 0 sit AFTER line oldStart (git convention).
     const target = hunk.oldLines === 0 ? hunk.oldStart : start;

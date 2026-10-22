@@ -1,0 +1,11 @@
+diff --git a/settings.sql b/settings.sql
+index b3970e8..f9b06e1 100644
+--- a/settings.sql
++++ b/settings.sql
+@@ -3,5 +3,5 @@ section heading
+ one
+ two
+ three
+--- x
++api_key = "not-a-real-value-123"
+ five

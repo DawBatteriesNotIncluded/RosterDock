@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   addedText,
   applyFilePatch,
+  DiffError,
   diffStats,
   parseUnifiedDiff,
   PatchError,
@@ -166,5 +167,88 @@ describe("lines that read like headers", () => {
     );
     expect(applyFilePatch("local x = 1\nreturn x\n", files[1]!)).toBe("local x = 1\n++ x\nreturn x\n");
     expect(applyFilePatch(null, files[2]!)).toBe("++ b/../../x\n");
+  });
+});
+
+describe("a diff git did not write", () => {
+  const stanza = (body: string[]) =>
+    ["diff --git a/x.md b/x.md", "--- a/x.md", "+++ b/x.md", ...body, ""].join("\n");
+
+  it("reads a hunk whose heading holds a line separator, its '-- x' deletion and the line it adds", () => {
+    // Recorded from git (fixtures/line-separator-heading.diff): the heading git took for the hunk is the line
+    // above it, "section\u2028heading"; read with `.` alone the @@ line went unread, and the hunk with it.
+    const [file] = parseUnifiedDiff(read("line-separator-heading.diff"));
+    expect(file).toMatchObject({ path: "settings.sql", status: "modified", additions: 1, deletions: 1 });
+    expect(file!.hunks[0]!.section).toBe("section\u2028heading");
+    expect(file!.hunks[0]!.lines.find((l) => l.kind === "del")?.text).toBe("-- x");
+    expect(addedText([file!])).toContain('api_key = "not-a-real-value-123"');
+  });
+
+  it("reads a quoted name with an emoji in it as it is", () => {
+    for (const name of ['say "😀".md', "tab\t😀🚀.md"])
+      expect(parseUnifiedDiff(renderNewFileDiff(name, "x\n"))[0]?.path).toBe(name);
+  });
+
+  it("refuses what git would not print: a hunk header it cannot read, a hunk longer than its header, a stray line", () => {
+    expect(() => parseUnifiedDiff(stanza(["@@ -1 +1 @ broken", "-a", "+b"]))).toThrow(DiffError);
+    // One line each way by the header, then a "--- " line that would rename the file.
+    expect(() => parseUnifiedDiff(stanza(["@@ -1 +1 @@", "-a", "+b", "--- a/../../etc/passwd"]))).toThrow(
+      "x.md: hunk 1 is longer than its header says",
+    );
+    expect(() => parseUnifiedDiff(stanza(["what is this", "@@ -1 +1 @@", "-a", "+b"]))).toThrow(
+      "x.md: a line git does not write in a diff",
+    );
+    // A binary patch's encoded bytes are its own.
+    const binary = [
+      "diff --git a/x.png b/x.png",
+      "new file mode 100644",
+      "index 0000000..e69de29",
+      "GIT binary patch",
+      "literal 3",
+      "KcmZQz00932",
+      "",
+      "literal 0",
+      "HcmV?d00001",
+      "",
+    ];
+    expect(parseUnifiedDiff(binary.join("\n"))).toMatchObject([{ path: "x.png", binary: true }]);
+  });
+
+  it("refuses a path that is not in the repository", () => {
+    for (const bad of [
+      "../../outside.md",
+      "/etc/passwd",
+      ".git/config",
+      "docs/../../x",
+      "a//b",
+      "./x",
+      ".GIT/hooks/x",
+    ]) {
+      const text = [
+        `diff --git a/${bad} b/${bad}`,
+        "new file mode 100644",
+        "--- /dev/null",
+        `+++ b/${bad}`,
+        "@@ -0,0 +1 @@",
+        "+x",
+        "",
+      ].join("\n");
+      expect(() => parseUnifiedDiff(text), bad).toThrow(DiffError);
+    }
+  });
+
+  it("deletes no file whose hunks were cut short", () => {
+    const [file] = parseUnifiedDiff(
+      [
+        "diff --git a/x.md b/x.md",
+        "deleted file mode 100644",
+        "--- a/x.md",
+        "+++ /dev/null",
+        "@@ -1,3 +0,0 @@",
+        "-a",
+        "",
+      ].join("\n"),
+    );
+    expect(() => applyFilePatch("a\nb\nc\n", file!)).toThrow(PatchError);
   });
 });

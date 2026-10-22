@@ -23,6 +23,7 @@ import {
   cleanupWorkspace,
   fitDiff,
   git,
+  gitReason,
   GIT_NO_CONFIG,
   gitEnvironment,
   harvestWorkspace,
@@ -172,6 +173,26 @@ describe("workspace", () => {
     expect(fitDiff(diff, 1_000_000)).toEqual({ text: diff, omitted: [] });
   });
 
+  it("cuts a diff over the limit only between files, never at a line separator inside a line", () => {
+    // A line that holds U+2028 (or a CR) and then "diff --git": with `m`, `^` matched after it.
+    const forged = `x\u2028diff --git a/evil.md b/evil.md\n${"y".repeat(3000)}`;
+    const diff = [renderNewFileDiff("a.md", `${forged}\n`), renderNewFileDiff("c.md", "last\n")].join("");
+    const fitted = fitDiff(diff, 2000);
+    expect(fitted.omitted).toEqual(["a.md"]);
+    expect(parseUnifiedDiff(fitted.text).map((f) => f.path)).toEqual(["c.md"]);
+  });
+
+  it("says why git failed by its error before a warning beside it", () => {
+    const warned =
+      "warning: in the working copy of 'x', LF will be replaced by CRLF\nfatal: Unable to create '.git/index.lock'";
+    expect(gitReason(warned)).toBe("fatal: Unable to create '.git/index.lock'");
+    expect(gitReason("warning: could not open directory 'closed/': Permission denied")).toBe(
+      "warning: could not open directory 'closed/': Permission denied",
+    );
+    expect(gitReason("something odd\nlast words")).toBe("last words");
+    expect(gitReason("fatal: https://x-access-token:secret@github.com/o/r.git")).not.toContain("secret");
+  });
+
   it("leaves a changed file that does not fit out of a repository's diff instead of cutting it", async () => {
     const ws = await prepareWorkspace(
       path.join(root, "work"),
@@ -277,6 +298,8 @@ describe("workspace", () => {
       names: ["?? ok.md"],
       notUtf8: ["?? bad\\xff.md", "?? bad\\xfe.md"],
     });
+    // A backslash doubled: `\\x82` the characters is not `\x82` the byte.
+    expect(decodeNames(names("?? a\\x82", [0x82, 0]))).toEqual({ names: [], notUtf8: ["?? a\\\\x82\\x82"] });
   });
 
   it.runIf(process.platform === "linux")(
@@ -440,6 +463,29 @@ describe("workspace", () => {
     expect(h.artifacts.find((a) => a.kind === "diff")).toBeUndefined();
     await cleanupWorkspace(ws);
   });
+
+  it.runIf(process.platform === "linux")(
+    "says a run without a repository could not be read back where a file's name is not UTF-8",
+    async () => {
+      const ws = await prepareWorkspace(
+        path.join(root, "work"),
+        "run-no-repo-not-utf8",
+        { repoUrl: null, defaultBranch: "main" },
+        null,
+      );
+      await writeFile(
+        Buffer.concat([Buffer.from(`${ws.dir}/bad`), Buffer.from([0xff]), Buffer.from(".md")]),
+        "x\n",
+      );
+      await writeFile(path.join(ws.dir, "report.md"), "The report.\n", "utf8");
+      const h = await harvestWorkspace(ws, []);
+      expect(h.unreadable).toBe(
+        "the run's changes could not be read back for review (a file's name is not UTF-8: bad\\xff.md)",
+      );
+      expect(h.filesWritten).toEqual(["report.md"]);
+      await cleanupWorkspace(ws);
+    },
+  );
 
   // As root a folder's mode stops nobody, and Windows has none.
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(

@@ -249,7 +249,11 @@ their own, each with its own database and workers.
   server's word that a tool writes or destroys outweighs the catalog and the name. Anything else is a write.
 - A run's diff is scanned for secret-shaped values before review, anywhere in an added line (a key after
   `NAME=`, in a string, behind `Bearer`), and for values given to secret-named keys, quoted or as
-  `NAME=value`; a hit fails the check.
+  `NAME=value`; a hit fails the check. The board reads the diff strictly: a line git would not write in one, a
+  hunk longer than its header says, or a path that is not in the repository (absolute, with a `..` or a `.git`
+  part) opens the review with none of the diff and a failing secrets check, so nothing of it is shown, scanned
+  in part or merged. A pull request is built from the review's diff read again, its sha256 the one the review
+  was opened with.
 - A run delivers files, never links. The worker reads a declared output, a changed file, the handover and
   `blocked.md` only as a regular file inside the run's directory, reached without a symbolic link. A link
   (`report.md -> /proc/self/environ`, a linked directory on the way) or a path out of the directory is never

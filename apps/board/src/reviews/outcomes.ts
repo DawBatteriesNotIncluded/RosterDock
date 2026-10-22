@@ -3,10 +3,10 @@
 // section). Kept apart from the service so the routes and the board tools
 // share one path.
 
-import { payloadSha256, type ActorRef, type DiffFile } from "@rosterdock/shared";
+import { parseUnifiedDiff, payloadSha256, sha256Hex, type ActorRef, type DiffFile } from "@rosterdock/shared";
 import type { Db } from "../db/pool.js";
 import { openChange, type GitHosts } from "../git/hosts.js";
-import { artifactBytes } from "../storage/artifacts.js";
+import { artifactBytes, artifactText } from "../storage/artifacts.js";
 import type { ObjectStore } from "../storage/s3.js";
 import { HttpError } from "../http-error.js";
 import { mutate } from "../mutate.js";
@@ -19,6 +19,34 @@ export interface Restarted {
   runId: string | null;
   /** Why the author was not restarted; the review still waits with changes requested. */
   reason: string | null;
+}
+
+/**
+ * The files of the diff the review's current round was opened from, read again: its sha256 must be the one the
+ * review recorded. Null without a diff artifact (the stored rows, empty, stand); an error where it does not
+ * match or cannot be read.
+ */
+async function reviewDiff(
+  db: Db,
+  store: ObjectStore | null,
+  review: ReviewRow,
+): Promise<{ files: DiffFile[] } | { error: string } | null> {
+  if (!review.run_id) return null;
+  const art = (
+    await db.query<{ content: string | null; object_key: string | null }>(
+      "SELECT content, object_key FROM artifacts WHERE run_id = $1 AND kind = 'diff'",
+      [review.run_id],
+    )
+  ).rows[0];
+  const text = await artifactText(store, art ?? null);
+  if (text === null) return null;
+  if (sha256Hex(text) !== review.diff_sha256)
+    return { error: "the review's diff no longer matches the sha256 it was opened with" };
+  try {
+    return { files: parseUnifiedDiff(text) };
+  } catch (err) {
+    return { error: `the review's diff could not be read: ${(err as Error).message}` };
+  }
 }
 
 /**
@@ -66,22 +94,29 @@ export async function executePullRequest(
       : actor;
   let outcome: { number: number; url: string } | null = null;
   let error: string | null = null;
+  // The round's files as its diff reads now, where the review still holds that round: one opened before the
+  // parser read every diff right is merged as its diff says, not as the rows it stored then.
+  const reread = review?.round === payload.round ? await reviewDiff(db, store, review) : null;
   if (payloadSha256(row.payload) !== row.payload_sha256) {
     error = "the pull request payload no longer matches the sha256 it was approved with";
+  } else if (reread && "error" in reread) {
+    error = reread.error;
   } else {
-    const files = (
-      await db.query<ReviewFileRow>(
-        "SELECT * FROM review_files WHERE review_id = $1 AND round = $2 ORDER BY position",
-        [row.review_id, payload.round],
-      )
-    ).rows.map<DiffFile>((f) => ({
-      path: f.path,
-      status: f.status,
-      binary: f.is_binary,
-      additions: f.additions,
-      deletions: f.deletions,
-      hunks: f.hunks,
-    }));
+    const files =
+      reread?.files ??
+      (
+        await db.query<ReviewFileRow>(
+          "SELECT * FROM review_files WHERE review_id = $1 AND round = $2 ORDER BY position",
+          [row.review_id, payload.round],
+        )
+      ).rows.map<DiffFile>((f) => ({
+        path: f.path,
+        status: f.status,
+        binary: f.is_binary,
+        additions: f.additions,
+        deletions: f.deletions,
+        hunks: f.hunks,
+      }));
     // A binary file in the diff travels as the bytes the run reported under that path.
     const binaries: Record<string, string> = {};
     for (const f of files) {

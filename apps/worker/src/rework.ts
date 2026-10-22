@@ -192,6 +192,15 @@ async function caseFold(ws: Workspace): Promise<(p: string) => string> {
   return ignorecase.stdout.trim() === "true" ? (p) => p.toLowerCase() : (p) => p;
 }
 
+/** How many files the round's diff names; 0 where the parser cannot read it (git applied it all the same). */
+function countFiles(diff: string): number {
+  try {
+    return parseUnifiedDiff(diff).length;
+  } catch {
+    return 0;
+  }
+}
+
 /** Where a diff copies or renames files to (or from, where it names no destination). */
 function copiedOrRenamed(diff: string): string[] {
   const moved = [...diff.matchAll(/^(?:copy|rename) (from|to|old|new) (.+)$/gm)];
@@ -302,7 +311,7 @@ export async function applyPreviousRound(
     const named = new Map<string, string>();
     for (const p of [...(made ?? []), ...(left ?? []), ...(declared ?? [])]) named.set(fold(p), p);
     const links = left && declared && made && [...named.values()].sort();
-    if (links?.length === 0) return { round, applied: true, files: parseUnifiedDiff(rework.diff).length };
+    if (links?.length === 0) return { round, applied: true, files: countFiles(rework.diff) };
     await undoApply(ws, before);
     return {
       round,

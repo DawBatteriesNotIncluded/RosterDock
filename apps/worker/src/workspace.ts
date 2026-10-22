@@ -190,14 +190,33 @@ export function decodeNames(out: Buffer): { names: string[]; notUtf8: string[] }
     } catch {
       decoded.notUtf8.push(
         [...entry]
+          // A backslash doubled, so `\\x82` the four characters reads apart from `\x82` the byte.
           .map((b) =>
-            b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : `\\x${b.toString(16).padStart(2, "0")}`,
+            b === 0x5c
+              ? "\\\\"
+              : b >= 0x20 && b < 0x7f
+                ? String.fromCharCode(b)
+                : `\\x${b.toString(16).padStart(2, "0")}`,
           )
           .join(""),
       );
     }
   }
   return decoded;
+}
+
+/**
+ * Why git said it failed, in its line: its error before any warning beside it (a line-ending one), the warning
+ * where that is all it said, its last line otherwise. Credentials redacted.
+ */
+export function gitReason(stderr: string): string {
+  const lines = redactGit(stderr).trim().split("\n");
+  return (
+    lines.find((l) => /^(?:error|fatal):/.test(l)) ??
+    lines.find((l) => /^warning:/.test(l)) ??
+    lines.at(-1) ??
+    ""
+  );
 }
 
 /** The fleet's git token and the hosts it is for (ROSTERDOCK_GIT_TOKEN, ROSTERDOCK_GIT_TOKEN_HOSTS). */
@@ -362,17 +381,27 @@ export interface Harvest {
  * is left out and named, never cut inside a hunk, so the review never shows (and a merge never applies)
  * half a change.
  */
+/** A file's stanza by its path, or its first line where it cannot be read. */
+function fileName(stanza: string): string {
+  try {
+    return parseUnifiedDiff(stanza)[0]?.path || stanza.split("\n", 1)[0]!;
+  } catch {
+    return stanza.split("\n", 1)[0]!;
+  }
+}
+
 export function fitDiff(diffText: string, maxBytes: number): { text: string; omitted: string[] } {
   if (Buffer.byteLength(diffText, "utf8") <= maxBytes) return { text: diffText, omitted: [] };
   const kept: string[] = [];
   const omitted: string[] = [];
   let used = 0;
-  for (const file of diffText.split(/^(?=diff --git )/m).filter(Boolean)) {
+  // Split before a line that starts "diff --git", after a \n only: not after a U+2028 or a CR inside a line.
+  for (const file of diffText.split(/(?<=\n)(?=diff --git )/).filter(Boolean)) {
     const bytes = Buffer.byteLength(file, "utf8");
     if (used + bytes <= maxBytes) {
       kept.push(file);
       used += bytes;
-    } else omitted.push(parseUnifiedDiff(file)[0]?.path || file.split("\n", 1)[0]!);
+    } else omitted.push(fileName(file));
   }
   return { text: kept.join(""), omitted };
 }
@@ -587,10 +616,15 @@ export async function harvestWorkspace(
       .filter((p) => p !== HANDOVER_FILE && p !== BLOCKED_FILE)
       .slice(0, MAX_UNDECLARED_FILES);
   } else {
-    const entries = await readdir(ws.dir, { withFileTypes: true });
-    candidates = entries
-      .filter((e) => e.isFile() && e.name !== HANDOVER_FILE && e.name !== BLOCKED_FILE)
-      .map((e) => e.name)
+    // By their bytes, as in a repository: a name that is not UTF-8 is left out, and fails a run that would
+    // complete, where read loosely it would collide with another.
+    const entries = await readdir(ws.dir, { withFileTypes: true, encoding: "buffer" });
+    const files = entries.filter((e) => e.isFile());
+    const { names, notUtf8 } = decodeNames(Buffer.concat(files.flatMap((e) => [e.name, Buffer.from([0])])));
+    if (notUtf8.length)
+      out.unreadable = `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
+    candidates = names
+      .filter((n) => n !== HANDOVER_FILE && n !== BLOCKED_FILE)
       .slice(0, MAX_UNDECLARED_FILES);
   }
   for (const rel of candidates) {
@@ -655,13 +689,7 @@ export async function harvestWorkspace(
       // diff, and the run that would complete fails with this rather than send half of it for review.
       if (diff.code === 0) diffText = diff.stdout;
       else {
-        const lines = redactGit(diff.stderr).trim().split("\n");
-        // git's error before any warning beside it (a line-ending one), the warning where it is all git said.
-        let why =
-          lines.find((l) => /^(?:error|fatal):/.test(l)) ??
-          lines.find((l) => /^warning:/.test(l)) ??
-          lines.at(-1) ??
-          "";
+        let why = gitReason(diff.stderr);
         // The worker's own folders are none of the run's business: the clone's path as git writes it, `.`.
         for (const at of await Promise.all([ws.dir, realpath(ws.dir).catch(() => ws.dir)]))
           for (const form of new Set([at, at.replace(/\\/g, "/")])) why = why.split(form).join(".");

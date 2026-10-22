@@ -771,6 +771,53 @@ describe("reviews", () => {
     expect(github.requests).toEqual([]);
   });
 
+  it("opens a pull request from the review's diff read again, never from rows an older parser stored, and not from a changed one", async () => {
+    const { api, base } = await seedCompany(board, "rv-reread@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const project = (
+      await api.post(`${base}/projects`, {
+        name: "gtm-automations",
+        client: "Globex",
+        repoUrl: "https://github.com/acme/gtm-automations.git",
+        defaultBranch: "main",
+      })
+    ).body;
+    const textOnly = DIFF.replace(/diff --git a\/logo\.bin[\s\S]*?(?=diff --git)/, "");
+    const open = async (title: string) => {
+      const task = (
+        await api.post(`${base}/tasks`, {
+          projectId: project.id,
+          title,
+          assignee: { kind: "teammate", id: cody.id },
+        })
+      ).body;
+      await completeTaskRun(api, base, task.id, textOnly, { baseSha: BASE_SHA });
+      return (await api.get(`${base}/tasks/${task.id}/review`)).body;
+    };
+    // Rows as a review opened before the upgrade may hold them: another file's name.
+    const old = await open("Opened before the upgrade");
+    await board.db.query("UPDATE review_files SET path = 'elsewhere/' || path WHERE review_id = $1", [
+      old.id,
+    ]);
+    github.requests.length = 0;
+    const approved = await api.post(`${base}/reviews/${old.id}/approve`, { summary: "Ship it." });
+    expect(approved.body.pullRequests[0]).toMatchObject({ status: "opened", error: null });
+    const sent = JSON.stringify(github.requests);
+    expect(sent).toContain("workflows/vms-digest.json");
+    expect(sent).not.toContain("elsewhere/");
+    // A diff that no longer hashes to what the review was opened with opens nothing.
+    const changed = await open("Its diff changed since");
+    await board.db.query(
+      "UPDATE artifacts SET content = content || ' ' WHERE kind = 'diff' AND run_id = (SELECT run_id FROM reviews WHERE id = $1)",
+      [changed.id],
+    );
+    const refused = await api.post(`${base}/reviews/${changed.id}/approve`, { summary: "Ship it." });
+    expect(refused.body.pullRequests[0]).toMatchObject({
+      status: "failed",
+      error: "the review's diff no longer matches the sha256 it was opened with",
+    });
+  });
+
   it("sends the author back on a repository with the round's diff to start from, and says on the task when it did not carry over", async () => {
     const { api, base } = await seedCompany(board, "rv-rework@example.com");
     const wren = await addTeammate(api, base, "Wren");
@@ -1155,6 +1202,33 @@ describe("reviews", () => {
     expect(secrets.ok).toBe(false);
     expect(secrets.detail.lines).toEqual([{ path: "workflows/vms-digest.json", line: 6 }]);
     expect(JSON.stringify(secrets)).not.toContain("hunter2");
+
+    // A diff git would not write: a hunk longer than its header, whose next line would rename the file.
+    const unread = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "z",
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    const forged = [
+      "diff --git a/notes.md b/notes.md",
+      "--- a/notes.md",
+      "+++ b/notes.md",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      "+++ b/../../outside.md",
+      '+"smtp_password": "hunter2hunter2",',
+      "",
+    ].join("\n");
+    await completeTaskRun(api, base, unread.id, forged);
+    const r3 = (await api.get(`${base}/tasks/${unread.id}/review`)).body;
+    expect(r3.files).toEqual([]);
+    expect(r3.checks.find((c: any) => c.kind === "secrets")).toMatchObject({
+      ok: false,
+      detail: { unread: "notes.md: hunk 1 is longer than its header says" },
+    });
   });
 
   it("a failed credential scan or failing tests stop a teammate's approval; a person approves over them, on the record", async () => {
