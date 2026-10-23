@@ -39,8 +39,8 @@ export default tseslint.config(
         "error",
         {
           selector:
-            "ImportExpression[source.value=/^@rosterdock\\/shared(\\/(?!(events|text|web|address)$).*)?$/]",
-          message: "Only events, text, web and address are kept browser-safe, loaded late or not.",
+            "ImportExpression[source.value=/^@rosterdock\\/shared(\\/(?!(events|text|web|address|providers)$).*)?$/]",
+          message: "Only events, text, web, address and providers are kept browser-safe, loaded late or not.",
         },
         // The same for a re-export: `export { type X } from "m"` keeps loading "m".
         {
@@ -56,7 +56,7 @@ export default tseslint.config(
               name: "@rosterdock/shared",
               allowTypeImports: true,
               message:
-                "Import types only; take values from @rosterdock/shared/events, @rosterdock/shared/text, @rosterdock/shared/web or @rosterdock/shared/address.",
+                "Import types only; take values from @rosterdock/shared/events, @rosterdock/shared/text, @rosterdock/shared/web, @rosterdock/shared/address or @rosterdock/shared/providers.",
             },
           ],
           patterns: [
@@ -67,10 +67,11 @@ export default tseslint.config(
                 "!@rosterdock/shared/text",
                 "!@rosterdock/shared/web",
                 "!@rosterdock/shared/address",
+                "!@rosterdock/shared/providers",
               ],
               allowTypeImports: true,
               message:
-                "Only events, text, web and address are kept browser-safe; take types only from the rest.",
+                "Only events, text, web, address and providers are kept browser-safe; take types only from the rest.",
             },
             {
               group: ["**/packages/shared/**", "**/node_modules/@rosterdock/**"],
@@ -89,6 +90,8 @@ export default tseslint.config(
       "packages/shared/src/text.ts",
       "packages/shared/src/web.ts",
       "packages/shared/src/address.ts",
+      // @rosterdock/shared/providers
+      "packages/shared/src/provider-kinds.ts",
     ],
     rules: {
       "@typescript-eslint/no-restricted-imports": [
