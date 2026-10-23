@@ -12,7 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.132.1",
+    "@anthropic-ai/sdk": "^0.135.0",
     "@fastify/cookie": "catalog:",
     "@fastify/cors": "catalog:",
     "@fastify/rate-limit": "catalog:",
@@ -20,7 +20,7 @@
     "@rosterdock/shared": "workspace:*",
     "fastify": "catalog:",
     "pg": "catalog:",
-    "pg-boss": "^12.37.1",
+    "pg-boss": "^12.38.0",
     "yaml": "^2.9.1",
     "zod": "catalog:"
   },
