@@ -168,6 +168,7 @@ const KEY_SHAPES: readonly RegExp[] = [
   /\bnvapi-[A-Za-z0-9_-]{20,}/, // NVIDIA
   /\bfw_[A-Za-z0-9]{20,}/, // Fireworks
   /\btgp_v1_[A-Za-z0-9_-]{20,}/, // Together
+  /\bbedrock-api-key-[A-Za-z0-9+/=]{20,}/, // an Amazon Bedrock API key, short-term
   // A value given to a secret-named variable as a shell or an .env file writes it: OPENAI_API_KEY=… (secrets.ts).
   /(?:^|\s)[A-Za-z0-9_]*(?:api[_-]?key|secret(?:[_-]?key)?|private[_-]?key|password|passwd|token)=[A-Za-z0-9._~+/:@%^*!#-]{8,}/i,
 ];
@@ -190,24 +191,31 @@ function base64Run(text: string): boolean {
  * in fifty. An identifier in one case (ACMEPRODUCTIONOPENAI) is not random.
  */
 function randomRun(run: string): boolean {
-  return run.length >= 20 && readsRandom(run);
-}
-
-/** In both cases, and under 0.65 of its letters and digits in words: randomRun's measure, dashes aside. */
-function readsRandom(run: string): boolean {
-  if (!/[A-Z]/.test(run) || !/[a-z]/.test(run)) return false;
+  if (run.length < 20 || !/[A-Z]/.test(run) || !/[a-z]/.test(run)) return false;
   let inWords = 0;
   for (const word of run.matchAll(/[A-Z]?[a-z]{2,}/g)) inWords += word[0].length;
-  return inWords / run.replace(/[^A-Za-z0-9]/g, "").length < 0.65;
+  return inWords / run.length < 0.65;
 }
 
 /**
  * A run of 32 characters or more in a base64url key's alphabet that reads as random. Such a key (Together's,
  * Voyage's, many bare ones) has dashes and underscores in it, which break it into pieces too short to read
- * alone; words never span them, so the run is read whole. Names and labels run that long are words joined.
+ * alone, so the run is read whole, by randomRun's measure, with one more kind of word: a piece in capitals and
+ * digits, 8 long at most (API, KEY, FP8, 480B, A35B), as names and model ids are made of. A run a key's dashes
+ * break has few such pieces; one made of words joined by dashes or underscores reads as words.
  */
 function longRandomRun(text: string): boolean {
-  for (const [run] of text.matchAll(/[A-Za-z0-9_-]{32,}/g)) if (readsRandom(run)) return true;
+  for (const [run] of text.matchAll(/[A-Za-z0-9_-]{32,}/g)) {
+    if (!/[A-Z]/.test(run) || !/[a-z]/.test(run)) continue;
+    let length = 0;
+    let inWords = 0;
+    for (const piece of run.split(/[-_]+/)) {
+      length += piece.length;
+      if (/^[A-Z0-9]{1,8}$/.test(piece)) inWords += piece.length;
+      else for (const word of piece.matchAll(/[A-Z]?[a-z]{2,}/g)) inWords += word[0].length;
+    }
+    if (inWords / length < 0.65) return true;
+  }
   return false;
 }
 

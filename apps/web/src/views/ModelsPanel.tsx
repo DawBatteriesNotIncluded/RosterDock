@@ -230,12 +230,19 @@ export interface ProviderForm {
   picked: string;
 }
 
-/** Whether text holds twelve characters or more of a key in a row, letters and digits only, in either case. */
+/**
+ * Whether text holds twelve characters or more of a key in a row, letters and digits only, in either case. Only
+ * a stretch with a digit and a letter in it counts: a key's words (Bedrock's start bedrock-api-key-) are words
+ * a label may use too, and a random stretch of twelve almost always has both.
+ */
 export function holdsPartOf(text: string, key: string): boolean {
   const flat = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
   const t = flat(text);
   const k = flat(key);
-  for (let i = 0; i + 12 <= k.length; i++) if (t.includes(k.slice(i, i + 12))) return true;
+  for (let i = 0; i + 12 <= k.length; i++) {
+    const part = k.slice(i, i + 12);
+    if (/[0-9]/.test(part) && /[a-z]/.test(part) && t.includes(part)) return true;
+  }
   return false;
 }
 

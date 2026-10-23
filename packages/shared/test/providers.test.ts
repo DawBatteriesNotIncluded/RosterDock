@@ -296,6 +296,31 @@ describe("a provider's schema", () => {
       expect(labelLooksLikeKey(label), label).toBe(false);
     for (const name of ["githubPersonalAccessToken_forProdDeploy", "Acme_OpenAI_Production_Key_EU_West"])
       expect(nameLooksLikeKey(name), name).toBe(false);
+    // Model ids and names made of capitals and digits between their dashes or underscores read as words too.
+    for (const label of [
+      "vLLM Qwen3-235B-A22B-Instruct-2507-FP8",
+      "Acme Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+      "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16",
+      "Acme DeepSeek-R1-Distill-Llama-70B-AWQ-INT4",
+      "GPT-4o-2024-08-06-Production-EastUS2",
+      "Claude-Opus-4-1-20250805-Bedrock-US",
+      "Kimi-K2-Instruct-0905-FP8-dynamic-W8A8",
+    ])
+      expect(labelLooksLikeKey(label), label).toBe(false);
+    for (const name of [
+      "MODELS_ACME_OPENAI_KEY_Staging_EU",
+      "ACME_OpenAI_API_KEY_production_eu",
+      "SLACK_BOT_TOKEN_forAcmeWorkspace",
+      "TOGETHER_API_KEY_DeepSeek_R1_Distill",
+      "VLLM_API_KEY_Qwen2_5_Coder_32B_Instruct",
+      "AZURE_OPENAI_ENDPOINT_westeurope_PROD_v2",
+    ])
+      expect(nameLooksLikeKey(name), name).toBe(false);
+    // An Amazon Bedrock short-term key: its prefix, then base64.
+    const bedrock = ["bedrock", "api", "key", "YmVkcm9jay5hbWF6b25hd3MuY29tLz9BY3Rpb249Q2Fs+bF/dW="].join(
+      "-",
+    );
+    expect(labelLooksLikeKey(`Acme ${bedrock}`)).toBe(true);
   });
 
   it("says why a model id will not do, as the board would", () => {

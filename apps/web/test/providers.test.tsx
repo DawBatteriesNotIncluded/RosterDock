@@ -283,6 +283,11 @@ describe("Settings > Models", () => {
       /^The label or the name holds part of the key/,
     );
     expect(holdsPartOf("Acme prod", pasted)).toBe(false);
+    // A key's own words are a label's too: Bedrock's short-term keys start bedrock-api-key-.
+    const bedrock = ["bedrock", "api", "key", "YmVkcm9jay5hbWF6b25hd3MuY29tLz9B"].join("-");
+    expect(holdsPartOf("Acme Bedrock API key", bedrock)).toBe(false);
+    expect(holdsPartOf("acme-bedrock-api-key", bedrock)).toBe(false);
+    expect(holdsPartOf("Acme YmVkcm9jay5h", bedrock)).toBe(true);
     expect(holdsPartOf("acme", "short-key")).toBe(false);
     expect(formProblem(form({ name: "acme prod" }), nothingTaken)).toMatch(/^The name: a short name/);
     expect(formProblem(form({ label: "Acme ".repeat(17) }), nothingTaken)).toBe(
