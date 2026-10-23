@@ -1,3 +1,4 @@
+import { coveringEntry } from "@rosterdock/shared";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { migrate } from "./db/migrate.js";
@@ -19,6 +20,15 @@ if (named.length) {
       `ROSTERDOCK_PRIVATE_DESTINATIONS gives entries to company ${id}, which this board does not have`,
     );
 }
+// An entry given to one company that an entry for every company already covers is every company's.
+for (const [id, own] of Object.entries(config.privateDestinations.companies ?? {}))
+  for (const entry of own.entries) {
+    const wide = coveringEntry(entry, config.privateDestinations);
+    if (wide)
+      board.app.log.warn(
+        `ROSTERDOCK_PRIVATE_DESTINATIONS gives ${entry} to company ${id}, but ${wide} gives it to every company`,
+      );
+  }
 
 await board.app.listen({ host: config.host, port: config.port });
 

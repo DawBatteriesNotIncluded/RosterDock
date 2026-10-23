@@ -77,6 +77,27 @@ export interface ReachOptions {
    * the start of a longer answer reads it with readCapped and gives one byte more here.
    */
   maxBytes: number;
+  /**
+   * What every answer this fetch gets may read together, decoded (readBudget): a server that answers again
+   * and again (an event stream the SDK resumes) reads no more in all than this, each answer under maxBytes.
+   */
+  budget?: ReadBudget;
+}
+
+/**
+ * What several answers share: the bytes left of a total, and the requests left of a number, so a server that
+ * answers empty again and again (an event stream the SDK resumes at once) runs a budget out too, while a
+ * list paged small is still read whole.
+ */
+export interface ReadBudget {
+  left: number;
+  readonly total: number;
+  requestsLeft: number;
+  readonly requests: number;
+}
+
+export function readBudget(bytes: number, requests: number): ReadBudget {
+  return { left: bytes, total: bytes, requestsLeft: requests, requests };
 }
 
 export const MAX_HOPS = 3;
@@ -92,6 +113,18 @@ const BODY_HEADERS = [
   "content-language",
   "content-location",
 ];
+
+/** What to give a connection whose server moved it within itself, without naming a path. */
+function sameServerHint(from: URL, to: URL): string {
+  const upgrade = from.protocol === "http:" && to.protocol === "https:";
+  const path = (u: URL) => u.pathname.replace(/\/+$/, "");
+  const samePath = from.pathname === to.pathname && from.search === to.search;
+  const slashOnly = !samePath && path(from) === path(to) && from.search === to.search;
+  if (upgrade && samePath) return "give the connection its address over https";
+  if (slashOnly)
+    return `give the connection its address ${upgrade ? "over https and " : ""}${to.pathname.endsWith("/") ? "with" : "without"} the trailing slash`;
+  return "give the connection the address it points to, on the same server";
+}
 
 /** Where a refused redirect pointed, for a person: the server, or the kind of URL; never a path. */
 function redirectTarget(from: URL, to: URL): string {
@@ -146,6 +179,13 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
     const headers = new Headers(init?.headers);
     try {
       for (let hop = 0; ; hop++) {
+        if (opts.budget) {
+          if (opts.budget.requestsLeft <= 0)
+            throw new Error(
+              `${url.host} got more than ${opts.budget.requests} requests for one call, too many requests; ${READ_NO_FURTHER}`,
+            );
+          opts.budget.requestsLeft -= 1;
+        }
         await admit(egress, url, signal);
         const res = await egress.fetch(url.toString(), {
           ...init,
@@ -158,7 +198,7 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
         const location = REDIRECTS.has(res.status) ? res.headers.get("location") : null;
         if (location === null || opts.redirect === "manual") {
           if (opts.stream) clearTimeout(timer);
-          return capped(res, opts.maxBytes, url.host);
+          return capped(res, opts.maxBytes, url.host, opts.budget);
         }
         await res.body?.cancel().catch(() => {});
         let next: URL;
@@ -184,11 +224,11 @@ export function egressFetch(egress: Egress, opts: ReachOptions): typeof fetch {
         const toGet =
           (res.status === 303 && method !== "GET" && method !== "HEAD") ||
           ((res.status === 301 || res.status === 302) && method === "POST");
-        // A call that must arrive as it was sent (MCP's JSON-RPC) is refused instead, with where to send it: the
-        // same server's address, which the connection already shows, without its query.
+        // A call that must arrive as it was sent (MCP's JSON-RPC) is refused instead, saying what to change
+        // without naming a path, which may carry a token.
         if (toGet && opts.redirect === "same-origin")
           throw new Error(
-            `${url.host} answered ${res.status} to a ${method}, which would arrive at ${next.origin}${next.pathname} as a GET without its body: use that address`,
+            `${url.host} answered ${res.status} to a ${method}, which would arrive as a GET without its body: ${sameServerHint(url, next)}`,
           );
         if (toGet) {
           method = "GET";
@@ -220,28 +260,35 @@ function sizePhrase(bytes: number): string {
  * The answer with its body cut at `max` bytes: what fits is handed on, then the body ends with an error and
  * nothing more is read from the server.
  */
-function capped(res: Response, max: number, host: string): Response {
+function capped(res: Response, max: number, host: string, budget?: ReadBudget): Response {
   if (!res.body) return res;
   const reader = res.body.getReader();
   let total = 0;
-  let over = false;
-  const tooBig = () => new Error(`${host} answered more than ${sizePhrase(max)}; ${READ_NO_FURTHER}`);
+  let over: Error | null = null;
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (over) return controller.error(tooBig());
+      if (over) return controller.error(over);
       const { done, value } = await reader.read();
       if (done) return controller.close();
-      if (total + value.byteLength <= max) {
+      const left = budget ? budget.left : Infinity;
+      if (total + value.byteLength <= max && value.byteLength <= left) {
         total += value.byteLength;
+        if (budget) budget.left -= value.byteLength;
         return controller.enqueue(value);
       }
       // What still fits goes on; the next read is the error.
-      over = true;
-      const room = max - total;
-      total = max;
+      const room = Math.min(max - total, left);
+      over =
+        max - total <= left
+          ? new Error(`${host} answered more than ${sizePhrase(max)}; ${READ_NO_FURTHER}`)
+          : new Error(
+              `${host} answered more than ${sizePhrase(budget!.total)} in all for one call; ${READ_NO_FURTHER}`,
+            );
+      total += Math.max(0, room);
+      if (budget) budget.left = Math.max(0, budget.left - Math.max(0, room));
       await reader.cancel().catch(() => {});
       if (room > 0) controller.enqueue(value.subarray(0, room));
-      else controller.error(tooBig());
+      else controller.error(over);
     },
     cancel(reason) {
       return reader.cancel(reason);

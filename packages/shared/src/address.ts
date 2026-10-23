@@ -146,6 +146,10 @@ export interface PrivateDestinations {
   companies?: Record<string, PrivateDestinations>;
   /** Set once the list is narrowed to a company (forCompany): whose list it is now. */
   narrowedTo?: string;
+  /** Once narrowed: the ranges the operator gave other companies alone, which no shared name leads this one into. */
+  reserved?: Range[];
+  /** Once narrowed: the names the operator gave this company alone, trusted with whatever they resolve to. */
+  ownNames?: string[];
 }
 
 export const NO_PRIVATE_DESTINATIONS: PrivateDestinations = { names: [], ranges: [], entries: [] };
@@ -196,6 +200,8 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
     const entry = company === null ? written : written.slice(eq + 1).trim();
     const out =
       company === null ? all : ((all.companies ??= {})[company] ??= { names: [], ranges: [], entries: [] });
+    // The same entry twice is one entry, and so is the same destination spelled another way (below).
+    if (out.entries.includes(entry)) continue;
     const [addr, bitsText, extra] = entry.replace(/^\[|\](?=\/|$)/g, "").split("/");
     const bytes = entry.includes("%") ? null : addressBytes(addr!);
     const name = addr!.replace(/\.$/, "");
@@ -216,8 +222,15 @@ export function parsePrivateDestinations(raw: string | undefined): PrivateDestin
       const bits = given - over;
       // The range's own address with its host bits cleared: 10.1.2.3/8 is 10.0.0.0/8.
       const prefix = bytes.map((b, i) => b & (0xff << (8 - Math.max(0, Math.min(8, bits - i * 8)))) & 0xff);
+      if (
+        out.ranges.some(
+          ([p, b]) => b === bits && p.length === prefix.length && p.every((x, i) => x === prefix[i]),
+        )
+      )
+        continue;
       out.ranges.push([prefix, bits, entry]);
     } else if (bitsText === undefined && NAME_RE.test(name) && !NUMERIC_TAIL.test(name)) {
+      if (out.names.includes(name)) continue;
       out.names.push(name);
     } else {
       // A zone (%eth0) names an interface, not a destination.
@@ -250,7 +263,21 @@ export function forCompany(allow: PrivateDestinations, companyId: string): Priva
     ranges: [...allow.ranges, ...(own?.ranges ?? [])],
     entries: [...allow.entries, ...(own?.entries.filter((e) => !allow.entries.includes(e)) ?? [])],
     narrowedTo: id,
+    reserved: reservedFor(allow, id),
+    ownNames: own?.names ?? [],
   };
+}
+
+/**
+ * The ranges the operator gave companies other than this one (every company's, for a list nobody narrowed):
+ * a name listed for every company that resolves to a private address in one of them is not this company's
+ * way in.
+ */
+export function reservedFor(allow: PrivateDestinations, companyId?: string): Range[] {
+  if (allow.reserved) return allow.reserved;
+  return Object.entries(allow.companies ?? {})
+    .filter(([id]) => id !== companyId)
+    .flatMap(([, own]) => own.ranges);
 }
 
 /** Whether the operator lists this name, itself or under a `*.` entry. */
@@ -265,6 +292,38 @@ export function nameListed(host: string, allow: PrivateDestinations): boolean {
 export function addressListed(address: string, allow: PrivateDestinations): boolean {
   const bytes = addressBytes(address);
   return !!bytes && allow.ranges.some((r) => r[0].length === bytes.length && inRange(bytes, r));
+}
+
+/**
+ * The entry every company has that already covers this one, written as the operator wrote it, or null: an
+ * address or range inside a listed range, the same name, or a name under a listed `*.` name. Giving a covered
+ * entry to one company gives it nothing alone. What a list cannot see is a name whose address falls in a
+ * range listed for every company: that is known only once the name resolves.
+ */
+export function coveringEntry(entry: string, allow: PrivateDestinations): string | null {
+  let one: PrivateDestinations;
+  try {
+    one = parsePrivateDestinations(entry);
+  } catch {
+    return null;
+  }
+  for (const [prefix, bits] of one.ranges) {
+    const wide = allow.ranges.find(
+      (r) => r[0].length === prefix.length && r[1] <= bits && inRange(prefix, r),
+    );
+    if (wide) return wide[2];
+  }
+  for (const name of one.names) {
+    // A `*.` name covers the names under it, the names under a name under it too.
+    const domain = name.startsWith("*.") ? name.slice(2) : null;
+    const wide = allow.names.find((n) =>
+      domain === null
+        ? nameListed(name, { ...allow, names: [n] })
+        : n.startsWith("*.") && (domain === n.slice(2) || domain.endsWith(n.slice(1))),
+    );
+    if (wide) return wide;
+  }
+  return null;
 }
 
 /** Whether the operator lists this host: the name itself (or under a `*.` entry), or an address in a listed range. */
