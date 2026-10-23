@@ -32,24 +32,56 @@ export interface SentRequest {
   headers: Record<string, string>;
 }
 
-/** A transport that answers with the recordings, in order, and keeps what was sent. */
-export function replay(...recordings: Recording[]): { fetch: typeof fetch; sent: SentRequest[] } {
+/** The headers a key travels in. */
+const KEY_HEADERS = ["authorization", "x-api-key", "api-key"];
+
+/**
+ * Why a request is not the one recorded, or null: its method and URL, and its headers as recorded (a key
+ * where the recording has one, every other value the same, the SDK's user agent aside, which names its
+ * version), with no key in a header the recording had none in.
+ */
+function unlike(recorded: RecordedExchange["request"], sent: SentRequest): string | null {
+  if (recorded.method !== sent.method || recorded.url !== sent.url) return "another request";
+  for (const [name, value] of Object.entries(recorded.headers)) {
+    if (name === "user-agent") continue;
+    const now = sent.headers[name];
+    if (value === "<key>" ? !now : now !== value) return `the ${name} header`;
+  }
+  for (const name of KEY_HEADERS)
+    if (sent.headers[name] !== undefined && recorded.headers[name] === undefined) return `a key in ${name}`;
+  return null;
+}
+
+/**
+ * A transport that answers with the recordings, in order, and keeps what was sent, and why a request was not
+ * the one recorded (`misses`: the check that sent it says only that its call failed, in the board's words).
+ */
+export function replay(...recordings: Recording[]): {
+  fetch: typeof fetch;
+  sent: SentRequest[];
+  misses: string[];
+} {
   const queue = recordings.flatMap((r) => r.exchanges);
   const sent: SentRequest[] = [];
+  const misses: string[] = [];
   const answer: typeof fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     const headers: Record<string, string> = {};
     new Headers(init?.headers).forEach((value, name) => (headers[name] = value));
-    sent.push({ method, url, headers });
+    const request = { method, url, headers };
+    sent.push(request);
     const next = queue.shift();
-    if (!next || next.request.method !== method || next.request.url !== url)
-      throw new Error(`not recorded: ${method} ${url}`);
+    const why = next ? unlike(next.request, request) : "nothing more";
+    if (!next || why) {
+      misses.push(`${method} ${url}: ${why}`);
+      throw new Error(`not recorded (${why}): ${method} ${url}`);
+    }
     const { status, contentType, body } = next.response;
     return new Response(typeof body === "string" ? body : JSON.stringify(body), {
       status,
       headers: contentType ? { "content-type": contentType } : {},
     });
   };
-  return { fetch: answer, sent };
+  return { fetch: answer, sent, misses };
 }

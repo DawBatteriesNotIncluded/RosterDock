@@ -38,7 +38,9 @@ node --import tsx scripts/record-provider-checks.mts anthropic
 The kinds are `anthropic` (`ANTHROPIC_API_KEY`), `openai` (`OPENAI_API_KEY`), `azure_openai`
 (`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`), `bedrock` (`AWS_REGION`, `AWS_BEARER_TOKEN_BEDROCK`) and
 `openai_compatible` (`OPENAI_COMPATIBLE_BASE_URL`, default `http://localhost:11434/v1` for Ollama, and
-`OPENAI_COMPATIBLE_API_KEY` if it takes one). A server that takes no key cannot refuse one: give
-`OPENAI_COMPATIBLE_REFUSED_BASE_URL`, one that takes a key (vLLM started with `--api-key`, LiteLLM with a
-master key), for the refusal. Check both files for anything that looks like a secret or names your account
-before committing them.
+`OPENAI_COMPATIBLE_API_KEY` if it takes one). A server that takes no key cannot refuse one: give one that
+takes a key for the refusal, as `--refused=<base URL>` or `OPENAI_COMPATIBLE_REFUSED_BASE_URL` (vLLM started
+with `--api-key`, LiteLLM with a master key, or OpenAI's own API, `https://api.openai.com/v1`, which refuses
+a wrong key without an account); both servers are written as `llm.internal.test`. Where the window cannot
+take a key unseen (Git Bash's), set the variable in the shell first. Check both files for anything that
+looks like a secret or names your account before committing them.

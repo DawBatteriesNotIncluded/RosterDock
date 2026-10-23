@@ -418,27 +418,37 @@ function plan(row: ProviderRow, patch: UpdateModelProviderInput) {
   if (!parsed.success) throw new HttpError(400, "invalid request body", safeIssues(parsed.error.issues));
   const next = parsed.data;
   const c = columns(next);
-  const models = keptModels(next.models, row.models, row.last_check);
+  // Reached another way (another address, region, header or key's name): the last check spoke for what the
+  // provider was, so it goes, and with it what it said the key reaches.
+  const moved =
+    c.endpoint !== row.endpoint ||
+    c.region !== row.region ||
+    c.authHeader !== row.auth_header ||
+    !sameJson(c.credentials, row.credentials);
+  const models = moved
+    ? keptModels(next.models, [], null)
+    : keptModels(next.models, row.models, row.last_check);
   const archive = patch.archived === true && !row.archived_at;
   const restore = patch.archived === false && !!row.archived_at;
+  const given = (list: readonly ProviderModel[]) => list.map(({ source: _source, ...m }) => m);
   const changes = [
     next.label !== row.label && "label",
     c.endpoint !== row.endpoint && "endpoint",
     c.region !== row.region && "region",
     c.authHeader !== row.auth_header && "authHeader",
     !sameJson(c.credentials, row.credentials) && "credentials",
-    !sameJson(models, row.models) && "models",
+    !sameJson(given(models), given(row.models)) && "models",
     next.enabled !== row.enabled && "enabled",
     (archive || restore) && "archived",
   ].filter((f): f is string => !!f);
-  return { next, c, models, archive, restore, changes };
+  return { next, c, models, archive, restore, changes, clearCheck: moved };
 }
 
 /**
  * Whether two JSON values are the same whatever order their keys are in: Postgres keeps jsonb's keys in its
  * own order (by length, then bytes), never the order the board wrote them in.
  */
-function sameJson(a: unknown, b: unknown): boolean {
+export function sameJson(a: unknown, b: unknown): boolean {
   const canonical = (v: unknown): unknown =>
     Array.isArray(v)
       ? v.map(canonical)
@@ -487,7 +497,7 @@ export async function updateProvider(
         )
       ).rows[0];
       if (!row) throw notFound("model provider");
-      const { next, c, models, archive, restore, changes } = plan(row, patch);
+      const { next, c, models, archive, restore, changes, clearCheck } = plan(row, patch);
       if (!changes.length) throw new Unchanged(row);
       const updated = (
         await ctx.client.query<ProviderRow>(
@@ -495,6 +505,7 @@ export async function updateProvider(
               SET label = $3, endpoint = $4, region = $5, auth_header = $6, credentials = $7, models = $8,
                   enabled = $9,
                   archived_at = CASE WHEN $10 THEN now() WHEN $11 THEN NULL ELSE archived_at END,
+                  last_check = CASE WHEN $12 THEN NULL ELSE last_check END,
                   updated_at = now()
             WHERE id = $1 AND company_id = $2
             RETURNING *`,
@@ -510,6 +521,7 @@ export async function updateProvider(
             next.enabled,
             archive,
             restore,
+            clearCheck,
           ],
         )
       ).rows[0]!;

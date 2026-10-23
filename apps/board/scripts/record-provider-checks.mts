@@ -14,8 +14,9 @@
 //   node --import tsx scripts/record-provider-checks.mts bedrock             AWS_REGION, AWS_BEARER_TOKEN_BEDROCK
 //   node --import tsx scripts/record-provider-checks.mts openai_compatible   OPENAI_COMPATIBLE_BASE_URL (http://localhost:11434/v1
 //                                                                              for Ollama), OPENAI_COMPATIBLE_API_KEY (empty: none)
-// A compatible server that takes no key cannot refuse one: give OPENAI_COMPATIBLE_REFUSED_BASE_URL, a server
-// that takes a key (vLLM started with --api-key, LiteLLM with a master key), for the refusal.
+// A compatible server that takes no key cannot refuse one: give a server that takes a key for the refusal, as
+// `--refused=<base URL>` or OPENAI_COMPATIBLE_REFUSED_BASE_URL (vLLM started with --api-key, LiteLLM with a
+// master key, or OpenAI's own API, https://api.openai.com/v1, which refuses a wrong key without an account).
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -55,7 +56,12 @@ if (!PROVIDER_KINDS.includes(kind)) {
 async function given(name: string, question: string, opts: { hidden?: boolean; fallback?: string } = {}) {
   const set = process.env[name];
   if (set !== undefined) return set.trim();
-  if (!process.stdin.isTTY) throw new Error(`${name} is not set, and there is no terminal to ask in`);
+  if (!process.stdin.isTTY)
+    throw new Error(
+      opts.hidden
+        ? `${name} is not set, and this window cannot ask for it without showing it: set ${name} in this shell, or run this in PowerShell or Windows Terminal (or a macOS or Linux terminal), where it is asked for`
+        : `${name} is not set, and this window cannot ask for it: set ${name} in this shell first`,
+    );
   if (!opts.hidden) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const answer = (await rl.question(`${question}${opts.fallback ? ` [${opts.fallback}]` : ""}: `)).trim();
@@ -138,15 +144,16 @@ function forms(text: string): string[] {
 
 /**
  * The file's text with every key, and what identifies your account, replaced; null if any part of the key
- * (twelve characters in a row) is still in it.
+ * (twelve characters in a row, or the whole of a shorter one) is still in it. `standIns` are replaced in order:
+ * a compatible server's base URL whole, path and all, then any host left.
  */
 function scrubbed(
   text: string,
   keys: { real: string | null; wrong: string },
-  hosts: [string, string][],
+  standIns: [string, string][],
 ): string | null {
   let t = text;
-  for (const [from, to] of hosts) t = t.split(from).join(to);
+  for (const [from, to] of standIns) t = t.split(from).join(to);
   if (keys.real) for (const f of forms(keys.real)) t = t.split(f).join("<key>");
   for (const f of forms(keys.wrong)) t = t.split(f).join("<a wrong key>");
   // A key named back in part, as OpenAI's refusal does (sk-proj-****…abcd).
@@ -158,6 +165,7 @@ function scrubbed(
   t = t.replace(/\bft:([A-Za-z0-9._-]+):[A-Za-z0-9_-]+:/g, "ft:$1:org-recorded:");
   // What follows a key's published prefix (sk-ant-api03-, sk-proj-, bedrock-api-key-) is the secret part.
   const secret = keys.real?.replace(/^(?:sk-ant-[a-z]+\d*-|sk-proj-|sk-|bedrock-api-key-)/, "") ?? "";
+  if (secret.length >= 6 && secret.length < 12 && t.includes(secret)) return null;
   for (let i = 0; i + 12 <= secret.length; i++) if (t.includes(secret.slice(i, i + 12))) return null;
   return t;
 }
@@ -166,9 +174,9 @@ function write(
   name: string,
   record: unknown,
   keys: { real: string | null; wrong: string },
-  hosts: [string, string][],
+  standIns: [string, string][],
 ) {
-  const text = scrubbed(`${JSON.stringify(record, null, 2)}\n`, keys, hosts);
+  const text = scrubbed(`${JSON.stringify(record, null, 2)}\n`, keys, standIns);
   if (text === null) {
     console.error(`${name}: part of your key is still in it after the scrub; nothing was written`);
     process.exit(1);
@@ -182,8 +190,8 @@ async function main() {
   let target: ListTarget = { kind, endpoint: null, region: null, auth_header: null };
   let key: string | null;
   let refusedTarget = target;
-  // The hosts written under a stand-in name, so the files say nothing of where your account lives.
-  const hosts: [string, string][] = [];
+  // What is written under a stand-in, so the files say nothing of where your account lives.
+  const standIns: [string, string][] = [];
   switch (kind) {
     case "anthropic":
       key = await given("ANTHROPIC_API_KEY", "Anthropic API key", { hidden: true });
@@ -197,7 +205,7 @@ async function main() {
       target = { ...target, endpoint };
       refusedTarget = target;
       const host = new URL(endpoint).hostname;
-      hosts.push([host, host.replace(/^[^.]+/, STAND_IN_AZURE)]);
+      standIns.push([host, host.replace(/^[^.]+/, STAND_IN_AZURE)]);
       key = await given("AZURE_OPENAI_API_KEY", "Azure OpenAI key", { hidden: true });
       break;
     }
@@ -220,22 +228,32 @@ async function main() {
         (await given("OPENAI_COMPATIBLE_API_KEY", "Its key (empty: it takes none)", { hidden: true })) ||
         null;
       target = { ...target, endpoint, auth_header: key ? "authorization" : null };
-      const refusedBase = process.env.OPENAI_COMPATIBLE_REFUSED_BASE_URL?.trim();
+      const refusedBase = (
+        process.argv.find((a) => a.startsWith("--refused="))?.slice("--refused=".length) ??
+        process.env.OPENAI_COMPATIBLE_REFUSED_BASE_URL
+      )?.trim();
       const refusedEndpoint = refusedBase ? compatibleEndpoint(refusedBase) : endpoint;
-      if (!refusedEndpoint) throw new Error("OPENAI_COMPATIBLE_REFUSED_BASE_URL is not a base URL");
+      if (!refusedEndpoint)
+        throw new Error("the refusal's server is not a base URL, such as https://api.openai.com/v1");
       refusedTarget = { ...target, endpoint: refusedEndpoint, auth_header: "authorization" };
+      // The base URL whole (a gateway's path can name an account), then its host wherever else it is.
+      for (const e of new Set([endpoint, refusedEndpoint]))
+        standIns.unshift([e, `${new URL(e).protocol}//${STAND_IN_COMPATIBLE}/v1`]);
       for (const e of new Set([endpoint, refusedEndpoint])) {
         const host = new URL(e).hostname;
-        if (!hosts.some(([from]) => from === host)) hosts.push([host, STAND_IN_COMPATIBLE]);
+        if (!standIns.some(([from]) => from === host)) standIns.push([host, STAND_IN_COMPATIBLE]);
       }
       break;
     }
   }
   if (kind !== "openai_compatible" && !key) throw new Error("no key given");
+  // As the board takes one (check.ts): anything else cannot go in a header, and a header's error quotes it.
+  if (key && !/^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/.test(key))
+    throw new Error("a key is one line of printable text, and what was given is not; nothing was sent");
   const keys = { real: key, wrong: WRONG_KEYS[kind] };
   const recorded = new Date().toISOString().slice(0, 10);
   const stand = (t: ListTarget) => ({
-    endpoint: t.endpoint ? hosts.reduce((e, [from, to]) => e.split(from).join(to), t.endpoint) : null,
+    endpoint: t.endpoint ? standIns.reduce((e, [from, to]) => e.split(from).join(to), t.endpoint) : null,
     region: t.region,
     authHeader: t.auth_header,
   });
@@ -253,14 +271,14 @@ async function main() {
     `${kind}-models.json`,
     { recorded, kind, provider: stand(target), exchanges: works.exchanges },
     keys,
-    hosts,
+    standIns,
   );
 
   const refused = recorder();
   try {
     await listModels(refusedTarget, WRONG_KEYS[kind], refused.fetch);
     console.error(
-      "the server took a wrong key: it takes none, so it cannot refuse one. Set OPENAI_COMPATIBLE_REFUSED_BASE_URL to a server that takes a key, and run it again",
+      "the server took a wrong key: it takes none, so it cannot refuse one. Run it again with --refused=<base URL> of a server that takes a key (https://api.openai.com/v1 does)",
     );
     process.exit(1);
   } catch (err) {
@@ -278,11 +296,17 @@ async function main() {
     `${kind}-refused.json`,
     { recorded, kind, provider: stand(refusedTarget), exchanges: refused.exchanges },
     keys,
-    hosts,
+    standIns,
   );
   console.log(
     "check both files for anything that looks like a secret or names your account before committing",
   );
 }
 
-await main();
+try {
+  await main();
+} catch (err) {
+  // What went wrong, in words and without a stack; the key is checked before anything quotes it.
+  console.error((err as Error).message);
+  process.exit(1);
+}

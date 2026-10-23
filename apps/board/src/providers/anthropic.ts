@@ -1,29 +1,37 @@
-// A company's own Anthropic key, used by the board itself: an SDK client that reads nothing of the board's
-// environment. The SDK's defaults take ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_CUSTOM_HEADERS and
-// ANTHROPIC_LOG from where it runs, and those are the operator's: a company's request would go to the
-// operator's base URL, carry the operator's token or headers, or be logged. Here the host is Anthropic's, the
-// one credential is the company's key, and only the headers the API reads leave the board.
+// A company's own Anthropic key, used by the board itself: an SDK client that takes nothing of the board's
+// environment into a request. The SDK's defaults read ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN,
+// ANTHROPIC_CUSTOM_HEADERS and ANTHROPIC_LOG from where it runs, and those are the operator's: a company's
+// request would go to the operator's base URL, carry the operator's token, or headers that replace the
+// company's key (the SDK applies custom headers after the key), or be logged. Here the host is Anthropic's,
+// and every request's headers are set anew: the company's key, the API version this SDK speaks, and only
+// the SDK's own user agent and body type besides.
 
 import Anthropic from "@anthropic-ai/sdk";
 
 /** Where a company's Anthropic key goes: Anthropic's API, never a base URL the board's environment names. */
 export const ANTHROPIC_API = "https://api.anthropic.com";
 
-/** What a company's request may carry: the SDK's own headers and the key, nothing the environment added. */
-const SENT =
-  /^(?:accept|anthropic-beta|anthropic-version|content-length|content-type|user-agent|x-api-key|x-stainless-[a-z-]+)$/;
+/** The API version this SDK speaks (what it sends itself); a recording's requests carry it. */
+export const ANTHROPIC_VERSION = "2023-06-01";
 
-/** The fetch, with every header but those dropped. */
-function onlySent(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
+/** The fetch, sending exactly these headers whatever the SDK, or the environment through it, put there. */
+function companyHeaders(fetch: typeof globalThis.fetch, apiKey: string): typeof globalThis.fetch {
   return (input, init) => {
-    const headers = new Headers(init?.headers);
-    for (const name of [...headers.keys()]) if (!SENT.test(name)) headers.delete(name);
+    const given = new Headers(init?.headers);
+    const headers = new Headers({
+      accept: "application/json",
+      "anthropic-version": ANTHROPIC_VERSION,
+      "x-api-key": apiKey,
+    });
+    const agent = given.get("user-agent");
+    if (agent && /^Anthropic\/JS [\w.+-]+$/.test(agent)) headers.set("user-agent", agent);
+    if (given.get("content-type") === "application/json") headers.set("content-type", "application/json");
     return fetch(input, { ...init, headers });
   };
 }
 
 export interface CompanyAnthropicOptions {
-  /** The company's key, resolved by the board for this call. */
+  /** The company's key, resolved by the board for this call; one line of printable text (check.ts). */
   apiKey: string;
   /** The company's egress: the address guard, the redirect rule and the caps of the call site. */
   fetch: typeof globalThis.fetch;
@@ -38,7 +46,7 @@ export function companyAnthropic(opts: CompanyAnthropicOptions): Anthropic {
     authToken: null,
     webhookKey: null,
     baseURL: ANTHROPIC_API,
-    fetch: onlySent(opts.fetch),
+    fetch: companyHeaders(opts.fetch, opts.apiKey),
     timeout: opts.timeoutMs,
     maxRetries: opts.maxRetries ?? 0,
     logLevel: "off",

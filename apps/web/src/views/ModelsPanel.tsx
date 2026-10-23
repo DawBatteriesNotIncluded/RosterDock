@@ -180,15 +180,19 @@ export function suggestedModels(p: Pick<ModelProvider, "kind" | "lastCheck" | "m
 
 /**
  * Whether a model on the list is one the key did not reach at its last check: only when that check listed every
- * model the key reaches, and never on Azure, whose list names no deployment.
+ * model the key reaches, never on Azure, whose list names no deployment, and never for a name that may stand
+ * for a listed one: an alias of a dated id (claude-opus-4-5 for claude-opus-4-5-20251101), a tag left off
+ * (llama3.2 for llama3.2:latest), or an ARN.
  */
 export function unreached(
   p: Pick<ModelProvider, "kind" | "lastCheck">,
-  model: Pick<ProviderModel, "source">,
+  model: Pick<ProviderModel, "id" | "source">,
 ): boolean {
   const c = p.lastCheck;
-  return (
-    p.kind !== "azure_openai" && !!c?.ok && (c.models?.length ?? 0) >= c.listed && model.source !== "listed"
+  if (p.kind === "azure_openai" || !c?.ok || (c.models?.length ?? 0) < c.listed) return false;
+  if (model.source === "listed" || model.id.startsWith("arn:")) return false;
+  return !(c.models ?? []).some(
+    (m) => m.id === model.id || m.id.startsWith(`${model.id}-`) || m.id.startsWith(`${model.id}:`),
   );
 }
 
@@ -751,14 +755,23 @@ function AddModelForm(p: {
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // The label a picked model filled in, until the person types their own: it goes when the id moves off it.
+  const [filled, setFilled] = useState<string | null>(null);
   // A model picked from what the key reaches: whose it is, its name and its context window, as the provider said.
   const picked = p.suggestions.find((s) => s.id === id.trim());
   const typeId = (next: string) => {
     setId(next);
     const hit = p.suggestions.find((s) => s.id === next.trim());
-    if (!hit) return;
+    if (!hit) {
+      if (filled !== null && label === filled) setLabel("");
+      setFilled(null);
+      return;
+    }
     if (families.includes(hit.family)) setFamily(hit.family);
-    if (!label.trim() && hit.label && !labelLooksLikeKey(hit.label)) setLabel(hit.label);
+    if ((!label.trim() || label === filled) && hit.label && !labelLooksLikeKey(hit.label)) {
+      setLabel(hit.label);
+      setFilled(hit.label);
+    }
   };
   // The board's own rules, said before anything is sent; a label that looks like a key is refused there too.
   const problem = !id.trim()
@@ -773,6 +786,7 @@ function AddModelForm(p: {
     if (why !== null) return;
     setId("");
     setLabel("");
+    setFilled(null);
   };
   return (
     <div className="flex flex-col gap-1">
@@ -824,7 +838,10 @@ function AddModelForm(p: {
           <input
             aria-label={`Model label for ${p.of}`}
             value={label}
-            onChange={(e) => setLabel(e.target.value)}
+            onChange={(e) => {
+              setLabel(e.target.value);
+              setFilled(null);
+            }}
             style={{ width: 160 }}
           />
         </Field>

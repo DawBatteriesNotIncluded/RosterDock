@@ -3,10 +3,11 @@
 // /openai/v1/models, Bedrock's system inference profiles and on-demand foundation models in the region, a
 // compatible server's /models. The board makes it, with the key resolved for the company (its secrets, then
 // the names the operator shares) and sent only in the header its kind takes, through the address guard: the
-// host is checked again at the call, a redirect is refused, the answer is capped. A refusal is said in the
-// board's words: what a provider answers to a refused key (OpenAI's names part of the key) is never kept,
-// logged or shown. The models the key reaches are kept on the row for a person to add from; Check itself
-// adds no model to the provider's list and takes none off.
+// host is checked again at the call, a redirect is refused, the answer is capped. What a check says is the
+// board's own words, never a provider's or a library's: what a provider answers to a refused key (OpenAI's
+// names part of the key) is never kept, logged or shown, nor an error that could quote what was sent. The
+// models the key reaches are kept on the row for a person to add from; Check itself adds no model to the
+// provider's list and takes none off.
 
 import Anthropic from "@anthropic-ai/sdk";
 import {
@@ -21,12 +22,14 @@ import {
 import { conflict, HttpError, notFound } from "../http-error.js";
 import { mutate } from "../mutate.js";
 import { companyEnv, notSetForCompany, sharedEnv } from "../secrets/company.js";
+import { RefusedAddress } from "../web/address.js";
 import { companyEgress, egressFetch, readBudget, type Egress } from "../web/egress.js";
 import { companyAnthropic } from "./anthropic.js";
 import {
   keptModels,
   kindRefusal,
   loadProvider,
+  sameJson,
   type ProviderCheck,
   type ProviderDeps,
   type ProviderRow,
@@ -186,7 +189,9 @@ async function listBedrock(region: string, key: string, fetch: typeof globalThis
   const found: { id: string; label?: unknown }[] = [];
   let next: string | null = null;
   for (let page = 0; page < BEDROCK_PAGES; page++) {
-    const query = new URLSearchParams({ maxResults: "1000", typeEquals: "SYSTEM_DEFINED" });
+    // `type` is the filter's name on the wire (typeEquals in the SDKs); APPLICATION profiles are an account's
+    // own, named by its people.
+    const query = new URLSearchParams({ maxResults: "1000", type: "SYSTEM_DEFINED" });
     if (next) query.set("nextToken", next);
     const body = (await getJson(
       "bedrock",
@@ -241,6 +246,13 @@ export async function listModels(
   }
 }
 
+/**
+ * What a key can be: one line of printable text, as every provider issues one. Anything else (a value with a
+ * newline in it, set from a file, or a PEM picked by mistake) cannot go in a header, and the error a header
+ * gives quotes the whole value.
+ */
+const KEY_RE = /^[\x21-\x7e](?:[\x20-\x7e]{0,8190}[\x21-\x7e])?$/;
+
 /** The value of the provider's key for the company, or null for a compatible server that takes none. */
 async function providerKey(deps: ProviderDeps, companyId: string, row: ProviderRow): Promise<string | null> {
   const name = row.credentials.apiKey ?? row.credentials.bearerToken ?? null;
@@ -248,22 +260,61 @@ async function providerKey(deps: ProviderDeps, companyId: string, row: ProviderR
   const shared = sharedEnv(deps.operator.boardEnv, deps.operator.sharedEnvNames);
   const value = (await companyEnv(shared, deps.operator.store, companyId))[name];
   if (!value) throw new NotListed(notSetForCompany(name));
+  if (!KEY_RE.test(value))
+    throw new NotListed(
+      `${name} holds something that is not a key: a key is one line of printable text, with no line break in it`,
+    );
   return value;
 }
 
-/** What a check that did not work says: the board's words, never a provider's body. */
+/** The board's own words when an answer never came: the deadline, a redirect, the cap, the request budget. */
+const EGRESS_WORDS =
+  /^[a-z0-9.[\]:-]+ (?:gave no answer in |answered |redirected more than |got more than )/i;
+
+/** A connection that failed, by its code, in the board's words. */
+function connectionWords(code: string): string {
+  if (code === "ECONNREFUSED") return "the provider's address refused the connection";
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "the provider's name did not resolve";
+  if (code === "ECONNRESET" || code === "EPIPE") return "the connection to the provider was cut";
+  if (code === "ETIMEDOUT" || code === "ECONNABORTED")
+    return "the provider did not take the connection in time";
+  if (/CERT|SIGNATURE|TLS|SSL/.test(code)) return `the provider's certificate was not accepted (${code})`;
+  return `the call to the provider failed (${code})`;
+}
+
+/**
+ * What a check that did not work says. Only the board's own words go through: its refusals, the status a
+ * provider answered with, the address guard's, the egress's and a connection's code. Any other error's
+ * message is dropped, since it may quote what was sent (a header's error quotes its value) or what came back.
+ */
 function checkWords(err: unknown): string {
-  if (err instanceof NotListed) return err.message;
+  if (err instanceof NotListed || err instanceof RefusedAddress) return err.message;
   // An answer that does not parse: a parse error quotes the answer.
   if (err instanceof SyntaxError) return NOT_A_LIST;
   // The SDK's error for a status carries the provider's body in its message: only the status is read.
   if (err instanceof Anthropic.APIError && typeof err.status === "number")
     return statusWords("anthropic", err.status);
-  // A call that got no answer (the address guard, the deadline, the cap, the connection): the SDK wraps
-  // the transport's own error, whose words are the board's.
+  // A call that got no answer: the SDK wraps the transport's error.
   const inner = err instanceof Anthropic.APIConnectionError && err.cause instanceof Error ? err.cause : err;
-  const message = inner instanceof Error ? inner.message : "";
-  return (message || "no answer").slice(0, 300);
+  if (inner instanceof NotListed || inner instanceof RefusedAddress) return inner.message;
+  if (inner instanceof Error) {
+    // The pinned transport refuses an address in the address guard's words.
+    if (inner.message.startsWith("refused: ") || EGRESS_WORDS.test(inner.message))
+      return inner.message.slice(0, 300);
+    const code = (inner as { code?: unknown }).code;
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{2,40}$/.test(code)) return connectionWords(code);
+  }
+  return "the call to the provider failed before it answered";
+}
+
+/** Whether two rows of a provider are reached the same way: its address, region, header and key's name. */
+function sameSettings(a: ProviderRow, b: ProviderRow): boolean {
+  return (
+    a.endpoint === b.endpoint &&
+    a.region === b.region &&
+    a.auth_header === b.auth_header &&
+    sameJson(a.credentials, b.credentials)
+  );
 }
 
 /** The fetch a check sends with: the company's egress, no redirect followed, the answer capped. */
@@ -310,6 +361,10 @@ export async function checkProvider(
       )
     ).rows[0];
     if (!current) throw notFound("model provider");
+    // A check speaks for the settings it was made with: moved to another address, region or key meanwhile,
+    // the provider is not what was checked.
+    if (!sameSettings(current, row))
+      throw conflict(`${current.label} changed while it was being checked: check it again`);
     const models = check.ok ? keptModels(current.models, current.models, check) : current.models;
     const updated = (
       await ctx.client.query<ProviderRow>(

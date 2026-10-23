@@ -634,22 +634,44 @@ describe("Settings > Models", () => {
     expect(suggestedModels(checked).map((m) => m.id)).toEqual(["claude-sonnet-5-5"]);
     expect(suggestedModels(provider({ lastCheck: { ...ok, ok: false } }))).toEqual([]);
     expect(suggestedModels(provider({ kind: "azure_openai", lastCheck: ok }))).toEqual([]);
-    // A model the key did not reach says so, once the check listed all it reaches.
-    expect(unreached(checked, { source: "typed" })).toBe(true);
-    expect(unreached(checked, { source: "listed" })).toBe(false);
-    expect(unreached(provider({ lastCheck: { ...ok, listed: 900 } }), { source: "typed" })).toBe(false);
-    expect(unreached(provider({ kind: "azure_openai", lastCheck: ok }), { source: "typed" })).toBe(false);
-    expect(unreached(provider({ lastCheck: null }), { source: "typed" })).toBe(false);
+    // A model the key did not reach says so, once the check listed all it reaches; never a name that may stand
+    // for a listed one (an alias, a tag left off, an ARN), and never on Azure.
+    const typo = { id: "claude-opsu-5-5", source: "typed" as const };
+    expect(unreached(checked, typo)).toBe(true);
+    expect(unreached(checked, { id: "claude-opus-5-5", source: "typed" })).toBe(false);
+    expect(unreached(checked, { ...typo, source: "listed" })).toBe(false);
+    expect(unreached(checked, { id: "claude-sonnet-5", source: "typed" })).toBe(false);
+    const ollama = provider({
+      kind: "openai_compatible",
+      lastCheck: { ...ok, listed: 1, models: [{ id: "llama3.2:latest", family: "other" }] },
+    });
+    expect(unreached(ollama, { id: "llama3.2", source: "typed" })).toBe(false);
+    expect(unreached(ollama, { id: "qwen3", source: "typed" })).toBe(true);
+    expect(
+      unreached(checked, { id: "arn:aws:bedrock:us-east-1:0:inference-profile/x", source: "typed" }),
+    ).toBe(false);
+    expect(unreached(provider({ lastCheck: { ...ok, listed: 900 } }), typo)).toBe(false);
+    expect(unreached(provider({ kind: "azure_openai", lastCheck: ok }), typo)).toBe(false);
+    expect(unreached(provider({ lastCheck: null }), typo)).toBe(false);
 
     // On the page, two minutes before now, whenever the test runs.
-    const shown = provider({ lastCheck: { ...ok, at: new Date(Date.now() - 2 * 60_000).toISOString() } });
+    const shown = provider({
+      models: [
+        { id: "claude-opus-5-5", family: "claude", label: "Opus", source: "listed" },
+        { id: "claude-opsu-5-5", family: "claude", source: "typed" },
+      ],
+      lastCheck: { ...ok, at: new Date(Date.now() - 2 * 60_000).toISOString() },
+    });
     const html = panel({ initial: { ...providers, providers: [shown, ...providers.providers.slice(1)] } });
     expect(html).toContain('aria-label="Check Acme Anthropic"');
     expect(html).toContain('aria-label="Check Local vLLM"');
     // Not an archived provider, nor one of a kind no longer offered.
     expect(html).not.toContain('aria-label="Check Old Bedrock"');
     expect(html).toContain("Checked 2 min ago: key works, reaches 2 models");
-    expect(html).toContain("Runs on Claude Code · not among the models the key reaches");
+    expect(html.match(/ · not among the models the key reaches/g)).toHaveLength(1);
+    expect(html).toMatch(
+      /claude-opsu-5-5<\/td>.*?Runs on Claude Code · not among the models the key reaches<\/td>/,
+    );
     // The model id field offers what the key reaches and the list lacks, by the provider's own names.
     expect(html).toMatch(
       /<datalist id="[^"]+"><option value="claude-sonnet-5-5">Claude Sonnet 5.5<\/option><\/datalist>/,

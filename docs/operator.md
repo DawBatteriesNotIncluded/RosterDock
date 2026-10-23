@@ -315,9 +315,12 @@ change and remove providers; everyone in the company sees them by name.
   gets: a name that has moved to a private address you do not list is refused at the call, a redirect is not
   followed, and the answer is capped. Your own Anthropic settings where the board runs (`ANTHROPIC_BASE_URL`,
   `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_CUSTOM_HEADERS`, `ANTHROPIC_LOG`) never apply to a company's key. A key
-  the provider refuses is said in the board's words, never in the provider's, which can name part of the key.
+  the provider refuses is said in the board's words, never in the provider's, which can name part of the key;
+  a secret that is not one line of printable text is not sent, and the check names only its name.
   The card says when it was checked and what it found, marks a model on the list that the key does not
   reach, and offers the models it reaches when one is added; Check itself adds no model and takes none off.
+  A change to where a provider is reached (its address, region, header or key's name) clears its last check,
+  and a check that finds the provider changed while it was made is not kept (409, check again).
   An Azure resource lists the models it offers, not its deployments, so nothing is offered there. The
   provider's hosts are public, on 443: with `networkPolicy.enabled`, a private server's port goes in
   `networkPolicy.board.egressPorts` (11434 for Ollama), as a listed destination's does.
