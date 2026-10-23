@@ -20,6 +20,7 @@ import YAML from "yaml";
 import { notSetForCompany } from "../secrets/company.js";
 import { defaultEgress, egressFetch, readCapped, type Egress } from "../web/egress.js";
 import type { McpCallOutcome } from "./client.js";
+import { scrubber, scrubText, type Scrubber } from "./scrub.js";
 
 export type OpenApiManifest = OpenApiManifestInput;
 export type OpenApiOperation = OpenApiOperationInput;
@@ -240,10 +241,6 @@ function deepRedact(value: unknown, depth = 0): unknown {
   return value;
 }
 
-function scrub(text: string, secret: string | null): string {
-  return secret && secret.length >= 6 ? text.split(secret).join("[redacted]") : text;
-}
-
 function buildUrl(
   base: string,
   op: OpenApiOperation,
@@ -312,7 +309,7 @@ export async function probeOpenApi(
     return {
       ok: false,
       status: null,
-      error: `could not reach the service: ${scrub((err as Error).message, secret).slice(0, 200)}`,
+      error: `could not reach the service: ${scrubText((err as Error).message, [secret]).slice(0, 200)}`,
     };
   }
 }
@@ -373,16 +370,13 @@ export async function callOpenApiOperation(
   } catch (err) {
     return {
       ok: false,
-      error: `${name} could not reach the service: ${scrub((err as Error).message, secret).slice(0, 200)}`,
+      error: `${name} could not reach the service: ${scrubText((err as Error).message, [secret]).slice(0, 200)}`,
     };
   }
   if (!response.ok) {
-    // Error bodies never travel: the status line only.
+    // Error bodies never travel, nor the server's reason phrase, which may echo the credential: the status only.
     await response.body?.cancel().catch(() => {});
-    return {
-      ok: false,
-      error: `${name} answered HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`,
-    };
+    return { ok: false, error: `${name} answered HTTP ${response.status}` };
   }
   // Read up to the cap and no further, decoded: what a server compresses never grows past it in memory.
   let read: Awaited<ReturnType<typeof readCapped>>;
@@ -391,18 +385,50 @@ export async function callOpenApiOperation(
   } catch (err) {
     return {
       ok: false,
-      error: `${name} could not be read: ${scrub((err as Error).message, secret).slice(0, 200)}`,
+      error: `${name} could not be read: ${scrubText((err as Error).message, [secret]).slice(0, 200)}`,
     };
   }
   const truncated = read.cut;
-  const text = scrub(Buffer.from(read.bytes).toString("utf8"), secret);
-  let result: unknown = text;
-  if (!truncated) {
-    try {
-      result = deepRedact(JSON.parse(text));
-    } catch {
-      // A non-JSON answer stays as capped, scrubbed text.
-    }
+  // A byte order mark is no part of the answer, and JSON.parse refuses one.
+  const raw = Buffer.from(read.bytes)
+    .toString("utf8")
+    .replace(/^\uFEFF/, "");
+  const clean = scrubber([secret]);
+  return {
+    ok: true,
+    result: truncated ? { truncated: true, text: clean.digits(clean.cut(raw)) } : readAnswer(raw, clean),
+  };
+}
+
+/** A parsed value with secret-looking keys redacted and the credential out of every string. */
+function cleaned(value: unknown, clean: Scrubber): unknown {
+  return clean.value(deepRedact(value));
+}
+
+/** The value a JSON text holds, or undefined when it holds none. */
+function parsed(text: string): { value: unknown } | undefined {
+  try {
+    return { value: JSON.parse(text) as unknown };
+  } catch {
+    return undefined;
   }
-  return { ok: true, result: truncated ? { truncated: true, text } : result };
+}
+
+/**
+ * A whole answer as the teammate reads it, scrubbed once and then read as JSON, so a credential written into
+ * it unescaped goes as text does and a number in it is looked at as a number: JSON cleaned; newline-delimited
+ * JSON (a log, an export) cleaned line by line and written back as lines; anything else, scrubbing having
+ * broken the JSON or not, the scrubbed text with its numbers looked at too.
+ */
+function readAnswer(raw: string, clean: Scrubber): unknown {
+  const scrubbed = clean.text(raw);
+  const whole = parsed(scrubbed);
+  if (whole) return cleaned(whole.value, clean);
+  const lines = scrubbed.split("\n");
+  if (lines.filter((l) => l.trim()).length >= 2) {
+    const read = lines.map((l) => (l.trim() ? parsed(l) : null));
+    if (read.every((r) => r !== undefined))
+      return read.map((r, i) => (r ? JSON.stringify(cleaned(r.value, clean)) : lines[i])).join("\n");
+  }
+  return clean.digits(scrubbed);
 }

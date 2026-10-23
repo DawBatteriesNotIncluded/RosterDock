@@ -214,7 +214,7 @@ export function consentUrl(url: string): string {
 /** What the operator's list is, for a person to read; the company's own entries say so. */
 function listedPhrase(listed: readonly string[], own: readonly string[] = []): string {
   return listed.length
-    ? listed.map((e) => (own.includes(e) ? `${e} (this company only)` : e)).join(" · ")
+    ? listed.map((e) => (own.includes(e) ? `${e} (given to this company)` : e)).join(" · ")
     : "none";
 }
 

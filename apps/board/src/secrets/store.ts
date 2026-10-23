@@ -4,6 +4,8 @@
 // a connection: the tokens it obtains land under the connection's name and
 // are read back at call time, the way an env var name is resolved.
 
+import { trimTrailingSlashes } from "@rosterdock/shared";
+
 export type SecretData = Record<string, string>;
 
 export interface SecretStore {
@@ -37,4 +39,15 @@ export function assertSecretName(name: string): string {
 /** Where a connection's OAuth tokens live. */
 export function connectionSecretName(connectionId: string): string {
   return `rosterdock-connection-${connectionId.toLowerCase()}`;
+}
+
+/**
+ * A connection's entry if it is this issuer's, else nothing: every write names the issuer whose client secret
+ * and tokens it holds (`issuer`), so what one authorization server issued never reaches another, even when a
+ * late write lands after the connection moved. An entry written before entries named one is the row's.
+ */
+export function entryFor(data: SecretData | null, issuer: string | null): SecretData | null {
+  if (!data) return null;
+  if (data.issuer === undefined) return data;
+  return issuer !== null && trimTrailingSlashes(data.issuer) === trimTrailingSlashes(issuer) ? data : null;
 }

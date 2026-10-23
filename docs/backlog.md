@@ -35,6 +35,22 @@ scheduled; delete it when it ships.
 - A rework run starts from the round sent back only on a repository (`apps/worker/src/rework.ts`). Without
   one it starts empty, though the round's documents are new-file diffs in its `changes.diff`; and a round with
   a binary file never carries over, since the diff has no bytes for it (the run's artifacts do).
+- An MCP connection's authorization server metadata is used when the document's own `issuer` differs from
+  the issuer the board asked (`discoverAuthorizationServer` in `apps/board/src/mcp/oauth.ts` keeps the one
+  asked); RFC 8414 §3.3 says not to use it. Refuse a mismatch, once it is known which servers in use publish
+  one (an OpenID document read for an issuer with a path is the usual case).
+- A connection's OAuth client id, and its secret's name, change only through the API (`PATCH
+/api/companies/:companyId/connections/:connectionId` with `oauth`): the card has no field for them. When an
+  MCP server moves to another authorization server, a connection with a client id a person gave is removed
+  and added again, losing the tool classifications and switches a person set. Add the fields to the card.
+- An MCP answer at its 8 MB cap nested about four million levels deep raises the board's memory by about
+  600 MB while the MCP SDK parses and checks it, before the board's own depth cut applies. Count the nesting
+  in the answer's stream (`egressFetch`) and refuse past a few thousand levels before the SDK reads it.
+- The scrub builds its automaton for every MCP and OpenAPI call (`apps/board/src/mcp/scrub.ts`): 50
+  credentials of 8 KB take about 20 ms and 8 MB while the call lasts, and up to about 40 ms and 12 MB when
+  they hold escapes JSON reads into further forms (capped at the credentials' length again). If that ever matters under concurrency,
+  keep one per connection's credentials in an LRU bounded by bytes (credential length and arrays together),
+  keyed by a hash over length-prefixed credentials, never the values.
 - Company model providers (`docs/plan.html`, Company model providers), after its slices:
   - "Try a model" on a provider, a helper that moves teammates from one provider to another, and providers in
     template files.

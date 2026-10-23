@@ -2,7 +2,7 @@
 // authorization-code flow with PKCE, the id_token verified, memberships from
 // the email claim, and every way a sign-in is refused.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { checkClaims, resetOidcCaches, verifyJwt } from "../src/auth/oidc.js";
+import { checkClaims, resetOidcCaches, safeReturnTo, verifyJwt } from "../src/auth/oidc.js";
 import { startTestBoard, type TestBoard } from "./helpers.js";
 import { createOidcFake, type OidcFake } from "./oidc-fake.js";
 
@@ -324,5 +324,36 @@ describe("id_token verification (pure)", () => {
     expect(() => checkClaims({ ...claims, aud: ["x", CLIENT_ID] }, expect_)).not.toThrow();
     expect(() => checkClaims({ ...claims, exp: nowSeconds - 120 }, expect_)).toThrow(/expired/);
     expect(() => checkClaims({ ...claims, nonce: "m" }, expect_)).toThrow(/match this sign-in/);
+  });
+});
+
+describe("where a sign-in or an authorisation returns to", () => {
+  it("is a path on the board, never another site, however it is spelled", () => {
+    expect(safeReturnTo("/approvals?x=1")).toBe("/approvals?x=1");
+    // Past Latin-1 it is encoded, as the browser would have, so the redirect's Location header can carry it.
+    expect(safeReturnTo("/tasks?q=café ☕")).toBe("/tasks?q=caf%C3%A9 %E2%98%95");
+    expect(safeReturnTo("/tasks?q=%C3%A9")).toBe("/tasks?q=%C3%A9");
+    expect(safeReturnTo("/" + "é".repeat(400))).toBe("/" + "%C3%A9".repeat(83));
+    // Only a cut drops half an escape; a path that ends in one is kept as written.
+    expect(safeReturnTo("/x?q=100%")).toBe("/x?q=100%");
+    expect(safeReturnTo("/" + "a".repeat(497) + "%C3%A9")).toBe("/" + "a".repeat(497));
+    expect(safeReturnTo("/x\ud800")).toBe("/");
+    for (const off of [
+      "//evil.example/x",
+      "/\\evil.example",
+      "/\t/evil.example/x",
+      "/\n/evil.example",
+      "https://evil.example",
+      7,
+    ])
+      expect(safeReturnTo(off), JSON.stringify(off)).toBe("/");
+    // What a URL parser makes of the tab is why it is refused.
+    expect(new URL("/\t/evil.example/x", "https://board.example").host).toBe("evil.example");
+  });
+
+  it("comes back from the provider to a path written past Latin-1", async () => {
+    const { back } = await signIn({ sub: "sub-dora", email: "dora@example.com" }, "/tasks?q=☕");
+    expect(back.statusCode).toBe(302);
+    expect(back.headers.location).toBe("http://rosterdock.test/tasks?q=%E2%98%95");
   });
 });
