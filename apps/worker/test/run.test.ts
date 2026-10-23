@@ -485,6 +485,24 @@ describe("sandbox preset", () => {
   });
 });
 
+/**
+ * `wait`, or a failure that names it once `ms` have passed: a test that hangs says what it was waiting for,
+ * where vitest's own timeout says only that the test ran long.
+ */
+async function within<T>(ms: number, what: string, wait: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      wait,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`still waiting for ${what} after ${ms / 1000} s`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** A git host that accepts the connection and never answers: a clone against it stalls. Loopback only. */
 async function silentHost(): Promise<{ url: string; close(): Promise<void> }> {
   const sockets = new Set<net.Socket>();
@@ -505,6 +523,16 @@ async function silentHost(): Promise<{ url: string; close(): Promise<void> }> {
 
 describe("a stalled clone", () => {
   // Each test's clone in a folder of its own: a removal still going on from one never meets the next one's.
+  // A stopped clone's folder goes within removeTree's 2 s, or where Windows still holds it, in the background
+  // within 30 s more (prepareWorkspace): the tests wait past that, and vitest past them, so a hang names its wait.
+  const REMOVED_WITHIN_MS = 40_000;
+  const removed = (runId: string) =>
+    within(REMOVED_WITHIN_MS, `the stopped clone's folder ${runId} to be removed`, removalsDone()).then(() =>
+      expect(existsSync(path.join(workRoot, runId)), `${runId} outlived its removal`).toBe(false),
+    );
+  const closed = (host: { close(): Promise<void> }) =>
+    within(10_000, "the silent git host to close its connections", host.close());
+
   it("ends on Stop instead of holding the worker", async () => {
     const host = await silentHost();
     try {
@@ -514,15 +542,18 @@ describe("a stalled clone", () => {
         runId: "run-stall-stop",
       });
       const started = Date.now();
-      const outcome = await executeRun({ runId: "run-stall-stop", jobId: "job-1" }, deps(board));
+      const outcome = await within(
+        10_000,
+        "the stopped run to end",
+        executeRun({ runId: "run-stall-stop", jobId: "job-1" }, deps(board)),
+      );
       expect(outcome.status).toBe("stopped");
       expect(Date.now() - started).toBeLessThan(4000);
-      await removalsDone();
-      expect(existsSync(path.join(workRoot, "run-stall-stop"))).toBe(false);
+      await removed("run-stall-stop");
     } finally {
-      await host.close();
+      await closed(host);
     }
-  });
+  }, 90_000);
 
   it("never clones when the worker began stopping while its claim was out", async () => {
     const host = await silentHost();
@@ -541,21 +572,24 @@ describe("a stalled clone", () => {
       };
       const started = Date.now();
       await expect(
-        executeRun(
-          { runId: "run-stall-claim", jobId: "job-1" },
-          deps(board, {
-            shutdown: shutdown.signal,
-            gitCredential: { token: "claim-race-token", hosts: [`127.0.0.1:${port}`] },
-          }),
+        within(
+          10_000,
+          "the interrupted run to end",
+          executeRun(
+            { runId: "run-stall-claim", jobId: "job-1" },
+            deps(board, {
+              shutdown: shutdown.signal,
+              gitCredential: { token: "claim-race-token", hosts: [`127.0.0.1:${port}`] },
+            }),
+          ),
         ),
       ).rejects.toBeInstanceOf(RunInterrupted);
       expect(Date.now() - started).toBeLessThan(4000);
-      await removalsDone();
-      expect(existsSync(path.join(workRoot, "run-stall-claim"))).toBe(false);
+      await removed("run-stall-claim");
     } finally {
-      await host.close();
+      await closed(host);
     }
-  });
+  }, 90_000);
 
   it("counts against the run's time limit", async () => {
     const host = await silentHost();
@@ -565,20 +599,20 @@ describe("a stalled clone", () => {
         sandbox: { allowedTools: null, envNames: null, timeoutSeconds: 1 },
         runId: "run-stall-limit",
       });
-      const outcome = await executeRun(
-        { runId: "run-stall-limit", jobId: "job-1" },
-        deps(board, { heartbeatMs: 10_000 }),
+      const outcome = await within(
+        10_000,
+        "the run past its time limit to end",
+        executeRun({ runId: "run-stall-limit", jobId: "job-1" }, deps(board, { heartbeatMs: 10_000 })),
       );
       expect(outcome.status).toBe("failed");
       expect(board.completion?.blocker?.code).toBe("timeout");
       expect(board.completion?.error).toMatch(/time limit/);
       // Gone, token and all: at once where git dies at once, once git lets go where taskkill ends it (Windows).
-      await removalsDone();
-      expect(existsSync(path.join(workRoot, "run-stall-limit"))).toBe(false);
+      await removed("run-stall-limit");
     } finally {
-      await host.close();
+      await closed(host);
     }
-  });
+  }, 90_000);
 
   it("leaves nothing of a clone stopped part-way, the git token in its config included", async () => {
     const host = await silentHost();
@@ -590,17 +624,20 @@ describe("a stalled clone", () => {
         stopAfterHeartbeats: 4,
         runId: "run-stall-token",
       });
-      const outcome = await executeRun(
-        { runId: "run-stall-token", jobId: "job-1" },
-        deps(board, { gitCredential: { token: "partial-clone-token", hosts: [`127.0.0.1:${port}`] } }),
+      const outcome = await within(
+        10_000,
+        "the stopped run to end",
+        executeRun(
+          { runId: "run-stall-token", jobId: "job-1" },
+          deps(board, { gitCredential: { token: "partial-clone-token", hosts: [`127.0.0.1:${port}`] } }),
+        ),
       );
       expect(outcome.status).toBe("stopped");
-      await removalsDone();
-      expect(existsSync(path.join(workRoot, "run-stall-token"))).toBe(false);
+      await removed("run-stall-token");
     } finally {
-      await host.close();
+      await closed(host);
     }
-  });
+  }, 90_000);
 });
 
 describe("repository tests", () => {
