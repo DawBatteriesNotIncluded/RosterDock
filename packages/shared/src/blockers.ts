@@ -4,13 +4,15 @@
 //
 // Carried over from the v1 prototype. The governance ladder codes
 // (kill_switch, governance_level) are gone with the ladder. `waiting_on_teammate`
-// is new: the Blocked column's three reasons are dependency, waiting on a
-// teammate, and waiting on an approval.
+// is new: the Blocked column's reasons are dependency, waiting on a teammate,
+// waiting on a person, and waiting on an approval.
 
 export const BLOCKER_CODES = [
   "dependencies_unresolved",
   "waiting_on_teammate",
+  "waiting_on_person",
   "approval_required",
+  "approval_rejected",
   "missing_config",
   "missing_secret_ref",
   "transport_unreachable",
@@ -26,7 +28,7 @@ export const BLOCKER_CODES = [
 export type BlockerCode = (typeof BLOCKER_CODES)[number];
 
 /** What the board shows: the manager-facing grouping of a blocker. */
-export type BlockerKind = "dependency" | "teammate" | "approval" | "run";
+export type BlockerKind = "dependency" | "teammate" | "person" | "approval" | "run";
 
 export interface BlockerRecord {
   code: BlockerCode;
@@ -57,6 +59,12 @@ const DEFAULTS: Record<BlockerCode, Omit<BlockerRecord, "code">> = {
     resolution: "Answer on the task, or ask the named teammate to.",
     retrySafe: true,
   },
+  waiting_on_person: {
+    what: "The task is waiting on a person.",
+    why: "The assignee needs what only a person can give: an answer, access, a credential or a decision.",
+    resolution: "Give it what it asks for, answering on the task, then unblock it.",
+    retrySafe: true,
+  },
   approval_required: {
     what: "The run stopped at an approval gate.",
     why: "An external write was proposed and needs a decision.",
@@ -64,6 +72,14 @@ const DEFAULTS: Record<BlockerCode, Omit<BlockerRecord, "code">> = {
     retrySafe: false,
     resumeInstructions:
       "Decide the approval; do not start the task again, a second run would propose the same write again.",
+  },
+  approval_rejected: {
+    what: "A person rejected the write the teammate proposed.",
+    why: "Nothing was sent and nothing waits for a decision any more.",
+    resolution: "Start it again with a note on what to do instead of that write, reassign it, or cancel it.",
+    retrySafe: false,
+    resumeInstructions:
+      "Start it again with a note saying what to do instead; started as it is, it may propose the same write.",
   },
   missing_config: {
     what: "The engine is not set up.",
@@ -147,14 +163,17 @@ export function isBlockerCode(value: unknown): value is BlockerCode {
   return typeof value === "string" && (BLOCKER_CODES as readonly string[]).includes(value);
 }
 
-/** The Blocked column groups blockers into three manager-facing reasons plus "run". */
+/** The Blocked column groups blockers into four manager-facing reasons plus "run". */
 export function blockerKind(code: BlockerCode): BlockerKind {
   switch (code) {
     case "dependencies_unresolved":
       return "dependency";
     case "waiting_on_teammate":
       return "teammate";
+    case "waiting_on_person":
+      return "person";
     case "approval_required":
+    case "approval_rejected":
       return "approval";
     default:
       return "run";

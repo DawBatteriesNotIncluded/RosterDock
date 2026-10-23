@@ -1,23 +1,31 @@
 // One ephemeral directory per run. With a repository: shallow clone, run, then
 // capture the diff. Without: an empty directory the outputs land in.
-// The git token, when present, goes into the clone URL only and is never
-// logged or written to the board. git itself sees none of the worker's
-// environment and no config but the clone's own: the harvest runs git in a
-// checkout the run has just changed, and a filter, an fsmonitor or a hook the
-// run wrote into it would otherwise run with the worker's credentials.
+// The git token, when present, goes into the clone URL only, on the hosts it is
+// meant for, and is never logged or written to the board. git itself sees none
+// of the worker's environment and no config but the clone's own: the harvest
+// runs git in a checkout the run has just changed, and a filter, an fsmonitor
+// or a hook the run wrote into it would otherwise run with the worker's
+// credentials.
 
 import { spawn } from "node:child_process";
-import { constants, type Stats } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  isTreePath,
   parseUnifiedDiff,
   renderBinaryFileDiff,
   renderNewFileDiff,
   type RunArtifactInput,
 } from "@rosterdock/shared";
+import { killTree } from "./kill.js";
 import { clip } from "./text.js";
+
+// Windows looks for a program in the directory it starts in before PATH, and the worker starts git and the
+// engine in a run's directory: a git.exe or claude.exe the repository holds would run in their place. With
+// this set, Windows and the libuv under Node look on PATH only, for every program this process starts.
+if (process.platform === "win32") process.env.NoDefaultCurrentDirectoryInExePath = "1";
 
 export const HANDOVER_FILE = "handover-summary.md";
 export const BLOCKED_FILE = "blocked.md";
@@ -30,9 +38,11 @@ export interface Workspace {
   repo: boolean;
   /** .git/config as the clone left it, put back before the harvest runs git. */
   gitConfig?: string;
+  /** The commit the clone is at: the run's changes are read back against it, and against no other. */
+  clonedSha?: string;
 }
 
-/** Where programs live, the temp directory, the locale: all git needs from the worker's environment. */
+/** Where programs live, the temp directory, the locale (whose messages LC_ALL=C sets to English): all git needs. */
 const GIT_ENV_KEYS = [
   "PATH",
   "Path",
@@ -48,14 +58,32 @@ const GIT_ENV_KEYS = [
   "TZ",
 ];
 
-/** git's environment: the keys above, no prompt, and no system or global config (a credential helper, an include, a ~/.gitconfig an earlier run wrote). */
+/**
+ * The global config git reads: none. Not os.devNull, which is \\.\nul on Windows and a path Git for Windows
+ * refuses to read config from; it takes /dev/null as the null device itself.
+ */
+export const GIT_NO_CONFIG = "/dev/null";
+
+/**
+ * git's environment: the keys above, no prompt, and no system or global config (a credential helper, an include, a
+ * ~/.gitconfig an earlier run wrote). Its messages in English (LC_ALL=C), whatever the worker's locale: the worker
+ * reads some of them (a folder git could not open, why a patch did not apply).
+ */
 export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of GIT_ENV_KEYS) {
     const v = env[key];
     if (v !== undefined) out[key] = v;
   }
-  return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull };
+  return {
+    ...out,
+    LC_ALL: "C",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    // Nor the system's attributes file, which a run on a worker outside the image may write.
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
+  };
 }
 
 /**
@@ -65,12 +93,16 @@ export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<str
  */
 const GIT_KEY_ALLOWED = /^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL|DATE)$/;
 
-/** Every command: no fsmonitor and no hooks, whatever the repository's config says. */
+/**
+ * Every command: no fsmonitor and no hooks, whatever the repository's config says. Hooks are looked for under
+ * the null device, where no file can be: on Windows too (`\\.\nul`), though git refuses it as a config file.
+ */
 const GIT_SAFE_ARGS = ["-c", "core.fsmonitor=false", "-c", `core.hooksPath=${os.devNull}`];
 
 /**
  * Run git with gitEnvironment; `extraEnv` is for the worker's own tests (an author for a commit). An abort
- * kills git and the helpers it started (the network side of a clone is a process of its own).
+ * kills git and the helpers it started (the network side of a clone is a process of its own): its process
+ * group, or on Windows its process tree.
  */
 export function git(
   args: string[],
@@ -110,7 +142,8 @@ export function git(
     };
     const onAbort = () => {
       try {
-        if (group && child.pid) process.kill(-child.pid, "SIGKILL");
+        if (process.platform === "win32") killTree(child);
+        else if (group && child.pid) process.kill(-child.pid, "SIGKILL");
         else child.kill("SIGKILL");
       } catch {
         // gone
@@ -123,13 +156,98 @@ export function git(
   });
 }
 
-export function withToken(repoUrl: string, token: string | null): string {
-  if (!token) return repoUrl;
+/** git as `git` runs it, its output as bytes: names git prints with -z need not be UTF-8. */
+export function gitBytes(
+  args: string[],
+  cwd: string,
+): Promise<{ code: number | null; stdout: Buffer; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("git", [...GIT_SAFE_ARGS, ...args], {
+      cwd,
+      env: gitEnvironment(),
+      shell: false,
+      windowsHide: true,
+    });
+    const out: Buffer[] = [];
+    let stderr = "";
+    child.stdout.on("data", (c: Buffer) => out.push(c));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (c: string) => (stderr += c));
+    child.on("error", (err) =>
+      resolve({ code: null, stdout: Buffer.concat(out), stderr: `${stderr}\n${err.message}` }),
+    );
+    child.on("close", (code) => resolve({ code, stdout: Buffer.concat(out), stderr }));
+  });
+}
+
+/**
+ * NUL-separated entries as git prints them with -z: those that decode as UTF-8, and, apart and spelled in ASCII
+ * (`unz\x82.txt`), those that do not. Decoded loosely, every such name would be one and the same, U+FFFD where
+ * its bytes were, and collide with the others.
+ */
+export function decodeNames(out: Buffer): { names: string[]; notUtf8: string[] } {
+  // ignoreBOM: a name that starts with U+FEFF keeps it, as another without it is another file.
+  const strict = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const decoded = { names: [] as string[], notUtf8: [] as string[] };
+  for (let at = 0, end = out.indexOf(0); end >= 0; at = end + 1, end = out.indexOf(0, at)) {
+    const entry = out.subarray(at, end);
+    try {
+      decoded.names.push(strict.decode(entry));
+    } catch {
+      decoded.notUtf8.push(
+        [...entry]
+          // A backslash doubled, so `\\x82` the four characters reads apart from `\x82` the byte.
+          .map((b) =>
+            b === 0x5c
+              ? "\\\\"
+              : b >= 0x20 && b < 0x7f
+                ? String.fromCharCode(b)
+                : `\\x${b.toString(16).padStart(2, "0")}`,
+          )
+          .join(""),
+      );
+    }
+  }
+  return decoded;
+}
+
+/** A name as a reason quotes it: quoted and in ASCII, so a space or a U+FEFF at an end shows (`"\ufeffreport.md"`). */
+function spellName(name: string): string {
+  return JSON.stringify(name).replace(
+    /[^\x20-\x7e]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
+ * Why git said it failed, in its line: its error before any warning beside it (a line-ending one), the warning
+ * where that is all it said, its last line otherwise. Credentials redacted.
+ */
+export function gitReason(stderr: string): string {
+  const lines = redactGit(stderr).trim().split("\n");
+  return (
+    lines.find((l) => /^(?:error|fatal):/.test(l)) ??
+    lines.find((l) => /^warning:/.test(l)) ??
+    lines.at(-1) ??
+    ""
+  );
+}
+
+/** The fleet's git token and the hosts it is for (ROSTERDOCK_GIT_TOKEN, ROSTERDOCK_GIT_TOKEN_HOSTS). */
+export interface GitCredential {
+  token: string;
+  /** Lower-case host names, with the port where it is not 443. A repository anywhere else gets no token. */
+  hosts: readonly string[];
+}
+
+/** The clone URL with the token in it: https on one of the token's own hosts only. */
+export function withToken(repoUrl: string, credential: GitCredential | null): string {
+  if (!credential) return repoUrl;
   try {
     const u = new URL(repoUrl);
-    if (u.protocol !== "https:" || u.username) return repoUrl;
+    if (u.protocol !== "https:" || u.username || !credential.hosts.includes(u.host)) return repoUrl;
     u.username = "x-access-token";
-    u.password = token;
+    u.password = credential.token;
     return u.toString();
   } catch {
     return repoUrl;
@@ -144,18 +262,63 @@ export function redactGit(text: string): string {
 /** A clone that moves less than this many bytes a second for this many seconds gives up. */
 export const CLONE_LOW_SPEED = { bytesPerSecond: 1000, seconds: 60 };
 
-/** The run's directory, with the repository cloned into it. `signal` (Stop, the time limit, shutdown) ends the clone. */
+/**
+ * Removals of a stopped clone's folder that outlived removeTree's window, by folder: a run prepared there next
+ * waits for its own, so it never takes the new clone's files, and a worker that stops waits for them all.
+ */
+const removing = new Map<string, Promise<void>>();
+
+/**
+ * Every stopped clone's removal still going on, settled: each folder gone, or given up after half a minute.
+ * One a run still ending starts meanwhile is waited for too.
+ */
+export async function removalsDone(): Promise<void> {
+  while (removing.size) await Promise.all([...removing.values()]);
+}
+
+/**
+ * The run's directory, with the repository cloned into it. `signal` (Stop, the time limit, shutdown) ends the
+ * clone; a clone that fails or is ended leaves no directory behind.
+ */
 export async function prepareWorkspace(
   workRoot: string,
   runId: string,
   project: { repoUrl: string | null; defaultBranch: string },
-  gitToken: string | null,
+  credential: GitCredential | null,
   signal?: AbortSignal,
+  /** How a folder is removed; a test's stands in for a file Windows holds. */
+  remove: typeof rm = rm,
 ): Promise<Workspace> {
   const dir = path.join(workRoot, runId);
-  await rm(dir, { recursive: true, force: true });
+  await removing.get(dir);
+  // A git just stopped in it holds its files a moment on Windows (EBUSY).
+  await removeTree(dir, undefined, remove);
   await mkdir(dir, { recursive: true });
   if (!project.repoUrl) return { dir, repo: false };
+  try {
+    return await cloneInto(dir, { ...project, repoUrl: project.repoUrl }, credential, signal);
+  } catch (err) {
+    // A clone that failed or was stopped part-way leaves nothing: its .git/config holds the URL, token and all.
+    // On Windows a git just ended by taskkill may hold its files past removeTree's window: the removal goes on
+    // without holding the run's stop, until git lets go.
+    await removeTree(dir, undefined, remove).catch(() => {
+      const removal: Promise<void> = removeTree(dir, 30_000, remove)
+        .catch(() => {})
+        .finally(() => {
+          if (removing.get(dir) === removal) removing.delete(dir);
+        });
+      removing.set(dir, removal);
+    });
+    throw err;
+  }
+}
+
+async function cloneInto(
+  dir: string,
+  project: { repoUrl: string; defaultBranch: string },
+  credential: GitCredential | null,
+  signal?: AbortSignal,
+): Promise<Workspace> {
   const res = await git(
     [
       "-c",
@@ -168,7 +331,7 @@ export async function prepareWorkspace(
       "--branch",
       project.defaultBranch,
       "--",
-      withToken(project.repoUrl, gitToken),
+      withToken(project.repoUrl, credential),
       ".",
     ],
     dir,
@@ -182,8 +345,14 @@ export async function prepareWorkspace(
     );
   }
   // Never leave the credential in the checkout.
-  if (gitToken) await git(["remote", "set-url", "origin", project.repoUrl], dir);
-  return { dir, repo: true, gitConfig: await readFile(path.join(dir, ".git", "config"), "utf8") };
+  if (credential) await git(["remote", "set-url", "origin", project.repoUrl], dir);
+  const head = (await git(["rev-parse", "HEAD"], dir)).stdout.trim();
+  return {
+    dir,
+    repo: true,
+    gitConfig: await readFile(path.join(dir, ".git", "config"), "utf8"),
+    ...(head ? { clonedSha: head } : {}),
+  };
 }
 
 /**
@@ -199,6 +368,14 @@ async function restoreGitDir(ws: Workspace): Promise<void> {
     throw new Error(
       "the run replaced the repository's .git directory, so its changes cannot be read back for review",
     );
+  // What the run gave this clone alone in .git/info goes: attributes (`config.json -diff`) would have the diff
+  // call a text file binary, which the review cannot show, and an exclude would hide a .gitattributes that does
+  // the same, or any file, from the diff. The clone's own holds only comments. A link goes itself, never what it
+  // points at.
+  const info = path.join(gitDir, "info");
+  const infoSt = await lstat(info).catch(() => null);
+  if (infoSt?.isSymbolicLink()) await rm(info, { force: true });
+  else if (infoSt) await rm(info, { force: true, recursive: true });
   if (ws.gitConfig === undefined) return;
   const config = path.join(gitDir, "config");
   // Removed first: a symlink the run left there must not redirect the write.
@@ -207,7 +384,31 @@ async function restoreGitDir(ws: Workspace): Promise<void> {
 }
 
 export async function cleanupWorkspace(ws: Workspace): Promise<void> {
-  await rm(ws.dir, { recursive: true, force: true, maxRetries: 3 });
+  await removeTree(ws.dir);
+}
+
+/** What removing a file says while a process still holds it (Windows) or writes beside it. */
+const BUSY = new Set(["EBUSY", "EPERM", "ENOTEMPTY", "EMFILE", "ENFILE"]);
+
+/**
+ * Remove a directory and everything in it, trying again while something in it is busy, for `withinMs` at
+ * most once a try has failed (the first try takes as long as the tree does, a large node_modules seconds);
+ * then throw what the last try threw. Windows removes no file a process still holds, such as a program
+ * running from it. Node's own maxRetries retries at every level of the tree, so one file that stays held
+ * kept a removal going for minutes. `remove` is for the worker's own tests.
+ */
+export async function removeTree(dir: string, withinMs = 2000, remove: typeof rm = rm): Promise<void> {
+  let until: number | undefined;
+  for (let wait = 50; ; wait = Math.min(wait * 2, 500)) {
+    try {
+      await remove(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      until ??= Date.now() + withinMs;
+      if (!BUSY.has((err as NodeJS.ErrnoException).code ?? "") || Date.now() + wait > until) throw err;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
 }
 
 export interface Harvest {
@@ -222,6 +423,11 @@ export interface Harvest {
   baseSha: string | null;
   /** Files whose changes did not fit in the diff the board takes, so the review does not show them. */
   diffOmitted: string[];
+  /**
+   * Why git could not read the changes back (a lock a git ended part-way left behind), so there is no diff: a
+   * run that would complete fails with it rather than send part of its change for review. Null when it could.
+   */
+  unreadable: string | null;
 }
 
 /**
@@ -229,27 +435,72 @@ export interface Harvest {
  * is left out and named, never cut inside a hunk, so the review never shows (and a merge never applies)
  * half a change.
  */
+/** A file's stanza by its path, or its first line where it cannot be read. */
+function fileName(stanza: string): string {
+  try {
+    return parseUnifiedDiff(stanza)[0]?.path || stanza.split("\n", 1)[0]!;
+  } catch {
+    return stanza.split("\n", 1)[0]!;
+  }
+}
+
 export function fitDiff(diffText: string, maxBytes: number): { text: string; omitted: string[] } {
   if (Buffer.byteLength(diffText, "utf8") <= maxBytes) return { text: diffText, omitted: [] };
   const kept: string[] = [];
   const omitted: string[] = [];
   let used = 0;
-  for (const file of diffText.split(/^(?=diff --git )/m).filter(Boolean)) {
+  // Split before a line that starts "diff --git", after a \n only: not after a U+2028 or a CR inside a line.
+  for (const file of diffText.split(/(?<=\n)(?=diff --git )/).filter(Boolean)) {
     const bytes = Buffer.byteLength(file, "utf8");
     if (used + bytes <= maxBytes) {
       kept.push(file);
       used += bytes;
-    } else omitted.push(parseUnifiedDiff(file)[0]?.path || file.split("\n", 1)[0]!);
+    } else omitted.push(fileName(file));
   }
   return { text: kept.join(""), omitted };
 }
 
 /**
+ * How a checked file is opened: no link at the last step even if one appeared since the check (O_NOFOLLOW),
+ * and a pipe swapped in never blocks the open (O_NONBLOCK). Windows has neither flag, so there the open
+ * follows a link that appeared since, and the identity check after it is what refuses the file.
+ */
+const READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+
+/**
+ * Whether the file opened is the file checked: the same device and file id. The id is compared whole (an
+ * NTFS id does not fit in a number, and rounded it matches its neighbours) and is never one that names no
+ * file, which would match any other: 0, or all ones (-1 as Node reads it), which ReFS (a Dev Drive) gives a
+ * file whose id does not fit in 64 bits.
+ */
+export function sameFile(
+  opened: { dev: bigint; ino: bigint },
+  checked: { dev: bigint; ino: bigint },
+): boolean {
+  return opened.ino !== 0n && opened.ino !== -1n && opened.ino === checked.ino && opened.dev === checked.dev;
+}
+
+/**
+ * A directory's device, by a handle on it. On Windows the harvest compares devices this way: with libuv 1.49
+ * and 1.50 (Node 22.12 to 22.16, 23.1 to 23.11, 24.0 to 24.1), where Windows has GetFileInformationByName
+ * (11 24H2, Server 2025), a stat by path reads the device from the wrong field (0 on NTFS), and a stat by
+ * handle is right on every version.
+ */
+async function deviceOf(dir: string): Promise<bigint> {
+  const handle = await open(dir, constants.O_RDONLY);
+  try {
+    return (await handle.stat({ bigint: true })).dev;
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * A file the run left, by its path in the workspace, read only as a regular file reached without a symbolic
- * link and inside the workspace. A run that leaves `report.md -> /proc/self/environ`, or a linked directory on
- * the way, would otherwise hand the worker's own environment (the database URL, its token, the model keys) to
- * the company as an artifact. Such a path goes into `refused` and is never opened. Null: not there, not a
- * regular file, or over the cap.
+ * link (a junction, on Windows) and inside the workspace. A run that leaves `report.md -> /proc/self/environ`,
+ * or a linked directory on the way, would otherwise hand the worker's own environment (the database URL, its
+ * token, the model keys) to the company as an artifact. Such a path goes into `refused` and is never opened.
+ * Null: not there, not a regular file, or over the cap.
  */
 async function readInWorkspace(
   root: string,
@@ -266,10 +517,10 @@ async function readInWorkspace(
   try {
     // lstat every step, the file included: a link anywhere on the way is refused.
     let at = root;
-    let last: Stats | null = null;
+    let last: BigIntStats | null = null;
     for (const part of inner.split(path.sep)) {
       at = path.join(at, part);
-      last = await lstat(at);
+      last = await lstat(at, { bigint: true });
       if (last.isSymbolicLink()) {
         refused.push(rel);
         return null;
@@ -282,12 +533,13 @@ async function readInWorkspace(
       refused.push(rel);
       return null;
     }
-    // No link at the last step even if one appeared since, a pipe swapped in never blocks the read, and
-    // the file opened must be the one checked above.
-    const handle = await open(at, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const handle = await open(at, READ_FLAGS);
     try {
-      const s = await handle.stat();
-      if (s.dev !== last.dev || s.ino !== last.ino) {
+      // The file opened must be the one checked above. On Windows its device is the workspace's, both read by
+      // a handle (deviceOf); elsewhere the one lstat found.
+      const opened = await handle.stat({ bigint: true });
+      const dev = process.platform === "win32" ? await deviceOf(root) : last.dev;
+      if (!sameFile(opened, { dev, ino: last.ino })) {
         refused.push(rel);
         return null;
       }
@@ -328,6 +580,73 @@ async function readArtifact(
     : { content: buf.toString("utf8"), encoding: "utf8" };
 }
 
+/**
+ * Entries the run flagged skip-worktree or assume-unchanged in the index stay as staged, whatever the file on
+ * disk holds: the review would show the index while the run delivered the file. The flags go before the add.
+ * False where git would not clear them.
+ */
+async function clearIndexFlags(ws: Workspace): Promise<boolean> {
+  const listed = decodeNames((await gitBytes(["ls-files", "-v", "-z"], ws.dir)).stdout).names;
+  // `S` (or `s`) skip-worktree; a lower-case tag, assume-unchanged. One flag a call: git applies the last.
+  const tagged = (test: (tag: string) => boolean) =>
+    listed.filter((e) => e.length > 2 && test(e[0]!)).map((e) => e.slice(2));
+  for (const [flag, paths] of [
+    ["--no-skip-worktree", tagged((t) => t === "S" || t === "s")],
+    ["--no-assume-unchanged", tagged((t) => t >= "a" && t <= "z")],
+  ] as const) {
+    for (let i = 0; i < paths.length; i += 200) {
+      const cleared = await git(["update-index", flag, "--", ...paths.slice(i, i + 200)], ws.dir);
+      if (cleared.code !== 0) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Where git checks a link out as a plain file holding its target (core.symlinks false, as Git for Windows has
+ * it), git add keeps the link's type for that file, whatever the run wrote in it (or staged itself), and the
+ * diff would show the link pointing at the file's new contents. The run wrote a file there: each committed
+ * link (HEAD's) still in the index as one, whose file is now a regular one with other contents, leaves the
+ * index and comes back as that file, forced, since the add after this skips a path .gitignore matches. The
+ * diff then shows the link replaced by the file, as on Linux, where this changes nothing. A link the run took
+ * out of the index itself stays out: forced back, an ignored file it keeps locally would land in the diff.
+ * Nothing is forced when the removal fails, and a failed add puts HEAD's entries back.
+ */
+async function unstageLinksMadeFiles(ws: Workspace): Promise<void> {
+  const [tree, index, changed] = await Promise.all([
+    git(["ls-tree", "-r", "-z", "--full-tree", "HEAD"], ws.dir),
+    git(["ls-files", "--stage", "-z"], ws.dir),
+    git(
+      ["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "HEAD", "--"],
+      ws.dir,
+    ),
+  ]);
+  if (tree.code !== 0 || index.code !== 0 || changed.code !== 0) return;
+  const links = (out: string, entry: RegExp) =>
+    new Set(out.split("\0").flatMap((e) => entry.exec(e)?.[1] ?? []));
+  // ls-tree: mode, type, object, path; ls-files --stage: mode, object, stage, path.
+  const committed = links(tree.stdout, /^120000 blob [0-9a-f]+\t(.+)$/s);
+  const staged = links(index.stdout, /^120000 [0-9a-f]+ \d\t(.+)$/s);
+  const differs = new Set(changed.stdout.split("\0"));
+  const files: string[] = [];
+  for (const link of committed) {
+    // The handover and the blocked note stay out of the add, so out of this too.
+    if (link === HANDOVER_FILE || link === BLOCKED_FILE || !staged.has(link) || !differs.has(link)) continue;
+    if ((await lstat(path.join(ws.dir, link)).catch(() => null))?.isFile()) files.push(link);
+  }
+  if (!files.length) return;
+  const literal = ["--literal-pathspecs"];
+  const out = await git(
+    // --force: an entry the run staged and then changed again ("staged content different from both the file and
+    // the HEAD") is taken out too, not the whole list refused; --cached never touches the file itself.
+    [...literal, "rm", "--cached", "--force", "--quiet", "--ignore-unmatch", "--", ...files],
+    ws.dir,
+  );
+  if (out.code !== 0) return;
+  const back = await git([...literal, "add", "--force", "--", ...files], ws.dir);
+  if (back.code !== 0) await git([...literal, "reset", "--quiet", "--", ...files], ws.dir);
+}
+
 /** Declared outputs (or, if none were declared, new and changed files), the handover, blocked note and diff. */
 export async function harvestWorkspace(
   ws: Workspace,
@@ -344,6 +663,7 @@ export async function harvestWorkspace(
     filesWritten: [],
     baseSha: null,
     diffOmitted: [],
+    unreadable: null,
   };
   if (ws.repo) await restoreGitDir(ws);
   const refused = out.refusedOutputs;
@@ -354,17 +674,33 @@ export async function harvestWorkspace(
   if (declaredOutputs.length) {
     candidates = declaredOutputs;
   } else if (ws.repo) {
-    const status = await git(["status", "--porcelain", "--untracked-files=all"], ws.dir);
-    candidates = status.stdout
-      .split("\n")
-      .map((l) => l.slice(3).trim())
-      .filter((p) => p && p !== HANDOVER_FILE && p !== BLOCKED_FILE)
+    // -z: every name as it is (a space, a quote, a character git would escape); --no-renames: a moved file by its
+    // new name, as the diff has it.
+    const status = await gitBytes(
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"],
+      ws.dir,
+    );
+    // One whose name is not UTF-8 is left out here; the read-back below fails a run that would complete on it.
+    const entries = decodeNames(status.stdout).names;
+    // A path git calls deleted is not a file the run wrote, whatever is on disk there: a file the run took out of
+    // the index and kept, ignored (a local .env), is listed only so. One it kept and git does not ignore is
+    // listed again as untracked. A merge conflict's side (UD, DU) is a file the run may have resolved.
+    const deleted = (xy: string) => xy.includes("D") && !xy.includes("U");
+    candidates = entries
+      .filter((entry) => entry.length > 3 && !deleted(entry.slice(0, 2)))
+      .map((entry) => entry.slice(3))
+      .filter((p) => p !== HANDOVER_FILE && p !== BLOCKED_FILE)
       .slice(0, MAX_UNDECLARED_FILES);
   } else {
-    const entries = await readdir(ws.dir, { withFileTypes: true });
-    candidates = entries
-      .filter((e) => e.isFile() && e.name !== HANDOVER_FILE && e.name !== BLOCKED_FILE)
-      .map((e) => e.name)
+    // By their bytes, as in a repository: a name that is not UTF-8 is left out, and fails a run that would
+    // complete, where read loosely it would collide with another.
+    const entries = await readdir(ws.dir, { withFileTypes: true, encoding: "buffer" });
+    const files = entries.filter((e) => e.isFile());
+    const { names, notUtf8 } = decodeNames(Buffer.concat(files.flatMap((e) => [e.name, Buffer.from([0])])));
+    if (notUtf8.length)
+      out.unreadable ??= `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
+    candidates = names
+      .filter((n) => n !== HANDOVER_FILE && n !== BLOCKED_FILE)
       .slice(0, MAX_UNDECLARED_FILES);
   }
   for (const rel of candidates) {
@@ -388,22 +724,156 @@ export async function harvestWorkspace(
   // rename detection so every hunk applies to one path. Without: a diff that
   // adds every harvested text file, so the review looks the same.
   let diffText = "";
+  // The names the diff carries, as git spells them.
+  let diffNames: string[] = [];
   if (ws.repo) {
     const head = await git(["rev-parse", "HEAD"], ws.dir);
     if (head.code === 0) out.baseSha = head.stdout.trim() || null;
-    await git(["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`], ws.dir);
-    const diff = await git(
-      ["diff", "--cached", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv"],
+    // The changes are read back against the commit the clone was at: a run that checked out another ref, or
+    // committed, would bring into its pull request commits no review showed.
+    if (ws.clonedSha && out.baseSha !== ws.clonedSha)
+      out.unreadable ??= `the run's changes could not be read back for review (the clone is no longer at ${ws.clonedSha.slice(0, 12)}, the commit it was cloned at: a checkout or a commit moved it)`;
+    if (!(await clearIndexFlags(ws)))
+      out.unreadable ??=
+        "the run's changes could not be read back for review (git could not clear the flags the run set on its index)";
+    await unstageLinksMadeFiles(ws);
+    const add = await git(
+      ["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`],
       ws.dir,
     );
-    if (diff.code === 0) diffText = diff.stdout;
+    // A folder git cannot open it passes over with a warning, and adds the rest: that is part of the change.
+    const skipped = /^warning: could not open directory .*$/m.exec(add.stderr)?.[0];
+    const staged = add.code === 0 && !skipped;
+    // Every name the diff will carry, read as bytes: one that is not UTF-8 is no name the review can hold.
+    const { names, notUtf8 } = staged
+      ? decodeNames(
+          (await gitBytes(["diff", "--cached", "--name-only", "-z", "--no-renames"], ws.dir)).stdout,
+        )
+      : { names: [], notUtf8: [] };
+    diffNames = names;
+    if (notUtf8.length)
+      out.unreadable ??= `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
+    else {
+      const diff = staged
+        ? await git(
+            // core.quotePath false: a name past ASCII as it is; one with a quote or a control character is
+            // still quoted, and parseUnifiedDiff reads it back.
+            [
+              "-c",
+              "core.quotePath=false",
+              "diff",
+              "--cached",
+              "--no-color",
+              "--no-renames",
+              "--no-ext-diff",
+              "--no-textconv",
+            ],
+            ws.dir,
+          )
+        : { ...add, code: add.code || 1, stderr: skipped ?? add.stderr };
+      // A part of the change the review would not show (an index.lock a git ended part-way left behind): no
+      // diff, and the run that would complete fails with this rather than send half of it for review.
+      // So too a NUL byte in a file git read as text (it looks for one in the first 8000 bytes only), which no
+      // review can hold.
+      const nul = diff.code === 0 && diff.stdout.includes("\0");
+      if (diff.code === 0 && !nul) diffText = diff.stdout;
+      else if (nul) {
+        const held = diff.stdout.split(/(?<=\n)(?=diff --git )/).find((stanza) => stanza.includes("\0"))!;
+        out.unreadable ??= `the run's changes could not be read back for review (a file git read as text holds a NUL byte: ${spellName(fileName(held))})`;
+      } else {
+        let why = gitReason(diff.stderr);
+        // The worker's own folders are none of the run's business: the clone's path as git writes it, `.`.
+        for (const at of await Promise.all([ws.dir, realpath(ws.dir).catch(() => ws.dir)]))
+          for (const form of new Set([at, at.replace(/\\/g, "/")])) why = why.split(form).join(".");
+        out.unreadable ??= `the run's changes could not be read back for review (git: ${why || "no message"})`;
+      }
+    }
   } else {
+    // A file no repository holds (one named .git) is none the review could show: it is not delivered, and a run
+    // that would complete fails, naming it.
+    const outside = out.artifacts.filter(
+      (a) => a.kind !== "handover" && !isTreePath(path.posix.normalize(a.path)),
+    );
+    if (outside.length) {
+      out.artifacts = out.artifacts.filter((a) => !outside.includes(a));
+      out.filesWritten = out.filesWritten.filter((f) => !outside.some((a) => a.path === f));
+      out.unreadable ??= `the run's changes could not be read back for review (a file's name is one no repository can hold: ${spellName(outside[0]!.path)})`;
+    }
+    // Each file once, under the name git would give it (a declared `./report.md` is report.md).
+    const rendered = new Set<string>();
     diffText = out.artifacts
       .filter((a) => a.kind !== "handover" && a.kind !== "diff")
-      .map((a) =>
-        a.encoding === "base64" ? renderBinaryFileDiff(a.path) : renderNewFileDiff(a.path, a.content),
-      )
+      .flatMap((a) => {
+        const name = path.posix.normalize(a.path);
+        if (rendered.has(name)) return [];
+        rendered.add(name);
+        return [a.encoding === "base64" ? renderBinaryFileDiff(name) : renderNewFileDiff(name, a.content)];
+      })
       .join("");
+    diffNames = [...rendered];
+  }
+  // A declared output git leaves out of the diff (one .gitignore matches, or under .git) is no file the review
+  // shows: it is not delivered, and a run that would complete fails, naming it. One the repository holds
+  // unchanged is its own.
+  if (ws.repo && declaredOutputs.length) {
+    // Where the file system ignores case (macOS, Windows), a declared Report.md is the report.md the run wrote.
+    const fold = (p: string) =>
+      process.platform === "darwin" || process.platform === "win32" ? p.toLowerCase() : p;
+    const named = (f: string) => fold(path.posix.normalize(f));
+    const inDiff = new Set(diffNames.map(fold));
+    // The handover and the blocked note are never part of the diff: the board takes them apart.
+    const outside = out.filesWritten.filter(
+      (f) => f !== HANDOVER_FILE && f !== BLOCKED_FILE && !inDiff.has(named(f)),
+    );
+    // What the index holds, by name as the file system reads it: the blob of each entry.
+    const index = new Map(
+      decodeNames((await gitBytes(["ls-files", "-s", "-z"], ws.dir)).stdout).names.map((e) => {
+        const tab = e.indexOf("\t");
+        return [fold(e.slice(tab + 1)), e.slice(0, tab).split(" ")[1]!] as const;
+      }),
+    );
+    const tracked = new Set(index.keys());
+    const unseen = outside.filter((f) => !tracked.has(named(f)));
+    // A declared output the fold matched travels under git's spelling, the one the review and its scan name.
+    const spelled = new Map(diffNames.map((n) => [fold(n), n]));
+    for (const a of out.artifacts) {
+      const git = a.kind === "handover" ? undefined : spelled.get(named(a.path));
+      if (git !== undefined && git !== path.posix.normalize(a.path)) {
+        out.filesWritten = out.filesWritten.map((f) => (f === a.path ? git : f));
+        a.path = git;
+      }
+    }
+    if (unseen.length) {
+      out.artifacts = out.artifacts.filter((a) => a.kind === "handover" || !unseen.includes(a.path));
+      out.filesWritten = out.filesWritten.filter((f) => !unseen.includes(f));
+      out.unreadable ??= `the run's changes could not be read back for review (a declared output git leaves out of the diff, which the review would not show: ${spellName(unseen[0]!)})`;
+    }
+    // Each declared output delivered is what git holds for it: an index entry the run wrote by hand (the clean
+    // blob, with the file's own size and time) would have the add pass the file over and the review show the
+    // blob, while the file itself, read from disk, is delivered.
+    const held = out.filesWritten.filter((f) => f !== HANDOVER_FILE && f !== BLOCKED_FILE);
+    if (held.length) {
+      const hashed = await git(["hash-object", "--", ...held], ws.dir);
+      const disk = hashed.code === 0 ? hashed.stdout.trim().split("\n") : [];
+      const forged = held.filter((f, i) => disk[i] === undefined || index.get(named(f)) !== disk[i]);
+      if (forged.length) {
+        out.artifacts = out.artifacts.filter((a) => a.kind === "handover" || !forged.includes(a.path));
+        out.filesWritten = out.filesWritten.filter((f) => !forged.includes(f));
+        out.unreadable ??= `the run's changes could not be read back for review (a declared output is not what git holds for it, so the review would not show it: ${spellName(forged[0]!)})`;
+      }
+    }
+  }
+  // Two files whose names are the same but for spaces or a U+FEFF at either end, which a reviewer cannot tell
+  // apart: a run that would complete fails, naming both. Every name it delivers or its diff carries, as git
+  // spells it (a declared `./report.md ` is `report.md `).
+  const trimmed = new Map<string, string>();
+  for (const name of new Set([...out.filesWritten.map((f) => path.posix.normalize(f)), ...diffNames])) {
+    const other = trimmed.get(name.trim());
+    if (other !== undefined && other !== name) {
+      out.unreadable ??= `the run's changes could not be read back for review (two files' names differ only by spaces or a U+FEFF at an end: ${spellName(other)} and ${spellName(name)})`;
+      break;
+    }
+    trimmed.set(name.trim(), name);
   }
   const fitted = fitDiff(diffText, maxBytes);
   out.diffOmitted = fitted.omitted;

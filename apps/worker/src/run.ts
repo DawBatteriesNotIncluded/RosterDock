@@ -9,7 +9,13 @@ import { applyPreviousRound, freshStartBrief, withRework, type ReworkStart } fro
 import { createPhaseRecorder, exportWorkerTrace, type WorkerOtlp } from "./trace.js";
 import { runRepoTests, type Exec } from "./tests.js";
 import { clip, tail } from "./text.js";
-import { cleanupWorkspace, harvestWorkspace, prepareWorkspace, type Workspace } from "./workspace.js";
+import {
+  cleanupWorkspace,
+  harvestWorkspace,
+  prepareWorkspace,
+  type GitCredential,
+  type Workspace,
+} from "./workspace.js";
 
 export interface RunDeps {
   board: BoardClient;
@@ -21,7 +27,8 @@ export interface RunDeps {
   engineEnv: Record<string, string>;
   /** Board URL as the engine process will reach it; the MCP endpoint is derived from it. */
   boardUrl: string;
-  gitToken: string | null;
+  /** The git token and the hosts it is sent to; null clones without one. */
+  gitCredential: GitCredential | null;
   /** Run the repository's tests after the harvest; null skips them. `exec` is for tests of the worker itself. */
   repoTests: { timeoutMs: number; exec?: Exec } | null;
   /** Worker shutdown signal. */
@@ -167,6 +174,8 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
   let timedOut = false;
   const onShutdown = () => abort.abort(SHUTDOWN);
   deps.shutdown.addEventListener("abort", onShutdown, { once: true });
+  // A shutdown while the claim was out: the listener above never hears one that already happened.
+  if (deps.shutdown.aborted) onShutdown();
   const byShutdown = () => abort.signal.aborted && abort.signal.reason === SHUTDOWN;
 
   // Event buffer: batched to the board every second or every 20 events.
@@ -213,6 +222,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
   }, deps.heartbeatMs);
 
   let ws: Workspace | null = null;
+  let timeoutTimer: NodeJS.Timeout | undefined;
   let reworkStart: ReworkStart | null = null;
   /** Null: the worker's shutdown cut the run short, and the queue's retry finishes it. */
   let completion: RunCompleteInput | null;
@@ -232,15 +242,25 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
   });
   try {
     const engine = deps.engines[run.engine];
+    // An engine that cannot keep to the department's tool list starts nothing: no clone, no process.
+    const refused = engine?.refuse?.(sandbox.allowedTools, spec.department?.name ?? null) ?? null;
     if (!engine) {
       completion = {
         status: "failed",
         error: `no engine adapter for ${run.engine} on this worker`,
         blocker: { code: "adapter_unavailable" },
       };
+    } else if (refused) {
+      deps.log.info(`run ${runId}: not started: ${refused.what} ${refused.why}`);
+      completion = {
+        status: "failed",
+        error: `${refused.what} ${refused.why} ${refused.fix}`,
+        blocker: { code: "adapter_unavailable", what: refused.what, why: refused.why },
+      };
     } else {
-      // The time limit runs from here: a clone that stalls counts against it like the engine.
-      const timeoutTimer = setTimeout(() => {
+      // The time limit runs from here to the end of the repository's tests: a clone that stalls counts
+      // against it like the engine, and so do tests that hang.
+      timeoutTimer = setTimeout(() => {
         timedOut = true;
         emit({
           type: "stderr",
@@ -248,59 +268,62 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
         });
         abort.abort();
       }, sandbox.timeoutSeconds * 1000);
-      let result;
-      try {
-        emit({
-          type: "step",
-          payload: { text: spec.project.repoUrl ? "cloning the repository" : "preparing the workspace" },
+      emit({
+        type: "step",
+        payload: { text: spec.project.repoUrl ? "cloning the repository" : "preparing the workspace" },
+      });
+      phases.begin("workspace", { "rosterdock.repo": !!spec.project.repoUrl });
+      ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitCredential, abort.signal);
+      // The commit the clone is at, to the board before the engine (which holds the same token) runs: a pull
+      // request is built on it and on no other.
+      if (ws.clonedSha && claimed.cloneKey)
+        await deps.board.cloned(token, runId, ws.clonedSha, claimed.cloneKey).catch((err: unknown) => {
+          // A board from before the route (an upgrade, the worker first) builds no pull request on it either.
+          if (!(err instanceof BoardError && err.status === 404)) throw err;
+          deps.log.warn(`run ${runId}: the board does not record the commit a clone is at; carrying on`);
         });
-        phases.begin("workspace", { "rosterdock.repo": !!spec.project.repoUrl });
-        ws = await prepareWorkspace(deps.workRoot, runId, spec.project, deps.gitToken, abort.signal);
-        // Rework: the round sent back carries over into the clone, or the run says why it starts clean.
-        if (spec.rework && ws.repo) {
-          reworkStart = await applyPreviousRound(ws, spec.rework, spec.project.defaultBranch);
-          emit(
-            reworkStart.applied
-              ? {
-                  type: "step",
-                  payload: {
-                    text: `starting from round ${reworkStart.round}'s changes (${reworkStart.files} files)`,
-                  },
-                }
-              : {
-                  type: "stderr",
-                  payload: {
-                    text: `round ${reworkStart.round}'s changes did not carry over: ${reworkStart.reason}; starting from a fresh clone of ${spec.project.defaultBranch}`,
-                  },
+      // Rework: the round sent back carries over into the clone, or the run says why it starts clean.
+      if (spec.rework && ws.repo) {
+        reworkStart = await applyPreviousRound(ws, spec.rework, spec.project.defaultBranch);
+        emit(
+          reworkStart.applied
+            ? {
+                type: "step",
+                payload: {
+                  text: `starting from round ${reworkStart.round}'s changes (${reworkStart.files} files)`,
                 },
-          );
-        }
-        phases.end();
-        emit({ type: "step", payload: { text: `running ${engine.id}` } });
-        phases.begin(`engine ${engine.id}`, {
-          "rosterdock.engine": engine.id,
-          "rosterdock.model": run.model,
-        });
-        result = await engine.run({
-          workdir: ws.dir,
-          pack:
-            reworkStart && !reworkStart.applied
-              ? `${claimed.pack}\n\n${freshStartBrief(reworkStart, spec.project.defaultBranch)}\n`
-              : claimed.pack,
-          model: run.model,
-          effort: claimed.spec.teammate.effort ?? null,
-          signal: abort.signal,
-          emit,
-          onUsage: (u) => {
-            usage = { ...usage, ...u };
-          },
-          env: narrowEnv(deps.engineEnv, sandbox.envNames),
-          allowedTools: sandbox.allowedTools,
-          mcp: { url: `${deps.boardUrl}/api/mcp`, token },
-        });
-      } finally {
-        clearTimeout(timeoutTimer);
+              }
+            : {
+                type: "stderr",
+                payload: {
+                  text: `round ${reworkStart.round}'s changes did not carry over: ${reworkStart.reason}; starting from a fresh clone of ${spec.project.defaultBranch}`,
+                },
+              },
+        );
       }
+      phases.end();
+      emit({ type: "step", payload: { text: `running ${engine.id}` } });
+      phases.begin(`engine ${engine.id}`, {
+        "rosterdock.engine": engine.id,
+        "rosterdock.model": run.model,
+      });
+      const result = await engine.run({
+        workdir: ws.dir,
+        pack:
+          reworkStart && !reworkStart.applied
+            ? `${claimed.pack}\n\n${freshStartBrief(reworkStart, spec.project.defaultBranch)}\n`
+            : claimed.pack,
+        model: run.model,
+        effort: claimed.spec.teammate.effort ?? null,
+        signal: abort.signal,
+        emit,
+        onUsage: (u) => {
+          usage = { ...usage, ...u };
+        },
+        env: narrowEnv(deps.engineEnv, sandbox.envNames),
+        allowedTools: sandbox.allowedTools,
+        mcp: { url: `${deps.boardUrl}/api/mcp`, token },
+      });
       usage = { ...usage, ...result.usage };
       phases.end(result.ok ? null : (result.error ?? "the engine failed"));
       emit({ type: "step", payload: { text: "collecting outputs" } });
@@ -325,12 +348,22 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
             type: "stderr",
             payload: { text: `artifact ${artifact.path} rejected: ${(err as Error).message}` },
           });
+          // Without its diff the review would open empty: a run that would complete fails instead.
+          if (artifact.kind === "diff")
+            harvest.unreadable ??= `the run's changes could not be sent for review: the board refused the diff (${clip((err as Error).message, 300)})`;
         }
       }
       phases.end();
       // The repository's own tests, after the diff is captured so their output stays out of the review.
       let checks: RunCompleteInput["checks"];
-      if (deps.repoTests && ws.repo && result.ok && !abort.signal.aborted && !harvest.blocked) {
+      if (
+        deps.repoTests &&
+        ws.repo &&
+        result.ok &&
+        !abort.signal.aborted &&
+        !harvest.blocked &&
+        !harvest.unreadable
+      ) {
         emit({ type: "step", payload: { text: "running the repository's tests" } });
         phases.begin("tests");
         // Not the engine's environment: runRepoTests keeps only PATH, HOME, the temp directory and the locale.
@@ -338,6 +371,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
           exec: deps.repoTests.exec,
           env: deps.engineEnv,
           timeoutMs: deps.repoTests.timeoutMs,
+          signal: abort.signal,
         });
         if (check) {
           checks = [check];
@@ -373,10 +407,10 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
               : {}),
           },
         };
-      } else if (!result.ok) {
+      } else if (!result.ok || harvest.unreadable) {
         completion = {
           status: "failed",
-          error: result.error ?? "the engine failed",
+          error: result.ok ? harvest.unreadable! : (result.error ?? "the engine failed"),
           summary: harvest.handover ?? undefined,
           usage,
           durationMs,
@@ -412,6 +446,7 @@ export async function executeRun(job: { runId: string; jobId: string }, deps: Ru
             durationMs: Date.now() - startedAt,
           };
   } finally {
+    clearTimeout(timeoutTimer);
     phases.end();
     clearInterval(flushTimer);
     deps.shutdown.removeEventListener("abort", onShutdown);

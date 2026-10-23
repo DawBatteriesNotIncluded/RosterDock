@@ -110,8 +110,10 @@ describe("the tool broker", () => {
     const { client, claimed, task } = await setup(api, base, "read");
     expect(claimed.pack).toContain("## Your tools");
     expect(claimed.pack).toContain("- hubspot (read only)");
-    expect(claimed.pack).toContain("reads: search_crm_objects, get_properties, whoami");
-    expect(claimed.pack).toContain("writes (refused here): manage_crm_objects, run_report");
+    // whoami: the server calls it read-only, but neither its name nor the catalog does, so it waits for a person.
+    expect(claimed.pack).toContain(
+      "reads: search_crm_objects, get_properties · writes (refused here): manage_crm_objects, run_report, whoami",
+    );
     expect(claimed.pack).toContain("board_tool_call");
 
     const listed = text(await client.callTool({ name: "board_list_tools", arguments: {} }));
@@ -128,7 +130,7 @@ describe("the tool broker", () => {
       get_properties: "run",
       manage_crm_objects: "refuse",
       run_report: "refuse",
-      whoami: "run",
+      whoami: "refuse",
     });
 
     mcp.calls.length = 0;
@@ -310,7 +312,7 @@ describe("the tool broker", () => {
     ).body;
     const otherRun = (await api.post(`${base}/tasks/${other.id}/runs`, {})).body;
     const otherPack = (await workerClaim(board, otherRun.id)).pack;
-    expect(otherPack).toContain("reads: search_crm_objects, whoami");
+    expect(otherPack).toContain("reads: search_crm_objects · writes");
     expect(otherPack).toContain("switched off by a person, do not call: get_properties");
     // The whole connection switched off by a person.
     await api.patch(`${base}/connections/${hubspot.id}`, { enabled: false });
@@ -411,6 +413,39 @@ describe("the tool broker", () => {
     expect(mcp.calls).toHaveLength(1);
   });
 
+  it("a tool only the server calls read-only is proposed until a person confirms it reads; a teammate cannot", async () => {
+    const { api, base } = await seedCompany(board, "br8@example.com");
+    const { client, claimed, hubspot } = await setup(api, base, "ask");
+    const whoami = {
+      connection: "hubspot",
+      tool: "whoami",
+      arguments: {},
+      title: "Look up who the HubSpot credential belongs to",
+      why: "The list should be owned by the account that builds it.",
+    };
+    mcp.calls.length = 0;
+    const held = text(await client.callTool({ name: "board_tool_call", arguments: whoami }));
+    expect(held.value.kind).toBe("proposed");
+    expect(mcp.calls).toHaveLength(0);
+    // The teammate cannot confirm it for itself: managing a connection is a person's.
+    const confirm = { tools: [{ name: "whoami", write: false }] };
+    expect((await claimed.api.patch(`${base}/connections/${hubspot.id}`, confirm)).status).toBe(403);
+    expect((await api.patch(`${base}/connections/${hubspot.id}`, confirm)).status).toBe(200);
+    const listed = text(await client.callTool({ name: "board_list_tools", arguments: {} }));
+    expect(listed.value[0].tools.find((t: any) => t.name === "whoami")).toMatchObject({
+      write: false,
+      verdict: "run",
+    });
+    const ran = text(
+      await client.callTool({
+        name: "board_tool_call",
+        arguments: { ...whoami, title: undefined, why: undefined },
+      }),
+    );
+    expect(ran.value.kind).toBe("result");
+    expect(mcp.calls).toEqual([{ name: "whoami", arguments: {} }]);
+  });
+
   it("an approved write on a tool a person switched off since it was proposed is not sent", async () => {
     const { api, base } = await seedCompany(board, "br6@example.com");
     const { client, claimed, run, hubspot } = await setup(api, base, "ask");
@@ -426,5 +461,64 @@ describe("the tool broker", () => {
     expect(failed.body.status).toBe("failed");
     expect(failed.body.error).toContain("manage_crm_objects on hubspot is switched off by a person");
     expect(mcp.calls).toHaveLength(0);
+  });
+
+  it("a call is narrowed by the run's own task, or outside a run by a task of one's own: naming another borrows nothing", async () => {
+    const { api, base } = await seedCompany(board, "br7@example.com");
+    // Cody holds HubSpot at ask, and his task is in Research, which is read only.
+    const { client, cody, project, task } = await setup(api, base, "ask", { writePolicy: "readonly" });
+    const ricky = await addTeammate(api, base, "Ricky");
+    const eng = (
+      await api.post(`${base}/departments`, {
+        name: "Engineering",
+        writePolicy: "ask",
+        memberTeammateIds: [ricky.id],
+      })
+    ).body;
+    const looser = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Ship the list",
+        assignee: { kind: "teammate", id: ricky.id },
+        departmentId: eng.id,
+      })
+    ).body;
+    mcp.calls.length = 0;
+
+    // In the run: another task's department is not the run's, for a call or for the list.
+    const named = text(
+      await client.callTool({ name: "board_tool_call", arguments: { ...write, task: `#${looser.number}` } }),
+    );
+    expect(named.isError).toBe(true);
+    expect(named.value).toContain(`this run's own task, #${task.number}`);
+    const listed = text(
+      await client.callTool({ name: "board_list_tools", arguments: { task: `#${looser.number}` } }),
+    );
+    expect(listed.isError).toBe(true);
+    const own = text(
+      await client.callTool({ name: "board_tool_call", arguments: { ...write, task: `#${task.number}` } }),
+    );
+    expect(own.value).toContain("the Research department is read only");
+
+    // Outside a run, a manager token reaches tools only for a task assigned to its teammate.
+    const minted = await api.post(`${base}/teammates/${cody.id}/tokens`, { scope: "manager" });
+    const manager = await connect(minted.body.token);
+    const outside = text(
+      await manager.callTool({ name: "board_tool_call", arguments: { ...write, task: `#${looser.number}` } }),
+    );
+    expect(outside.isError).toBe(true);
+    expect(outside.value).toContain(`#${looser.number} is not assigned to you`);
+    const outsideList = text(
+      await manager.callTool({ name: "board_list_tools", arguments: { task: `#${looser.number}` } }),
+    );
+    expect(outsideList.isError).toBe(true);
+    const assigned = text(
+      await manager.callTool({ name: "board_tool_call", arguments: { ...write, task: `#${task.number}` } }),
+    );
+    expect(assigned.value).toContain("the Research department is read only");
+    await manager.close();
+
+    expect(mcp.calls).toHaveLength(0);
+    expect((await api.get(`${base}/approvals?status=pending`)).body).toEqual([]);
   });
 });

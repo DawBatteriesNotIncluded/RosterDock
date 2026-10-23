@@ -159,6 +159,16 @@ describe("board MCP server", () => {
     expect(blocked.status).toBe("blocked");
     expect(blocked.blocker.code).toBe("waiting_on_teammate");
     expect(blocked.blocker.waitingOn.name).toBe("ricky");
+    // A handle that is no teammate here (a role, a person) waits on a person, who Peter tells.
+    const onPerson = text(
+      await client.callTool({
+        name: "board_set_blocker",
+        arguments: { reason: "Need web fetch access granted.", waitingOnHandle: "@manager" },
+      }),
+    );
+    expect(onPerson.blocker.code).toBe("waiting_on_person");
+    expect(onPerson.blocker.what).toBe("Need web fetch access granted.");
+    expect(onPerson.blocker.waitingOn).toBeUndefined();
 
     const reviewed = text(
       await client.callTool({
@@ -269,8 +279,22 @@ describe("board MCP server", () => {
       }),
     );
     expect(decided.runId).toBeNull();
+    // Live systems are reached only for a task of Peter's own: its department and client narrow them.
+    const notHis = await client.callTool({
+      name: "board_list_tools",
+      arguments: { task: `#${task.number}` },
+    });
+    expect(notHis.isError).toBe(true);
+    expect(text(notHis)).toMatch(/is not assigned to you/);
+    const his = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Weekly digest",
+        assignee: { kind: "teammate", id: peter.id },
+      })
+    ).body;
     expect(
-      text(await client.callTool({ name: "board_list_tools", arguments: { task: `#${task.number}` } })),
+      text(await client.callTool({ name: "board_list_tools", arguments: { task: `#${his.number}` } })),
     ).toEqual([]);
     const noTaskTools = await client.callTool({ name: "board_list_tools", arguments: {} });
     expect(noTaskTools.isError).toBe(true);

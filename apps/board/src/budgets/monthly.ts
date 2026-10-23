@@ -1,14 +1,17 @@
-// The monthly cost report and the CSV exports: projections of run_usage for one
-// company over a calendar month (or a budget window), priced with the table as
-// it stands now, grouped by project and its chargeback tag, department,
-// teammate and model. Seats are the monthly seat price of every teammate on a
-// seat-priced model or engine, not pro-rated: a seat costs the same idle.
+// The monthly cost report and the CSV exports: projections of the usage, the
+// runs' and the managers' own model calls (planning), for one company over a
+// calendar month (or a budget window), priced with the table as it stands now,
+// grouped by project and its chargeback tag, department, teammate and model.
+// Seats are the monthly seat price of every teammate on a seat-priced model or
+// engine, not pro-rated: a seat costs the same idle.
 
 import type { BudgetWindow } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
-import { costFor, type ModelPrice } from "./cost.js";
+import { costFor, usageModel } from "./cost.js";
 import type { CostLine, TokenTotals } from "./costs.js";
+import { BOARD_OWN_MODELS, priceTable, type PriceTable } from "./prices.js";
+import { USAGE_ROWS, type PlanningPurpose } from "./usage.js";
 
 export interface Bounds {
   from: Date;
@@ -42,56 +45,31 @@ export async function windowBounds(db: Queryable, window: BudgetWindow): Promise
   return { from: b.from, to: b.to, label: window };
 }
 
-interface PriceRow {
-  model: string;
-  currency: string;
-  input_per_million: string | null;
-  output_per_million: string | null;
-  cache_read_per_million: string | null;
-  cache_write_per_million: string | null;
-  seat_price_month: string | null;
-}
-
-async function priceTable(db: Queryable, companyId: string) {
-  const prices = (await db.query<PriceRow>("SELECT * FROM model_prices WHERE company_id = $1", [companyId]))
-    .rows;
-  const num = (v: string | null) => (v === null ? null : Number(v));
-  const priceOf = (model: string): ModelPrice | null => {
-    const p = prices.find((x) => x.model === model);
-    return p
-      ? {
-          model: p.model,
-          currency: p.currency,
-          inputPerMillion: num(p.input_per_million),
-          outputPerMillion: num(p.output_per_million),
-          cacheReadPerMillion: num(p.cache_read_per_million),
-          cacheWritePerMillion: num(p.cache_write_per_million),
-          seatPriceMonth: num(p.seat_price_month),
-        }
-      : null;
-  };
-  const seatFor = (model: string, engine: string): number => {
-    const byModel = prices.find((p) => p.model === model && p.seat_price_month !== null);
-    if (byModel) return Number(byModel.seat_price_month);
-    const byEngine = prices.find((p) => p.model === engine && p.seat_price_month !== null);
-    return byEngine ? Number(byEngine.seat_price_month) : 0;
-  };
-  return { currency: prices[0]?.currency ?? "GBP", priceOf, seatFor };
-}
-
 export interface UsageLine {
   createdAt: string;
-  runId: string;
-  taskNumber: number;
-  taskTitle: string;
+  /** A teammate's run, or what a manager's own model call was for. */
+  kind: "run" | PlanningPurpose;
+  /** The run; null for a manager's call. */
+  runId: string | null;
+  /** The run's task, or the task a call re-planned. */
+  taskNumber: number | null;
+  taskTitle: string | null;
+  /** The goal the run's task serves, or the goal a call planned. */
+  goalTitle: string | null;
+  /** A manager's calls on the line: one, or what a goal spent before they were counted one by one. */
+  calls: number;
   teammateId: string;
   teammateName: string;
   departmentId: string | null;
   departmentName: string | null;
-  projectId: string;
+  /** Null for a call that served no project (an org proposal). */
+  projectId: string | null;
   projectName: string;
   client: string;
   chargebackTag: string | null;
+  /** The company provider it went through, and what people call it; null: the board's own models. */
+  providerId: string | null;
+  provider: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -102,34 +80,46 @@ export interface UsageLine {
   costMinorUnits: number | null;
 }
 
-/** Every run's usage in the bounds, one line per run and model, with names for people. */
-export async function usageLines(db: Queryable, companyId: string, bounds: Bounds): Promise<UsageLine[]> {
-  const { priceOf } = await priceTable(db, companyId);
+/** Every run's and manager's call's usage in the bounds, one line per run and model or per call, with names. */
+export async function usageLines(
+  db: Queryable,
+  companyId: string,
+  bounds: Bounds,
+  /** The table to price with, when the caller reads its currency after; else one of its own. */
+  table?: PriceTable,
+): Promise<UsageLine[]> {
+  const prices = table ?? (await priceTable(db, companyId));
   const rows = await db.query<{
     created_at: Date;
-    run_id: string;
-    number: number;
-    title: string;
+    kind: UsageLine["kind"];
+    run_id: string | null;
+    calls: number;
+    number: number | null;
+    title: string | null;
+    goal_title: string | null;
     teammate_id: string;
     teammate_name: string | null;
     department_id: string | null;
     department_name: string | null;
-    project_id: string;
+    project_id: string | null;
     project_name: string | null;
     client: string | null;
     chargeback_tag: string | null;
+    provider_id: string | null;
     model: string;
     input_tokens: string;
     output_tokens: string;
     cache_read_tokens: string;
     cache_write_tokens: string;
   }>(
-    `SELECT u.created_at, u.run_id, t.number, t.title, u.teammate_id, m.name AS teammate_name,
+    `SELECT u.created_at, u.kind, u.run_id, u.calls, t.number, t.title, g.title AS goal_title,
+            u.teammate_id, m.name AS teammate_name,
             u.department_id, d.name AS department_name, u.project_id, p.name AS project_name, p.client,
-            p.chargeback_tag, u.model, u.input_tokens::text, u.output_tokens::text,
+            p.chargeback_tag, u.provider_id, u.model, u.input_tokens::text, u.output_tokens::text,
             u.cache_read_tokens::text, u.cache_write_tokens::text
-     FROM run_usage u
-     JOIN tasks t ON t.id = u.task_id
+     FROM ${USAGE_ROWS} u
+     LEFT JOIN tasks t ON t.id = u.task_id
+     LEFT JOIN goals g ON g.id = coalesce(u.goal_id, t.goal_id)
      LEFT JOIN teammates m ON m.id = u.teammate_id
      LEFT JOIN departments d ON d.id = u.department_id
      LEFT JOIN projects p ON p.id = u.project_id
@@ -146,21 +136,26 @@ export async function usageLines(db: Queryable, companyId: string, bounds: Bound
     };
     return {
       createdAt: r.created_at.toISOString(),
+      kind: r.kind,
       runId: r.run_id,
       taskNumber: r.number,
       taskTitle: r.title,
+      goalTitle: r.goal_title,
+      calls: r.calls,
       teammateId: r.teammate_id,
       teammateName: r.teammate_name ?? "(removed)",
       departmentId: r.department_id,
       departmentName: r.department_name,
       projectId: r.project_id,
-      projectName: r.project_name ?? "(removed)",
+      projectName: r.project_id ? (r.project_name ?? "(removed)") : "",
       client: r.client ?? "",
       chargebackTag: r.chargeback_tag,
+      providerId: r.provider_id,
+      provider: prices.providerLabel(r.provider_id),
       model: r.model,
       ...usage,
       totalTokens: usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens,
-      costMinorUnits: costFor(usage, priceOf(r.model)),
+      costMinorUnits: costFor(usage, prices.priceOf(r.provider_id, r.model)),
     };
   });
 }
@@ -179,10 +174,22 @@ export function toCsv(header: string[], rows: unknown[][]): string {
 
 const money = (minor: number | null) => (minor === null ? "" : (minor / 100).toFixed(2));
 
-/** One line per run and model: who, what, for whom, how many tokens, what it cost. */
+/** The CSV's word for what a line is. */
+const KIND_LABEL: Record<UsageLine["kind"], string> = {
+  run: "run",
+  plan: "plan",
+  replan: "re-plan",
+  org: "org proposal",
+};
+
+/**
+ * One line per run and model, and per manager's call: who, what, for whom, how many tokens, what it cost.
+ * kind, goal and provider close the line, so the columns before them stay where they were.
+ */
 export async function usageCsv(db: Queryable, companyId: string, bounds: Bounds): Promise<string> {
-  const { currency } = await priceTable(db, companyId);
-  const lines = await usageLines(db, companyId, bounds);
+  const prices = await priceTable(db, companyId);
+  const lines = await usageLines(db, companyId, bounds, prices);
+  const currency = prices.displayCurrency();
   return toCsv(
     [
       "date",
@@ -202,12 +209,15 @@ export async function usageCsv(db: Queryable, companyId: string, bounds: Bounds)
       "total_tokens",
       "cost",
       "currency",
+      "kind",
+      "goal",
+      "provider",
     ],
     lines.map((l) => [
       l.createdAt,
-      l.runId,
-      `#${l.taskNumber}`,
-      l.taskTitle,
+      l.runId ?? "",
+      l.taskNumber === null ? "" : `#${l.taskNumber}`,
+      l.taskTitle ?? "",
       l.teammateName,
       l.departmentName ?? "",
       l.projectName,
@@ -221,6 +231,9 @@ export async function usageCsv(db: Queryable, companyId: string, bounds: Bounds)
       l.totalTokens,
       money(l.costMinorUnits),
       currency,
+      KIND_LABEL[l.kind],
+      l.goalTitle ?? "",
+      l.provider,
     ]),
   );
 }
@@ -245,7 +258,18 @@ export interface MonthlyReport {
     engine: string;
     seatMinorUnits: number;
   })[];
-  byModel: (CostLine & { model: string })[];
+  /** By model and the provider it went through. */
+  byModel: (CostLine & { model: string; providerId: string | null; provider: string })[];
+  byProvider: (CostLine & { id: string | null; name: string })[];
+  /** Each project's spend by provider, for the chargeback CSV; a project with none is on the board's own. */
+  byProjectProvider: (CostLine & {
+    projectId: string;
+    name: string;
+    client: string;
+    chargebackTag: string | null;
+    providerId: string | null;
+    provider: string;
+  })[];
   daily: { day: string; tokens: number; costMinorUnits: number | null }[];
 }
 
@@ -254,7 +278,7 @@ function emptyTotals(): TokenTotals {
 }
 
 function line<T>(extra: T): CostLine & T {
-  return { tokens: emptyTotals(), costMinorUnits: null, runs: 0, ...extra };
+  return { tokens: emptyTotals(), costMinorUnits: null, runs: 0, calls: 0, ...extra };
 }
 
 function add(target: CostLine, l: UsageLine): void {
@@ -264,7 +288,8 @@ function add(target: CostLine, l: UsageLine): void {
   target.tokens.cacheWrite += l.cacheWriteTokens;
   target.tokens.total += l.totalTokens;
   if (l.costMinorUnits !== null) target.costMinorUnits = (target.costMinorUnits ?? 0) + l.costMinorUnits;
-  target.runs += 1;
+  if (l.kind === "run") target.runs += 1;
+  else target.calls += l.calls;
 }
 
 export async function monthlyReport(
@@ -273,8 +298,10 @@ export async function monthlyReport(
   month?: string,
 ): Promise<MonthlyReport> {
   const bounds = await monthBounds(db, month);
-  const { currency, seatFor } = await priceTable(db, companyId);
-  const lines = await usageLines(db, companyId, bounds);
+  const prices = await priceTable(db, companyId);
+  const seatFor = (model: string, engine: string) => prices.seatFor(model, engine)?.month ?? 0;
+  const lines = await usageLines(db, companyId, bounds, prices);
+  const currency = prices.displayCurrency();
   const teammates = (
     await db.query<{ id: string; name: string; handle: string; model: string; engine: string }>(
       "SELECT id, name, handle, model, engine FROM teammates WHERE company_id = $1 ORDER BY name",
@@ -317,18 +344,21 @@ export async function monthlyReport(
         id: t.id,
         name: t.name,
         handle: t.handle,
-        model: t.model,
+        model: usageModel(t.engine, t.model),
         engine: t.engine,
         seatMinorUnits: seatFor(t.model, t.engine),
       }),
     ]),
   );
   const byModel = new Map<string, MonthlyReport["byModel"][number]>();
+  const byProvider = new Map<string | null, MonthlyReport["byProvider"][number]>();
+  const byProjectProvider = new Map<string, MonthlyReport["byProjectProvider"][number]>();
+  const key = (a: string, b: string | null) => `${a}\u0000${b ?? ""}`;
   const daily = new Map<string, { day: string; tokens: number; costMinorUnits: number | null }>();
 
   for (const l of lines) {
     add(totals, l);
-    const project = byProject.get(l.projectId);
+    const project = l.projectId ? byProject.get(l.projectId) : undefined;
     if (project) add(project, l);
     let dept = byDepartment.get(l.departmentId);
     if (!dept) {
@@ -338,12 +368,33 @@ export async function monthlyReport(
     add(dept, l);
     const mate = byTeammate.get(l.teammateId);
     if (mate) add(mate, l);
-    let model = byModel.get(l.model);
+    let model = byModel.get(key(l.model, l.providerId));
     if (!model) {
-      model = line({ model: l.model });
-      byModel.set(l.model, model);
+      model = line({ model: l.model, providerId: l.providerId, provider: l.provider });
+      byModel.set(key(l.model, l.providerId), model);
     }
     add(model, l);
+    let provider = byProvider.get(l.providerId);
+    if (!provider) {
+      provider = line({ id: l.providerId, name: l.provider });
+      byProvider.set(l.providerId, provider);
+    }
+    add(provider, l);
+    if (project) {
+      let pp = byProjectProvider.get(key(project.id, l.providerId));
+      if (!pp) {
+        pp = line({
+          projectId: project.id,
+          name: project.name,
+          client: project.client,
+          chargebackTag: project.chargebackTag,
+          providerId: l.providerId,
+          provider: l.provider,
+        });
+        byProjectProvider.set(key(project.id, l.providerId), pp);
+      }
+      add(pp, l);
+    }
     const day = l.createdAt.slice(0, 10);
     const d = daily.get(day) ?? { day, tokens: 0, costMinorUnits: null };
     d.tokens += l.totalTokens;
@@ -374,6 +425,7 @@ export async function monthlyReport(
     t.tokens.total += p.tokens.total;
     if (p.costMinorUnits !== null) t.costMinorUnits = (t.costMinorUnits ?? 0) + p.costMinorUnits;
     t.runs += p.runs;
+    t.calls += p.calls;
   }
   const byTokens = <T extends CostLine>(a: T, b: T) => b.tokens.total - a.tokens.total;
   return {
@@ -391,15 +443,35 @@ export async function monthlyReport(
     byDepartment: [...byDepartment.values()].sort(byTokens),
     byTeammate: [...byTeammate.values()].sort(byTokens),
     byModel: [...byModel.values()].sort(byTokens),
+    byProvider: [...byProvider.values()].sort(byTokens),
+    // In the projects' order; a project nothing ran on keeps its line, on the board's own models.
+    byProjectProvider: [...byProject.values()].sort(byTokens).flatMap((p) => {
+      const mine = [...byProjectProvider.values()].filter((x) => x.projectId === p.id).sort(byTokens);
+      return mine.length
+        ? mine
+        : [
+            line({
+              projectId: p.id,
+              name: p.name,
+              client: p.client,
+              chargebackTag: p.chargebackTag,
+              providerId: null,
+              provider: BOARD_OWN_MODELS,
+            }),
+          ];
+    }),
     daily: [...daily.values()].sort((a, b) => a.day.localeCompare(b.day)),
   };
 }
 
-/** The chargeback table: one line per project with its tag, ready for an invoice or a spreadsheet. */
+/**
+ * The chargeback table: one line per project and the provider its work went through, with its tag, ready for
+ * an invoice or a spreadsheet. provider closes the line, so the columns before it stay where they were.
+ */
 export function monthlyCsv(r: MonthlyReport): string {
   return toCsv(
-    ["month", "project", "client", "chargeback_tag", "runs", "total_tokens", "cost", "currency"],
-    r.byProject.map((p) => [
+    ["month", "project", "client", "chargeback_tag", "runs", "total_tokens", "cost", "currency", "provider"],
+    r.byProjectProvider.map((p) => [
       r.month,
       p.name,
       p.client,
@@ -408,6 +480,7 @@ export function monthlyCsv(r: MonthlyReport): string {
       p.tokens.total,
       money(p.costMinorUnits),
       r.currency,
+      p.provider,
     ]),
   );
 }

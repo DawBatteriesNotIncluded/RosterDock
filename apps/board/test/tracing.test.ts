@@ -12,6 +12,7 @@ import {
   seatedPeter,
   seedCompany,
   startTestBoard,
+  testEgress,
   workerClaim,
   workerComplete,
   type TestBoard,
@@ -179,7 +180,7 @@ describe("traces per run", () => {
       runId: null,
       taskId: task.id,
     };
-    const deps = { db: board.db, mcp: { fetch: mcp.fetch, env }, tracer };
+    const deps = { db: board.db, mcp: { egress: testEgress(mcp.fetch), env }, tracer };
     const read = await callTool(deps, actor, {
       connection: "hubspot",
       tool: "search_crm_objects",

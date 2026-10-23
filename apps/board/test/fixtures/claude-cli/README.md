@@ -11,7 +11,9 @@ normalised. One line each, as the CLI printed it (Prettier leaves them alone).
   (n8n engineer) and Verifier (reviewer), and the goal in the recorder, with the question round already
   used (`mayAsk: false`) so the answer is a plan. What the parser relies on: `structured_output` holds the
   plan, `result` holds the same JSON as text, `stop_reason` is `tool_use` (the CLI answers through its own
-  structured-output tool, three turns), `modelUsage` is keyed by the model asked for.
+  structured-output tool, three turns), `modelUsage` is keyed by the model asked for. The recording predates
+  the prompt's line on the project's repository: its build task changes code and names no outputs, which
+  the board accepts only on a repository, so the tests replay it for a goal that names one.
 - `error.json`: recorded 2026-09-30, CLI 2.1.220, not signed in. `is_error: true` with
   `subtype: success`, `terminal_reason: api_error`, zero usage and the reason in `result`; the CLI
   exited 1.

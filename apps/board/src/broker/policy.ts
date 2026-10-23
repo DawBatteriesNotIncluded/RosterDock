@@ -5,10 +5,13 @@
 
 import {
   effectiveMode,
+  effectiveWebDomains,
   toolGranted,
   type ClientPolicy,
+  type SandboxPreset,
   type ToolboxEntry,
   type ToolMode,
+  type WebDomainsDecision,
 } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
 import { listConnections, type ConnectionRow, type ConnectionTool } from "../mcp/connections.js";
@@ -90,4 +93,44 @@ export function narrowingReason(
       `${clientName ? `the client ${clientName}` : "the project's client policy"} allows ${e.mode === "off" ? "no use of it" : e.mode === "read" ? "reads only" : "asks"}`,
     );
   return parts.join(" and ");
+}
+
+/**
+ * The sites the web connection may read on one task: the company's list (the connection's manifest), narrowed
+ * by the task's department's (its sandbox's `webDomains`) and then by its project's client's.
+ */
+export async function webScope(
+  db: Queryable,
+  connection: Pick<ConnectionRow, "manifest">,
+  scope: Pick<ToolScope, "departmentId" | "projectId">,
+): Promise<WebDomainsDecision> {
+  const [department, project] = await Promise.all([
+    scope.departmentId
+      ? db.query<{ sandbox: SandboxPreset | null }>("SELECT sandbox FROM departments WHERE id = $1", [
+          scope.departmentId,
+        ])
+      : Promise.resolve(null),
+    db.query<{ client_policy: ClientPolicy | null }>("SELECT client_policy FROM projects WHERE id = $1", [
+      scope.projectId,
+    ]),
+  ]);
+  return effectiveWebDomains({
+    company: (connection.manifest as { domains?: unknown } | null)?.domains,
+    department: department?.rows[0]?.sandbox?.webDomains,
+    client: project.rows[0]?.client_policy?.webDomains,
+  });
+}
+
+/** Whose list narrowed the web on a task, in a phrase, or null when only the company's applies. */
+export function webNarrowingReason(
+  decision: Pick<WebDomainsDecision, "narrowedBy">,
+  departmentName: string | null,
+  clientName: string | null,
+): string | null {
+  const parts: string[] = [];
+  if (decision.narrowedBy.includes("department"))
+    parts.push(`the ${departmentName ?? "task's"} department's list`);
+  if (decision.narrowedBy.includes("client"))
+    parts.push(clientName ? `the client ${clientName}'s list` : "the project's client policy");
+  return parts.length ? `narrowed by ${parts.join(" and ")}` : null;
 }

@@ -421,7 +421,28 @@ export async function upsertOidcUser(
 
 /** A return-to path the board will send the browser back to: same origin, a path only. */
 export function safeReturnTo(value: unknown): string {
-  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || value.includes("\\"))
+  // A URL parser drops tabs and line breaks, so "/\t/host" would read as "//host", another site.
+  if (
+    typeof value !== "string" ||
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("\\") ||
+    [...value].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)
+  )
     return "/";
-  return value.slice(0, 500);
+  // A Location header carries no character past Latin-1, so what the browser has not encoded already is
+  // encoded here, a character at a time, and a lone surrogate, which encodes to nothing, is refused. A path
+  // past 500 is cut between characters, and never in the middle of an escape.
+  let out = "";
+  for (const c of value) {
+    let piece: string;
+    try {
+      piece = c >= " " && c <= "~" ? c : encodeURIComponent(c);
+    } catch {
+      return "/";
+    }
+    if (out.length + piece.length > 500) return out.replace(/%[0-9A-Fa-f]?$/, "");
+    out += piece;
+  }
+  return out;
 }

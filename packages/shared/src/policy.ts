@@ -51,6 +51,8 @@ export function toolGranted(entry: Pick<ToolboxEntry, "tools"> | null | undefine
 export interface ClientPolicy {
   default?: ToolMode | null;
   caps?: Record<string, ToolMode>;
+  /** The web domains the client lets the web connection read (web.ts); only narrows. */
+  webDomains?: string[] | null;
 }
 
 /** What a department's write policy allows a tool to do: readonly departments read only. */
@@ -105,13 +107,28 @@ export function verdictFor(mode: ToolMode, write: boolean): ToolVerdict {
 
 // --- Read or write ------------------------------------------------------------
 //
-// A tool is a write unless something says it is a read: the server's
-// readOnlyHint annotation, the catalog's list for that connector, or a name
-// that starts with a reading verb. The conservative default keeps an unknown
-// tool behind the gate.
+// A tool is a write unless something says it is a read: the catalog's list for
+// that connector, or a name that starts with a reading verb and joins no second
+// verb to it. A server's readOnlyHint annotation counts only with one of those:
+// a careless or dishonest server could label a write read-only, so a tool the
+// label alone calls a read is a write until a person confirms it. readOnlyHint
+// false, destructiveHint true and the catalog's list of writes make a write
+// whatever else says read. The conservative default keeps an unknown tool
+// behind the gate.
+//
+// Export, preview and check are not reading verbs: an export sends data out or
+// starts a job, a preview is often built or sent, and check_in or a check run
+// changes state. get_or_create and find_and_replace write.
 
 const READ_VERB_RE =
-  /^(get|list|search|read|find|describe|query|fetch|lookup|look_up|count|show|check|view|inspect|export|preview|summari[sz]e|retrieve|browse)(?![a-z])/i;
+  /^(get|list|search|read|find|describe|query|fetch|lookup|look_up|count|show|view|inspect|summari[sz]e|retrieve|browse)(?![a-z])/i;
+const JOINED_VERB_RE = /[-_.\s](and|or|then)(?=[-_.\s]|$)/i;
+
+/** Whether a tool's name alone makes it a read. A namespace prefix (hubspot.search_companies, slack:read_channel) does not hide the verb. */
+export function readsByName(name: string): boolean {
+  const bare = name.replace(/^[a-z0-9-]+[.:]/i, "");
+  return READ_VERB_RE.test(bare) && !JOINED_VERB_RE.test(bare);
+}
 
 export interface ToolHints {
   /** MCP tool annotations, when the server sends them. */
@@ -120,17 +137,26 @@ export interface ToolHints {
   catalog?: { reads?: string[]; writes?: string[] } | null;
 }
 
-export type ToolClassSource = "annotation" | "catalog" | "name" | "default" | "person";
+/**
+ * What classified a tool. "unconfirmed": the server labels it read-only and nothing else says it reads, so it
+ * is a write until a person confirms it; their word is then "person", and discovery keeps it.
+ */
+export type ToolClassSource = "annotation" | "catalog" | "name" | "default" | "person" | "unconfirmed";
 
 export function classifyTool(
   name: string,
   hints: ToolHints = {},
 ): { write: boolean; source: ToolClassSource } {
-  if (hints.annotations?.readOnlyHint === true) return { write: false, source: "annotation" };
-  if (hints.annotations?.readOnlyHint === false) return { write: true, source: "annotation" };
+  const annotations = hints.annotations;
+  if (annotations?.readOnlyHint === false || annotations?.destructiveHint === true)
+    return { write: true, source: "annotation" };
   if (hints.catalog?.writes?.includes(name)) return { write: true, source: "catalog" };
-  if (hints.catalog?.reads?.includes(name)) return { write: false, source: "catalog" };
-  // A namespace prefix (hubspot.search_companies, slack:read_channel) does not hide the verb.
-  if (READ_VERB_RE.test(name.replace(/^[a-z0-9-]+[.:]/i, ""))) return { write: false, source: "name" };
+  const listed = hints.catalog?.reads?.includes(name) === true;
+  if (annotations?.readOnlyHint === true)
+    return listed || readsByName(name)
+      ? { write: false, source: "annotation" }
+      : { write: true, source: "unconfirmed" };
+  if (listed) return { write: false, source: "catalog" };
+  if (readsByName(name)) return { write: false, source: "name" };
   return { write: true, source: "default" };
 }

@@ -20,7 +20,9 @@ const RAW_SECRET_RES: RegExp[] = [
 // start, with enough key behind the prefix that prose naming it ("sk-", "Bearer tokens") is not a hit.
 const TEXT_SECRET_RES: RegExp[] = [
   /\bsk-[A-Za-z0-9_-]{20,}/, // OpenAI/Anthropic-style keys
-  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}/, // JWTs: a header and a payload
+  // JWTs: a header and a payload. The token starts a run of its characters: after `\b` alone, every `eyJ`
+  // in a run like `eyJ-eyJ-…` would start a scan to the run's end, time quadratic in its length.
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}/,
   /\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}/, // GitHub tokens
   /\bxox[a-z]-[A-Za-z0-9-]{10,}/i, // Slack tokens
   /\bAKIA[0-9A-Z]{16}\b/, // AWS access key ids
@@ -30,6 +32,42 @@ const TEXT_SECRET_RES: RegExp[] = [
   // with no spaces and no quotes, where the value is not itself a reference ($NAME, ${…}, <placeholder>).
   /(?:^|\s)[A-Za-z0-9_]*(?:api[_-]?key|secret(?:[_-]?key)?|private[_-]?key|password|passwd|token)=[A-Za-z0-9._~+/:@%^*!#-]{8,}/i,
 ];
+
+// Both sets again, global and multiline, for secretLines: `^` and `$` at each line's ends, as on a line alone.
+const LINE_SECRET_RES = [...RAW_SECRET_RES, ...TEXT_SECRET_RES].map(lineWise);
+
+function lineWise(re: RegExp): RegExp {
+  return new RegExp(re.source, `${re.flags.replace(/[gm]/g, "")}gm`);
+}
+
+/**
+ * The lines (1-based, ascending) of a text that hold a secret-shaped string: each line findRawSecrets or
+ * containsRawSecret would flag alone, or that one of `also` matches. Each pattern runs over the whole text once
+ * and lines are counted from where it matched, so a long text costs its length times the patterns, never a
+ * scan per line. A match that runs on past its line's end counts at its first line (a key on the next line may
+ * be reported there). At most `max` lines.
+ */
+export function secretLines(text: string, also: RegExp[] = [], max = 1000): number[] {
+  const found = new Set<number>();
+  for (const re of [...LINE_SECRET_RES, ...also.map(lineWise)]) {
+    let line = 1;
+    // The next line break not yet counted: it only moves forward, so many matches on one long line cost no more
+    // than the line.
+    let nl = text.indexOf("\n");
+    for (const m of text.matchAll(re)) {
+      // Where the match starts with the line break before it (`(?:^|\s)`), at the line after.
+      const at = m.index + /^[\r\n]*/.exec(m[0])![0].length;
+      while (nl !== -1 && nl < at) {
+        line++;
+        nl = text.indexOf("\n", nl + 1);
+      }
+      found.add(line);
+      if (found.size >= max) break;
+    }
+    if (found.size >= max) break;
+  }
+  return [...found].sort((a, b) => a - b);
+}
 
 export function isEnvVarName(value: string): boolean {
   return ENV_VAR_NAME_RE.test(value);
@@ -56,6 +94,34 @@ export function looksLikeRawSecret(value: string): boolean {
  */
 export function containsRawSecret(text: string): boolean {
   return TEXT_SECRET_RES.some((re) => re.test(text));
+}
+
+// The same shapes, for taking them out of text: what each keeps (a variable's name, the word Bearer) and
+// what goes. A private key goes from its first line to its last; the body is never scanned past a dash, so
+// a page of unclosed key headers is read once.
+const TEXT_REDACTIONS: [RegExp, string][] = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]{0,20000}(?:-----END [A-Z ]*PRIVATE KEY-----)?/g, "[redacted]"],
+  [/\bsk-[A-Za-z0-9_-]{20,}/g, "[redacted]"],
+  [/(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]+)?/g, "[redacted]"],
+  [/\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}/g, "[redacted]"],
+  [/\bxox[a-z]-[A-Za-z0-9-]{10,}/gi, "[redacted]"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "[redacted]"],
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gi, "$1[redacted]"],
+  [
+    /((?:^|\s)[A-Za-z0-9_]*(?:api[_-]?key|secret(?:[_-]?key)?|private[_-]?key|password|passwd|token)=)[A-Za-z0-9._~+/:@%^*!#-]{8,}/gi,
+    "$1[redacted]",
+  ],
+];
+
+/**
+ * Text with every secret-shaped value in it replaced by `[redacted]`: the shapes `containsRawSecret` finds,
+ * keeping a variable's name and the word Bearer. For text from outside, such as a web page, before a
+ * teammate reads it; what it says otherwise is left as it is.
+ */
+export function redactRawSecrets(text: string): string {
+  let out = text;
+  for (const [re, replacement] of TEXT_REDACTIONS) out = out.replace(re, replacement);
+  return out;
 }
 
 export interface SecretFinding {

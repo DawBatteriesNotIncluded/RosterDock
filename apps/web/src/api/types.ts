@@ -2,12 +2,15 @@
 import type {
   ActorRef,
   BlockerRecord,
+  CompatibleAuthHeader,
   Criterion,
   DiffHunk,
   DiffLine,
   EventRecord,
   PlannerKind,
   PlannerSettings,
+  ProviderKind,
+  ProviderModel,
   ReviewStatus,
   Role,
   SandboxPreset,
@@ -190,8 +193,8 @@ export interface Project {
   status: string;
   repoUrl: string | null;
   defaultBranch: string;
-  /** What this project's client lets any teammate do with each connection. Only narrows. */
-  clientPolicy: { default: ToolMode | null; caps: Record<string, ToolMode> };
+  /** What this project's client lets any teammate do with each connection, and the web sites it lets the web connection read. Only narrows. */
+  clientPolicy: { default: ToolMode | null; caps: Record<string, ToolMode>; webDomains?: string[] };
   /** A cost centre, client code or invoice reference the monthly cost report groups by. */
   chargebackTag: string | null;
   counts: { open: number; running: number; blocked: number; review: number; done: number };
@@ -220,6 +223,8 @@ export interface Task {
   /** research: documents with sources, reviewed against a checklist. build: the diff is reviewed. */
   workKind: "build" | "research";
   parentTaskId: string | null;
+  /** The goal the task serves; null for work outside any goal. */
+  goalId: string | null;
   /** How many times Peter re-planned it after a failed run. */
   replans: number;
   createdAt: string;
@@ -254,7 +259,8 @@ export interface ConnectionTool {
   name: string;
   description: string;
   write: boolean;
-  source: "annotation" | "catalog" | "name" | "default" | "person" | "method";
+  /** What classified it. "unconfirmed": only the server calls it read-only, so it writes until a person confirms it. */
+  source: "annotation" | "catalog" | "name" | "default" | "person" | "method" | "unconfirmed";
   /** Switched off by a person: refused for every teammate, whatever the toolbox grants. */
   off?: boolean;
 }
@@ -288,6 +294,47 @@ export interface Features {
   sharedEnvNames?: string[];
   /** The command lines a stdio connection may run inside the board, as the operator wrote them; a final `*` lets more arguments follow. Only for people who manage connections. */
   stdioCommands?: string[];
+  /** The private names (`*.` for the names under one), addresses and ranges a connection may reach; everything else must be public. Only for people who manage connections. */
+  privateDestinations?: string[];
+  /** Of those, the ones the operator gave the company asked about alone. Only for its owners and admins. */
+  companyPrivateDestinations?: string[];
+  /** Whether the board reads the web (the web connection's pages, research sources); false: its operator keeps it off. */
+  web?: boolean;
+}
+
+/** Where a provider's credential gets its value, as a person reads it; never the value. */
+export type CredentialState =
+  { state: "set"; setAt: string; setBy: ActorRef } | { state: "shared" } | { state: "missing" };
+
+/** A company model provider: its settings and credential names, and where each name gets its value. */
+export interface ModelProvider {
+  id: string;
+  companyId: string;
+  name: string;
+  label: string;
+  kind: ProviderKind;
+  endpoint: string | null;
+  region: string | null;
+  authHeader: CompatibleAuthHeader | null;
+  /** role -> env var NAME (apiKey, or bearerToken for Bedrock). */
+  credentials: Record<string, string>;
+  credentialStates: Record<string, CredentialState>;
+  /** listPrice: Anthropic's list prices the model's tokens when nothing else does (an Anthropic provider). */
+  models: (ProviderModel & { listPrice?: boolean })[];
+  enabled: boolean;
+  /** Whether the operator still offers its kind; one no longer offered is kept, unused. */
+  offered: boolean;
+  lastCheck: { ok: boolean; at: string; latencyMs: number; detail: string | null; listed: number } | null;
+  archivedAt: string | null;
+  createdBy: ActorRef;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What the operator offers companies, and this company's providers. */
+export interface ModelProviders {
+  offered: { kinds: ProviderKind[]; board: boolean };
+  providers: ModelProvider[];
 }
 
 export interface Connection {
@@ -295,7 +342,8 @@ export interface Connection {
   companyId: string;
   name: string;
   catalogId: string | null;
-  kind: "mcp" | "openapi";
+  /** web: the board's own fetch; its manifest keeps the company's list of web domains. */
+  kind: "mcp" | "openapi" | "web";
   transport: "http" | "stdio";
   url: string | null;
   command: string | null;
@@ -386,9 +434,22 @@ export interface Approval {
   target: string | null;
   /** The newer proposal that replaced it. */
   supersededBy: string | null;
+  /** A rejected write's: who takes the task from there; null once it moved on another way. */
+  afterRejection: AfterRejection | null;
   createdAt: string;
   updatedAt: string;
 }
+
+/** Who takes a task from a rejected write. */
+export type AfterRejection =
+  /** The task's manager re-planned it since the rejection. */
+  | { kind: "replanned"; by: string }
+  /** The task waits with the rejection, and its manager re-plans it on his next pass. */
+  | { kind: "replan"; by: string }
+  /** Another proposal on the task still waits for a decision. */
+  | { kind: "proposal" }
+  /** The task waits with the rejection for its assignee, a person, or for any person (null). */
+  | { kind: "person"; name: string | null };
 
 // --- Peter (M4) ---------------------------------------------------------------
 
@@ -470,12 +531,14 @@ export interface Goal {
   /** Why the goal needs a person, while it does. */
   attention: string | null;
   planner: string | null;
+  /** The goal opened its project; false: it went into a project that existed. */
+  openedProject: boolean;
   createdBy: ActorRef;
   plannedAt: string | null;
   closedAt: string | null;
   createdAt: string;
   updatedAt: string;
-  /** What the goal has cost so far: the runs on its project and Peter's planning. */
+  /** What the goal has cost so far: its tasks' runs and Peter's planning. */
   spend: GoalSpend;
 }
 
@@ -754,10 +817,10 @@ export type BudgetScopeKind = "company" | "department" | "project" | "teammate";
 
 export interface Budget {
   id: string;
-  scopeKind: BudgetScopeKind;
+  /** "goal": a goal's token cap, a lifetime budget Peter sets from the goal; nobody sets one by hand. */
+  scopeKind: BudgetScopeKind | "goal";
   scopeId: string;
   tokensLimit: number;
-  /** "goal" is the lifetime cap Peter sets on a goal's project; nobody sets one by hand. */
   window: BudgetWindow | "goal";
   used: number;
   percent: number;
@@ -768,6 +831,10 @@ export interface Budget {
 export interface ModelPrice {
   id: string;
   model: string;
+  /** The company provider whose price it is; null: the board's own models. */
+  providerId: string | null;
+  /** Filled from Anthropic's list for a Bedrock Claude model: check it against the AWS bill. */
+  estimate: boolean;
   currency: string;
   inputPerMillion: number | null;
   outputPerMillion: number | null;
@@ -789,6 +856,8 @@ export interface CostLine {
   tokens: TokenTotals;
   costMinorUnits: number | null;
   runs: number;
+  /** A manager's own model calls in the line: planning a goal, a re-plan note, an org proposal. */
+  calls: number;
 }
 
 export interface BudgetLine {
@@ -823,7 +892,9 @@ export interface CostReport {
     departmentName: string | null;
     seatMinorUnits: number;
   })[];
-  byModel: (CostLine & { model: string; teammates: number })[];
+  /** By model and the provider it went through (null: the board's own models). */
+  byModel: (CostLine & { model: string; providerId: string | null; provider: string; teammates: number })[];
+  byProvider: (CostLine & { id: string | null; name: string; kind: ProviderKind | null })[];
   bySeat: { key: string; teammates: number; seatMinorUnits: number }[];
   daily: { day: string; tokens: number; costMinorUnits: number | null }[];
   prices: number;
@@ -847,7 +918,8 @@ export interface MonthlyReport {
     engine: string;
     seatMinorUnits: number;
   })[];
-  byModel: (CostLine & { model: string })[];
+  byModel: (CostLine & { model: string; providerId: string | null; provider: string })[];
+  byProvider: (CostLine & { id: string | null; name: string })[];
   daily: { day: string; tokens: number; costMinorUnits: number | null }[];
 }
 

@@ -162,7 +162,11 @@ describe("a board where the Claude CLI is signed in", () => {
       cody: await addTeammate(api, base, "Cody", "n8n engineer"),
       verifier: await addTeammate(api, base, "Verifier", "reviewer"),
     };
-    const res = await api.post(`${base}/goals`, { text: RECORDED_GOAL });
+    // The recorded plan builds the page in a repository, so the goal names one.
+    const res = await api.post(`${base}/goals`, {
+      text: RECORDED_GOAL,
+      repoUrl: "https://github.com/acme/site",
+    });
     expect(res.status).toBe(201);
     expect(res.body.planner).toBe(`model:${Object.keys(fixture.modelUsage)[0]}`);
     expect(res.body.tasks.map((t: any) => [t.title, t.assignee.id])).toEqual(

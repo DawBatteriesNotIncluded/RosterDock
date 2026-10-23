@@ -6,12 +6,11 @@ import { describe, expect, it } from "vitest";
 import type { RunEventInput } from "@rosterdock/shared";
 import {
   buildArgs,
+  engineWebNote,
   createClaudeCodeEngine,
   DEFAULT_ALLOWED_TOOLS,
   narrowTools,
   parseStream,
-  resolveClaudeBin,
-  splitToolList,
 } from "../src/engines/claude-code.js";
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -162,12 +161,18 @@ describe("invocation", () => {
     expect(narrowTools("Read,Write", null).tools).toEqual(["Read", "Write"]);
   });
 
-  it("splits a tool list on commas and spaces, never inside a rule", () => {
-    expect(splitToolList("Bash(git diff:*), Read  Edit(./a,b/**)")).toEqual([
-      "Bash(git diff:*)",
-      "Read",
-      "Edit(./a,b/**)",
-    ]);
+  it("tells the teammate when its engine keeps its own web tools, which do not go through the board", () => {
+    expect(engineWebNote(DEFAULT_ALLOWED_TOOLS, null)).toBeNull();
+    const both = engineWebNote(`${DEFAULT_ALLOWED_TOOLS},WebFetch,WebSearch`, null);
+    expect(both).toContain("## Your engine's own web tools");
+    expect(both).toContain("This worker also lets you use WebFetch and WebSearch directly.");
+    expect(both).toContain("They reach the web outside the board");
+    // A department's list narrows them away like any tool, and never adds one the worker does not allow.
+    expect(engineWebNote(`${DEFAULT_ALLOWED_TOOLS},WebFetch,WebSearch`, ["Read(./**)"])).toBeNull();
+    expect(
+      engineWebNote(`${DEFAULT_ALLOWED_TOOLS},WebFetch`, ["Read(./**)", "WebFetch", "WebSearch"]),
+    ).toContain("use WebFetch directly");
+    expect(engineWebNote(DEFAULT_ALLOWED_TOOLS, ["WebFetch"])).toBeNull();
   });
 
   it("gives Claude Code only the list's built-in tools, so a list without Bash leaves it no shell", () => {
@@ -234,24 +239,6 @@ process.stderr.write("available=" + a[a.indexOf("--tools") + 1] + "\\n");`,
     }
   });
 
-  it("resolves the Windows npm shim to cli.js run by this Node", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-shim-"));
-    try {
-      const js = path.join(dir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
-      await (await import("node:fs/promises")).mkdir(path.dirname(js), { recursive: true });
-      await writeFile(js, "", "utf8");
-      const resolved = resolveClaudeBin("claude", { PATH: dir }, "win32");
-      expect(resolved).toEqual({ bin: process.execPath, prefix: [js] });
-      expect(resolveClaudeBin("claude", { PATH: dir }, "linux")).toEqual({ bin: "claude", prefix: [] });
-      expect(resolveClaudeBin("/opt/claude", { PATH: dir }, "win32")).toEqual({
-        bin: "/opt/claude",
-        prefix: [],
-      });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
   it("runs a stub binary the way it would run Claude Code: prompt on stdin, stream on stdout, files in the workdir", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-cc-"));
     const stub = path.join(dir, "claude-stub.mjs");
@@ -308,6 +295,49 @@ for (const l of lines) process.stdout.write(l + "\\n");
       expect(usage).toEqual(result.usage);
       expect(events.map((e) => e.type)).toContain("tool");
       expect(await readFile(path.join(dir, "vms-architecture.md"), "utf8")).toBe("# arch\n");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("hands Claude Code the brief with its web tools named only when the worker leaves it some", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-cc-web-"));
+    const stub = path.join(dir, "claude-stub.mjs");
+    await writeFile(
+      stub,
+      `
+import { writeFile, readFile } from "node:fs/promises";
+const chunks = [];
+for await (const c of process.stdin) chunks.push(c);
+await writeFile("prompt.txt", Buffer.concat(chunks));
+for (const l of (await readFile(process.env.FIXTURE_PATH, "utf8")).split("\\n").filter(Boolean)) process.stdout.write(l + "\\n");
+`,
+      "utf8",
+    );
+    const prompt = async (allowedTools: string) => {
+      const engine = createClaudeCodeEngine({ bin: process.execPath, allowedTools, prefixArgs: [stub] });
+      await engine.run({
+        workdir: dir,
+        pack: "# Research task",
+        model: "claude-sonnet-5",
+        signal: new AbortController().signal,
+        emit: () => {},
+        onUsage: () => {},
+        env: {
+          PATH: process.env.PATH ?? "",
+          Path: process.env.Path ?? "",
+          FIXTURE_PATH: path.join(fixtures, "claude-code-success.ndjson"),
+        },
+        allowedTools: null,
+        mcp: null,
+      });
+      return readFile(path.join(dir, "prompt.txt"), "utf8");
+    };
+    try {
+      const withWeb = await prompt(`${DEFAULT_ALLOWED_TOOLS},WebSearch`);
+      expect(withWeb).toContain("# Research task\n\n## Your engine's own web tools");
+      expect(withWeb).toContain("use WebSearch directly");
+      expect(await prompt(DEFAULT_ALLOWED_TOOLS)).not.toContain("own web tools");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

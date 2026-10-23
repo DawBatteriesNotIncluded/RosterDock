@@ -1,4 +1,4 @@
-// Settings, one tab at a time: prices and budgets, how Peter thinks,
+// Settings, one tab at a time: prices and budgets, the company's model providers, how Peter thinks,
 // connections (with the secrets note and the client policies), notifications,
 // drift, templates.
 // Secrets never appear here; the platform knows them by name only.
@@ -25,10 +25,11 @@ import type {
 } from "../api/types.ts";
 import { Button, Field, Pill, Tip, Topbar } from "../components/ui.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
-import { DEFAULT_MODEL } from "../lib/format.ts";
+import { DEFAULT_MODEL, toMinor } from "../lib/format.ts";
 import type { SettingsTab } from "../state/store.tsx";
 import { ClientPoliciesPanel } from "./ClientPoliciesPanel.tsx";
 import { ConnectionsPanel, type ConnectionsPanelProps } from "./ConnectionsPanel.tsx";
+import { ModelsPanel, type ModelsPanelProps } from "./ModelsPanel.tsx";
 import { fmtTokens } from "./RunPanel.tsx";
 import { money } from "./CostsView.tsx";
 
@@ -48,6 +49,8 @@ export interface SettingsViewProps {
   deleteBudget(id: string): Promise<void>;
   initialPrices?: ModelPrice[];
   initialBudgets?: Budget[];
+  /** The company's own model providers (Settings > Models). */
+  models: Omit<ModelsPanelProps, "data" | "canEdit">;
   // Governed tools (M5)
   connections: Omit<ConnectionsPanelProps, "connections" | "canEdit">;
   saveClientPolicy(projectId: string, policy: Project["clientPolicy"]): Promise<void>;
@@ -71,6 +74,7 @@ export interface SettingsViewProps {
 
 export const SETTINGS_TABS: { value: SettingsTab; label: string }[] = [
   { value: "prices", label: "Prices and budgets" },
+  { value: "models", label: "Models" },
   { value: "peter", label: "Peter" },
   { value: "style", label: "Style" },
   { value: "connections", label: "Connections" },
@@ -630,14 +634,7 @@ function NotificationsCard(p: {
   );
 }
 
-/** "3.00" → 300 minor units; blank → null. */
-export function toMinor(major: string): number | null {
-  const t = major.trim();
-  if (!t) return null;
-  const n = Number(t);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.round(n * 100);
-}
+export { toMinor } from "../lib/format.ts";
 
 const SCOPE_LABEL: Record<BudgetScopeKind, string> = {
   company: "Company",
@@ -645,8 +642,10 @@ const SCOPE_LABEL: Record<BudgetScopeKind, string> = {
   project: "Project",
   teammate: "Teammate",
 };
+/** What a listed budget is on: a goal's cap is listed here too, though it is set from the goal. */
+const LISTED_SCOPE_LABEL: Record<Budget["scopeKind"], string> = { ...SCOPE_LABEL, goal: "Goal" };
 
-/** A budget's window as a person reads it; "goal" is the lifetime cap Peter sets on a goal's project. */
+/** A budget's window as a person reads it; "goal" is a goal's lifetime cap. */
 const WINDOW_PHRASE: Record<Budget["window"], string> = {
   day: "a day",
   week: "a week",
@@ -669,6 +668,8 @@ export function scopeName(data: CompanyData, b: Pick<Budget, "scopeKind" | "scop
       return data.projects.find((p) => p.id === b.scopeId)?.name ?? "a project";
     case "teammate":
       return data.teammates.find((t) => t.id === b.scopeId)?.name ?? "a teammate";
+    case "goal":
+      return data.goals.find((g) => g.id === b.scopeId)?.title ?? "a goal";
   }
 }
 
@@ -907,6 +908,8 @@ function PricesTab(p: SettingsViewProps) {
     void reload();
   }, [p.data.company.id, latestSeq]);
   const currency = prices[0]?.currency ?? "GBP";
+  // A provider's prices are on its card under Models.
+  const ownPrices = prices.filter((pr) => !pr.providerId);
   /** Run a write and reload; true when it went through. */
   const wrap = (fn: () => Promise<unknown>) => async () => {
     try {
@@ -929,7 +932,8 @@ function PricesTab(p: SettingsViewProps) {
           <span className="hint">
             Per million tokens for API billing, or per seat per month for subscription engines. A seat row is
             keyed by the model, or by the engine (claude_code, codex) for every teammate on it. Costs on the
-            Costs page use these; nothing here touches how teammates run.
+            Costs page use these; nothing here touches how teammates run. These are the board's own models'; a
+            provider's prices are on its card under Models.
           </span>
         </div>
         {p.canEdit ? (
@@ -939,7 +943,8 @@ function PricesTab(p: SettingsViewProps) {
                 Add list prices
               </Button>
               <span className="hint">
-                Prices every Claude model the company uses and has not priced, in USD. Prices you set stay.
+                Prices every Claude model the company uses and has not priced, in USD, unless the company
+                prices in another currency. Prices you set stay.
               </span>
             </div>
             <span className="hint">
@@ -963,7 +968,7 @@ function PricesTab(p: SettingsViewProps) {
               </tr>
             </thead>
             <tbody>
-              {prices.map((pr) => (
+              {ownPrices.map((pr) => (
                 <tr key={pr.id}>
                   <td className="font-semibold">{pr.model}</td>
                   <td className="mono text-right">{money(pr.inputPerMillion, pr.currency)}</td>
@@ -986,7 +991,7 @@ function PricesTab(p: SettingsViewProps) {
                   ) : null}
                 </tr>
               ))}
-              {prices.length === 0 ? (
+              {ownPrices.length === 0 ? (
                 <tr>
                   <td className="hint" colSpan={columns}>
                     No prices yet. Runs count tokens either way; money needs a price.
@@ -1013,7 +1018,7 @@ function PricesTab(p: SettingsViewProps) {
               <tr key={b.id}>
                 <td>
                   <span className="font-semibold">{scopeName(p.data, b)}</span>
-                  <span className="hint"> · {SCOPE_LABEL[b.scopeKind]}</span>
+                  <span className="hint"> · {LISTED_SCOPE_LABEL[b.scopeKind]}</span>
                 </td>
                 <td className="mono text-right whitespace-nowrap">{budgetLine(b)}</td>
                 <td className="text-right">
@@ -1061,6 +1066,7 @@ export function SettingsView(p: SettingsViewProps) {
           <div className="content">
             <div className="company scroll" style={{ gap: 16 }}>
               {p.tab === "prices" ? <PricesTab {...p} /> : null}
+              {p.tab === "models" ? <ModelsPanel {...p.models} data={p.data} canEdit={p.canEdit} /> : null}
               {p.tab === "style" ? (
                 <StyleCard
                   canEdit={p.canEdit}
@@ -1087,7 +1093,12 @@ export function SettingsView(p: SettingsViewProps) {
                       on the board holds a value.
                     </span>
                   </div>
-                  <ConnectionsPanel {...p.connections} connections={p.data.connections} canEdit={p.canEdit} />
+                  <ConnectionsPanel
+                    {...p.connections}
+                    connections={p.data.connections}
+                    canEdit={p.canEdit}
+                    companyId={p.data.company.id}
+                  />
                   <ClientPoliciesPanel
                     data={p.data}
                     canEdit={p.canEdit}

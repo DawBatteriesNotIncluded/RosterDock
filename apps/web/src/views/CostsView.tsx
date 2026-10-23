@@ -1,12 +1,25 @@
 // Costs: tokens to money for the company over a window. API billing (the
 // per-model price table) next to seat billing (per teammate per month), by
 // department, model, teammate and project, with the budget and a forecast.
+// Peter's own model calls (planning) count with the runs, under him.
 import { useEffect, useState } from "react";
 import type { BudgetWindow, CompanyData, CostReport, MonthlyReport } from "../api/types.ts";
 import { Avatar, Empty, Pill, Segs, Topbar } from "../components/ui.tsx";
+import { ENGINE_LABEL } from "../lib/format.ts";
 import { fmtTokens } from "./RunPanel.tsx";
 
 export type CostMode = "api" | "seat";
+
+/** A model as Costs names it: the stub's runs by the engine's own name, since they call no model. */
+export function modelLabel(model: string): string {
+  return model === "stub" ? (ENGINE_LABEL.stub ?? model) : model;
+}
+
+/** What a line counts: its runs, and the planning calls a manager made, when there are any. */
+export function workCount(line: { runs: number; calls: number }): string {
+  const runs = `${line.runs} run${line.runs === 1 ? "" : "s"}`;
+  return line.calls ? `${runs} · ${line.calls} planning call${line.calls === 1 ? "" : "s"}` : runs;
+}
 
 export function money(minorUnits: number | null, currency: string): string {
   if (minorUnits === null) return "—";
@@ -77,7 +90,6 @@ export function MonthlyView(p: {
   const r = p.report;
   if (!r) return <Empty>{p.error ? `Could not load the month: ${p.error}` : "Adding up…"}</Empty>;
   const cur = r.currency;
-  const runs = (n: number) => `${n} run${n === 1 ? "" : "s"}`;
   return (
     <div className="company scroll" style={{ gap: 22 }}>
       <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
@@ -87,7 +99,7 @@ export function MonthlyView(p: {
             {money(r.totals.costMinorUnits, cur)}
           </span>
           <span className="hint">
-            {fmtTokens(r.totals.tokens.total)} tokens · {runs(r.totals.runs)}
+            {fmtTokens(r.totals.tokens.total)} tokens · {workCount(r.totals)}
           </span>
         </div>
         <div className="card flex flex-col gap-1.5 px-[18px] py-4">
@@ -105,7 +117,7 @@ export function MonthlyView(p: {
             Chargeback CSV
           </a>
           <a className="btn" href={p.usageCsvUrl} download>
-            Every run as CSV
+            Usage as CSV
           </a>
         </div>
       </div>
@@ -127,7 +139,7 @@ export function MonthlyView(p: {
               <tr key={pr.id} className="cursor-pointer" onClick={() => p.onOpenProject(pr.id)}>
                 <td>
                   <span className="font-semibold">{pr.name}</span> <span className="hint">· {pr.client}</span>
-                  <div className="hint">{runs(pr.runs)}</div>
+                  <div className="hint">{workCount(pr)}</div>
                 </td>
                 <td className="mono">{pr.chargebackTag ?? <span className="hint">untagged</span>}</td>
                 <td className="mono text-right">{fmtTokens(pr.tokens.total)}</td>
@@ -190,9 +202,10 @@ export function MonthlyView(p: {
               {r.byTeammate.map((t) => (
                 <tr key={t.id}>
                   <td>
-                    <span className="font-semibold">{t.name}</span> <span className="hint">· {t.model}</span>
+                    <span className="font-semibold">{t.name}</span>{" "}
+                    <span className="hint">· {modelLabel(t.model)}</span>
                     <div className="hint">
-                      {fmtTokens(t.tokens.total)} tokens · {runs(t.runs)}
+                      {fmtTokens(t.tokens.total)} tokens · {workCount(t)}
                     </div>
                   </td>
                   <td className="mono text-right">{money(t.costMinorUnits, cur)}</td>
@@ -206,9 +219,10 @@ export function MonthlyView(p: {
           <table className="costs">
             <tbody>
               {r.byModel.map((m) => (
-                <tr key={m.model}>
+                <tr key={`${m.model} ${m.providerId ?? ""}`}>
                   <td>
-                    <span className="mono font-semibold">{m.model}</span>
+                    <span className="mono font-semibold">{modelLabel(m.model)}</span>
+                    {m.providerId ? <span className="hint"> · {m.provider}</span> : null}
                     <div className="hint">{fmtTokens(m.tokens.total)} tokens</div>
                   </td>
                   <td className="mono text-right">{money(m.costMinorUnits, cur)}</td>
@@ -220,7 +234,8 @@ export function MonthlyView(p: {
       </div>
       <span className="hint">
         Priced with the table as it stands now. Seats are the monthly seat price of every teammate on the
-        roster, not pro-rated. The chargeback CSV is one line per project; the usage CSV is one line per run.
+        roster, not pro-rated. The chargeback CSV is one line per project and provider; the usage CSV is one
+        line per run or planning call.
       </span>
     </div>
   );
@@ -375,7 +390,7 @@ export function CostsView(p: CostsViewProps) {
             {card(
               "Spend so far",
               money(spend, cur),
-              `${fmtTokens(report.totals.tokens.total)} tokens · ${report.totals.runs} run${report.totals.runs === 1 ? "" : "s"} · ${report.byTeammate.length} teammate${report.byTeammate.length === 1 ? "" : "s"}`,
+              `${fmtTokens(report.totals.tokens.total)} tokens · ${workCount(report.totals)} · ${report.byTeammate.length} teammate${report.byTeammate.length === 1 ? "" : "s"}`,
             )}
             {budget
               ? card(
@@ -478,13 +493,13 @@ export function CostsView(p: CostsViewProps) {
                 <tbody>
                   {mode === "api"
                     ? report.byModel.map((m) => (
-                        <tr key={m.model}>
+                        <tr key={`${m.model} ${m.providerId ?? ""}`}>
                           <td>
-                            <span className="font-semibold">{m.model}</span>
+                            <span className="font-semibold">{modelLabel(m.model)}</span>
+                            {m.providerId ? <span className="hint"> · {m.provider}</span> : null}
                             <div className="hint">
                               {m.teammates} teammate{m.teammates === 1 ? "" : "s"} ·{" "}
-                              {fmtTokens(m.tokens.total)} tokens · {m.runs} run
-                              {m.runs === 1 ? "" : "s"}
+                              {fmtTokens(m.tokens.total)} tokens · {workCount(m)}
                             </div>
                           </td>
                           <td className="mono text-right">{money(m.costMinorUnits, cur)}</td>
@@ -515,6 +530,27 @@ export function CostsView(p: CostsViewProps) {
               </table>
             </div>
           </div>
+
+          {report.byProvider.some((x) => x.id !== null) ? (
+            <div className="card overflow-hidden p-0">
+              <div className="eyebrow border-b border-[var(--border-soft)] px-[18px] py-3.5">By provider</div>
+              <table className="costs">
+                <tbody>
+                  {report.byProvider.map((x) => (
+                    <tr key={x.id ?? "board"}>
+                      <td>
+                        <span className="font-semibold">{x.name}</span>
+                        <div className="hint">
+                          {fmtTokens(x.tokens.total)} tokens · {workCount(x)}
+                        </div>
+                      </td>
+                      <td className="mono text-right">{money(x.costMinorUnits, cur)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
 
           <div className="card overflow-hidden p-0">
             <div className="flex items-center justify-between border-b border-[var(--border-soft)] px-[18px] py-3.5">
@@ -548,13 +584,20 @@ export function CostsView(p: CostsViewProps) {
                             </span>
                           </span>
                         </td>
-                        <td>{mode === "api" ? m.model : (t?.engine ?? m.engine)}</td>
+                        <td>{mode === "api" ? modelLabel(m.model) : (t?.engine ?? m.engine)}</td>
                         <td className="mono text-right">{fmtTokens(m.tokens.input)}</td>
                         <td className="mono text-right">{fmtTokens(m.tokens.output)}</td>
                         <td className="mono text-right">
                           {fmtTokens(m.tokens.cacheRead + m.tokens.cacheWrite)}
                         </td>
-                        <td className="mono text-right">{m.runs}</td>
+                        <td className="mono text-right">
+                          {m.runs}
+                          {m.calls ? (
+                            <div className="hint">
+                              {m.calls} planning call{m.calls === 1 ? "" : "s"}
+                            </div>
+                          ) : null}
+                        </td>
                         <td className="mono text-right">{money(val(m), cur)}</td>
                       </tr>
                     );
@@ -581,7 +624,7 @@ export function CostsView(p: CostsViewProps) {
                       <span className="font-semibold">{pr.name}</span>{" "}
                       <span className="hint">· {pr.client}</span>
                       <div className="hint">
-                        {fmtTokens(pr.tokens.total)} tokens · {pr.runs} run{pr.runs === 1 ? "" : "s"}
+                        {fmtTokens(pr.tokens.total)} tokens · {workCount(pr)}
                       </div>
                     </td>
                     <td className="mono text-right">

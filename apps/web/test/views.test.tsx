@@ -1,11 +1,12 @@
 // Headless smoke: every view renders to HTML with sample data and shows the
 // things the prototype shows. No DOM, no network.
-import { EVENT_TYPES } from "@rosterdock/shared";
+import { blockerFor, EVENT_TYPES } from "@rosterdock/shared";
+import { blockerLine, blockerNeedsYou } from "../src/lib/format.ts";
 import { renderToString } from "react-dom/server";
-import type { CompanyData } from "../src/api/types.ts";
+import type { Approval, CompanyData } from "../src/api/types.ts";
 import { describe, expect, it } from "vitest";
 import { Shell } from "../src/components/Shell.tsx";
-import { Avatar, elapsedLabel, Thinking } from "../src/components/ui.tsx";
+import { Avatar, elapsedLabel, Thinking, Topbar } from "../src/components/ui.tsx";
 import { describeEvent, engineChoices, relativeTime, teammateStatus } from "../src/lib/format.ts";
 import {
   CreateDepartmentModal,
@@ -16,18 +17,39 @@ import {
 } from "../src/modals/index.tsx";
 import { GoalResultPanel, goalProgress, goalTone, publishedVerdict } from "../src/views/GoalsPanel.tsx";
 import { ActivityView } from "../src/views/ActivityView.tsx";
-import { APPROVAL_LABEL, ApprovalsView, sortApprovals } from "../src/views/ApprovalsView.tsx";
+import {
+  afterRejectionText,
+  APPROVAL_LABEL,
+  ApprovalsView,
+  sortApprovals,
+} from "../src/views/ApprovalsView.tsx";
 import { capFor, ClientPoliciesPanel } from "../src/views/ClientPoliciesPanel.tsx";
 import { messageWithIssues } from "../src/api/client.ts";
 import {
+  AddWebForm,
   checkLine,
+  confirmAsRead,
   ConnectionsPanel,
   connectionSummary,
+  heldReads,
+  consentUrl,
+  privateFlag,
   stdioListed,
 } from "../src/views/ConnectionsPanel.tsx";
+import { ConnectionGrant } from "../src/views/ToolboxEditor.tsx";
+import { domainsText, parseDomains, webDomainsOf } from "../src/views/WebDomains.tsx";
+import { policyNarrows, withWebDomains } from "../src/views/ClientPoliciesPanel.tsx";
 import { BoardView } from "../src/views/BoardView.tsx";
 import { CompanyView } from "../src/views/CompanyView.tsx";
-import { CostsView, fourteenDays, money, MonthlyView, monthOf } from "../src/views/CostsView.tsx";
+import {
+  CostsView,
+  fourteenDays,
+  modelLabel,
+  money,
+  MonthlyView,
+  monthOf,
+  workCount,
+} from "../src/views/CostsView.tsx";
 import { characterRows, carpetOf, HAIR_STYLES, lookFor } from "../src/views/office/art.ts";
 import {
   lineDuration,
@@ -76,7 +98,15 @@ import { DELIVERABLE_LABEL, fmtBytes, fmtCpu, fmtTokens, otherFiles } from "../s
 import { WorkingNow } from "../src/views/WorkingNow.tsx";
 import { loginErrorText, LoginView } from "../src/views/Login.tsx";
 import { cellState, DepartmentsView, nextCellState } from "../src/views/DepartmentsView.tsx";
-import { EFFORT_CHOICES, TeammatesView } from "../src/views/TeammatesView.tsx";
+import {
+  draftDirty,
+  editorState,
+  EFFORT_CHOICES,
+  refreshed,
+  TeammatesView,
+  toolboxLines,
+  withGrant,
+} from "../src/views/TeammatesView.tsx";
 import { nextGrant, toolGrantedBy } from "../src/views/ToolboxEditor.tsx";
 import {
   approvalFixtures,
@@ -93,6 +123,8 @@ import {
   reviewFixture,
   reviewListFixture,
 } from "./fixtures.ts";
+import { loadFeatures, oauthErrorText } from "../src/App.tsx";
+import type { Features } from "../src/api/types.ts";
 
 const noop = () => {};
 const asyncNoop = async () => {};
@@ -456,10 +488,25 @@ describe("views render with sample data", () => {
     expect(html).toContain("Cody · n8n engineer · Engineering");
     expect(html).toContain("#144");
     expect(html).toContain("sha256 9f2c4d1a0b7e");
-    // The decided card fades and carries the note.
+    // The decided card fades and carries the note, which ends the sentence with its own full stop.
     expect(html).toContain("approval decided");
-    expect(html).toContain("Not until the first digest is approved.");
-    expect(html).toContain("Nothing was sent; Peter re-plans the task.");
+    expect(html).toContain(
+      "Not until the first digest is approved. Nothing was sent; Peter re-plans the task.",
+    );
+    expect(html).not.toContain("approved..");
+    const failed = render(
+      <ApprovalsView
+        data={{
+          ...approvalsFixture,
+          approvals: [{ ...approvalFixtures[0]!, status: "failed", error: "HubSpot answered HTTP 429." }],
+        }}
+        canDecide
+        onApprove={asyncNoop}
+        onReject={asyncNoop}
+        onOpenTask={noop}
+      />,
+    );
+    expect(failed).toContain("but the send failed: HubSpot answered HTTP 429.</span>");
     expect(sortApprovals(approvalFixtures)[0]!.status).toBe("pending");
     expect(APPROVAL_LABEL.executed).toBe("Approved · executed");
     // A replaced proposal fades, says what replaced it, and offers no decision.
@@ -503,6 +550,42 @@ describe("views render with sample data", () => {
       <ApprovalsView data={fixture} canDecide onApprove={asyncNoop} onReject={asyncNoop} onOpenTask={noop} />,
     );
     expect(empty).toContain("Nothing waits for you");
+  });
+
+  it("a rejected write's card says who takes the task from there, and claims no re-plan that will not come", () => {
+    const card = (afterRejection: Approval["afterRejection"]) =>
+      render(
+        <ApprovalsView
+          data={{ ...approvalsFixture, approvals: [{ ...approvalFixtures[1]!, afterRejection }] }}
+          canDecide
+          onApprove={asyncNoop}
+          onReject={asyncNoop}
+          onOpenTask={noop}
+        />,
+      );
+    // A teammate's task: its manager re-plans it on his next pass, and then has.
+    expect(card({ kind: "replan", by: "Peter" })).toContain(
+      "Not until the first digest is approved. Nothing was sent; Peter re-plans the task.",
+    );
+    expect(card({ kind: "replanned", by: "Lena" })).toContain("Nothing was sent; Lena re-planned the task.");
+    // A person's task waits for them; one nobody picks up says what a person can do with it.
+    const dana = card({ kind: "person", name: "Dana" });
+    expect(dana).toContain("Nothing was sent; the task waits with the rejection for Dana.");
+    expect(dana).not.toContain("re-plan");
+    const nobody = card({ kind: "person", name: null });
+    expect(nobody).toContain(
+      "Nothing was sent; the task waits with the rejection for a person to start it again with a note, reassign it or cancel it.",
+    );
+    expect(nobody).not.toContain("re-plan");
+    expect(card({ kind: "proposal" })).toContain(
+      "Nothing was sent; the task still waits on another proposal.",
+    );
+    // A task that moved on another way (started again, cancelled) is not promised anything.
+    expect(card(null)).toContain("Not until the first digest is approved. Nothing was sent.</span>");
+    // The toast says the same after "Rejected."
+    expect(afterRejectionText({ kind: "person", name: "Dana" })).toBe(
+      "Nothing was sent; the task waits with the rejection for Dana.",
+    );
   });
 
   it("Connections panel lists connections with credential names, tools by classification, and the add forms", () => {
@@ -682,6 +765,176 @@ describe("views render with sample data", () => {
     );
     expect(stdioListed(lines, "sh -c env")).toBe(false);
     expect(stdioListed([], "npx -y @xeroapi/xero-mcp-server@1.0.0")).toBe(false);
+
+    // A catalog server usually run on a private address says the operator must allow it, unless they do.
+    const playwright = [
+      {
+        id: "playwright",
+        name: "Playwright browser",
+        description: "A real browser",
+        category: "Web",
+        kind: "mcp" as const,
+        transport: "http" as const,
+        urlExample: "http://playwright-mcp:8931/mcp",
+        reads: [],
+        writes: [],
+      },
+    ];
+    const nothing = { ...none, privateDestinations: [] };
+    expect(
+      render(<ConnectionsPanel {...props} initialCatalog={playwright} features={nothing} canEdit />),
+    ).toContain("Playwright browser · Web · usually on a private address, which the operator must allow");
+    // The operator's list shows to the people who manage connections, the company's own entries marked.
+    const own = {
+      ...none,
+      privateDestinations: ["10.20.0.0/16", "ollama.internal"],
+      companyPrivateDestinations: ["ollama.internal"],
+    };
+    const intro = render(
+      <ConnectionsPanel {...props} features={own} companyId="4f1aee73-e65e-4c8d-83f7-aa1169379d7f" canEdit />,
+    );
+    expect(intro).toContain(
+      "of private ones only those this board&#x27;s operator lists: 10.20.0.0/16 · ollama.internal (given to this company).",
+    );
+    expect(intro).toContain("for this company alone by its id, 4f1aee73-e65e-4c8d-83f7-aa1169379d7f.");
+    const allowed = { ...none, privateDestinations: ["playwright-mcp"] };
+    expect(
+      render(<ConnectionsPanel {...props} initialCatalog={playwright} features={allowed} canEdit />),
+    ).not.toContain("which the operator must allow");
+  });
+
+  it("says before the board's check does what it refuses, by the board's own rules", () => {
+    const listed = [
+      "*.tools.svc.cluster.local",
+      "10.20.0.0/16",
+      "127.0.0.1",
+      "ollama.internal.",
+      "[::1]",
+      "fd00::/8",
+      "::ffff:192.168.7.0/120",
+    ];
+    // An address the board refuses, whatever form the URL writes it in.
+    for (const url of [
+      "http://169.254.169.254/latest",
+      "http://10.21.0.1/mcp",
+      "http://127.0.0.2/mcp",
+      "http://[fc00::1]/mcp",
+      "http://[::ffff:169.254.169.254]/latest",
+      "http://[64:ff9b::a9fe:a9fe]/latest",
+      "http://[2002:a9fe:a9fe::1]/",
+      "http://0x7f.0.0.2/",
+      "http://2130706434/",
+      "http://198.18.0.1/",
+      "http://[fe80::1]/",
+    ])
+      expect(privateFlag(url, listed), url).toBe("refused");
+    // A name that looks private and no entry names: refused only if it resolves outside the listed ranges.
+    for (const url of [
+      "http://localhost:3001/mcp",
+      "http://playwright-mcp:8931/mcp",
+      "https://n8n.office.lan/mcp",
+      "http://other.ns.svc.cluster.local/mcp",
+      "http://tools.svc.cluster.local/mcp",
+    ])
+      expect(privateFlag(url, listed), url).toBe("unless-listed");
+    // Public, or listed: nothing to say.
+    for (const url of [
+      "https://mcp.hubspot.com/mcp",
+      "http://8.8.8.8/",
+      "http://playwright.tools.svc.cluster.local:8931/mcp",
+      "http://ollama.internal:11434/",
+      "http://ollama.internal.:11434/",
+      "http://10.20.3.4/mcp",
+      "http://127.0.0.1:3001/mcp",
+      "http://[::1]:3001/mcp",
+      "http://[0:0:0:0:0:0:0:1]/",
+      "http://[fd12::5]/mcp",
+      "http://[::ffff:10.20.0.9]/",
+      "http://192.168.7.9/",
+      "not a url",
+      "",
+    ])
+      expect(privateFlag(url, listed), url).toBeNull();
+    // Nothing listed: every private address is refused.
+    expect(privateFlag("http://127.0.0.1:3001/", [])).toBe("refused");
+  });
+
+  it("opens only a web page as a connection's consent page", () => {
+    expect(consentUrl("https://auth.example.test/authorize?state=1")).toBe(
+      "https://auth.example.test/authorize?state=1",
+    );
+    expect(consentUrl("http://localhost:9000/authorize")).toBe("http://localhost:9000/authorize");
+    for (const url of [
+      "javascript:alert(document.domain)//?x=1",
+      "data:text/html,hi",
+      "JAVASCRIPT:alert(1)",
+      " ",
+      "/relative",
+    ])
+      expect(() => consentUrl(url), url).toThrow("not a web page");
+  });
+
+  it("tools only the server calls read-only are listed on their connection for a person to confirm as reads", () => {
+    const props = {
+      connections: connectionFixtures,
+      loadCatalog: async () => [],
+      createConnection: async () => connectionFixtures[0]!,
+      previewOpenApi: async () => ({ operations: [], errors: [] }),
+      createOpenApiConnection: async () => connectionFixtures[1]!,
+      updateConnection: async () => connectionFixtures[0]!,
+      discoverConnection: async () => connectionFixtures[0]!,
+      checkConnection: async () => connectionFixtures[0]!,
+      deleteConnection: asyncNoop,
+      startOAuth: async () => ({ url: "https://auth.example.test/authorize" }),
+      initialCatalog: [],
+    };
+    const html = render(<ConnectionsPanel {...props} canEdit />);
+    // Tools only the server calls read-only are writes until a person confirms them: listed on the card, each
+    // with its confirmation, and all at once; a viewer sees them and who confirms. One switched off waits for nothing.
+    expect(html).not.toContain("Confirm as read");
+    const held = (name: string, more: { off?: boolean } = {}) => ({
+      name,
+      description: `${name} on GitHub`,
+      write: true,
+      source: "unconfirmed" as const,
+      ...more,
+    });
+    const github = {
+      ...connectionFixtures[0]!,
+      id: "c-github",
+      name: "github",
+      tools: [
+        { name: "list_issues", description: "", write: false, source: "annotation" as const },
+        held("issue_read"),
+        held("pull_request_read"),
+        held("projects_get", { off: true }),
+        { name: "label_read", description: "", write: false, source: "person" as const },
+      ],
+    };
+    expect(heldReads(github).map((t) => t.name)).toEqual(["issue_read", "pull_request_read"]);
+    expect(confirmAsRead(["issue_read", "pull_request_read"])).toEqual({
+      tools: [
+        { name: "issue_read", write: false },
+        { name: "pull_request_read", write: false },
+      ],
+    });
+    const holding = render(<ConnectionsPanel {...props} connections={[github]} canEdit />);
+    expect(holding).toContain("github says these 2 tools only read.");
+    expect(holding).toContain("waits for approval as a write until you confirm it reads");
+    expect(holding).toContain('aria-label="Confirm issue_read as read"');
+    expect(holding).toContain('aria-label="Confirm pull_request_read as read"');
+    expect(holding).not.toContain('aria-label="Confirm projects_get as read"');
+    expect(holding).toContain("Confirm all 2 as reads");
+    const watching = render(<ConnectionsPanel {...props} connections={[github]} canEdit={false} />);
+    expect(watching).toContain("pull_request_read");
+    expect(watching).toContain("until an owner or admin confirms it reads");
+    expect(watching).not.toContain("Confirm as read");
+    expect(watching).not.toContain("Confirm all");
+    const single = render(
+      <ConnectionsPanel {...props} connections={[{ ...github, tools: [held("issue_read")] }]} canEdit />,
+    );
+    expect(single).toContain("github says this tool only reads.");
+    expect(single).not.toContain("Confirm all");
   });
 
   it("a refused body names the field and why, so a form can say more than that it was refused", () => {
@@ -813,6 +1066,11 @@ describe("views render with sample data", () => {
     expect(queue).toContain("In review");
 
     const detail = render(<ReviewsView {...base} selectedId={reviewFixture.id} initial={reviewFixture} />);
+    // The task's title gives way to the rest of the bar, whole on hover; the people can drop to faces.
+    expect(detail).toContain('class="topbar long"');
+    expect(detail).toContain(`<span class="title" title="${reviewFixture.taskTitle}">`);
+    expect(detail).toContain('class="name">Brody</span>');
+    expect(render(<Topbar title="Reviews" />)).toContain('<span class="title">Reviews</span>');
     expect(detail).toContain("2 files");
     expect(detail).toContain("workflows/vms-digest.json");
     expect(detail).toContain("docs/digest-requirements.md");
@@ -957,7 +1215,7 @@ describe("views render with sample data", () => {
     expect(goalTone(peterFixture.goals[1]!, [])).toBe("warn");
     expect(goalTone({ ...active, status: "done" }, [])).toBe("muted");
     // Cancelled tasks leave the total and are counted apart.
-    const mine = peterFixture.tasks.filter((t) => t.projectId === active.projectId);
+    const mine = peterFixture.tasks.filter((t) => t.goalId === active.id);
     const q = goalProgress(
       active,
       mine.map((t, i) => (i === 0 ? { ...t, status: "cancelled" as const } : t)),
@@ -1084,6 +1342,182 @@ describe("views render with sample data", () => {
   });
 });
 
+describe("the web connection", () => {
+  const web = {
+    ...connectionFixtures[0]!,
+    id: "c-web",
+    name: "web",
+    catalogId: null,
+    kind: "web" as const,
+    url: null,
+    authEnvName: null,
+    tools: [
+      { name: "fetch", description: "Read a public web page", write: false, source: "catalog" as const },
+    ],
+    manifest: { domains: ["gong.io"] },
+    discoveredAt: null,
+    lastCheck: null,
+  };
+  const props = {
+    loadCatalog: async () => [],
+    createConnection: async () => web,
+    previewOpenApi: async () => ({ operations: [], errors: [] }),
+    createOpenApiConnection: async () => web,
+    updateConnection: async () => web,
+    discoverConnection: async () => web,
+    checkConnection: async () => web,
+    deleteConnection: asyncNoop,
+    startOAuth: async () => ({ url: "https://auth.example.test/authorize" }),
+    initialCatalog: [],
+  };
+
+  it("reads a typed list of sites, and the company's list off the connection", () => {
+    expect(parseDomains(" Gong.io, https://developers.hubspot.com/docs\n*.example.org gong.io ")).toEqual({
+      domains: ["gong.io", "developers.hubspot.com", "example.org"],
+      bad: null,
+    });
+    expect(parseDomains("gong.io, localhost")).toEqual({ domains: ["gong.io"], bad: "localhost" });
+    expect(parseDomains("")).toEqual({ domains: [], bad: null });
+    expect(domainsText(["gong.io", "hubspot.com"])).toBe("gong.io, hubspot.com");
+    expect(domainsText(null)).toBe("");
+    expect(webDomainsOf(web)).toEqual(["gong.io"]);
+    expect(webDomainsOf({ manifest: { domains: [] } })).toBeNull();
+    expect(webDomainsOf({ manifest: null })).toBeNull();
+  });
+
+  it("shows on its card what it reads, with no credential and nothing to discover, and when the board is off the web", () => {
+    expect(connectionSummary(web)).toBe(
+      "Web · the board's own fetch · reads only gong.io and the sites under it",
+    );
+    expect(connectionSummary({ ...web, manifest: { domains: null } })).toBe(
+      "Web · the board's own fetch · reads any public site",
+    );
+    const html = render(<ConnectionsPanel {...props} connections={[web]} canEdit />);
+    expect(html).toContain("Web · the board&#x27;s own fetch");
+    expect(html).toContain("Sites");
+    expect(html).toContain('aria-label="web sites"');
+    expect(html).toContain('value="gong.io"');
+    expect(html).not.toContain("Discover");
+    expect(html).not.toContain("no credential");
+    expect(html).toContain("Web, built in");
+    const offline = render(
+      <ConnectionsPanel
+        {...props}
+        connections={[web]}
+        features={{ oauth: false, objectStore: false, web: false }}
+        canEdit
+      />,
+    );
+    expect(offline).toContain("operator keeps it off the web: it reads no page");
+    const viewer = render(<ConnectionsPanel {...props} connections={[web]} canEdit={false} />);
+    expect(viewer).toContain("only gong.io and the sites under it");
+    expect(viewer).not.toContain('aria-label="web sites"');
+  });
+
+  it("is added once: the form asks a name and the sites, and says when the company has it", () => {
+    const fresh = render(<AddWebForm existing={undefined} offline={false} onCreate={async () => true} />);
+    expect(fresh).toContain("Add the web connection");
+    expect(fresh).toContain('value="web"');
+    expect(fresh).toContain("empty for any public site");
+    expect(fresh).toContain("never what it says");
+    const had = render(<AddWebForm existing={web} offline onCreate={async () => true} />);
+    expect(had).toContain("This company has its web connection: web.");
+    expect(had).not.toContain("Add the web connection");
+    expect(had).toContain("keeps it off the web");
+  });
+
+  it("client policies and departments narrow its sites; the toolbox says what it reads", () => {
+    const data: CompanyData = { ...connectionsFixture, connections: [...connectionFixtures, web] };
+    const policies = render(<ClientPoliciesPanel data={data} canEdit saveClientPolicy={asyncNoop} />);
+    expect(policies).toContain("Web sites");
+    expect(policies).toContain("narrows what web may read for that client");
+    expect(
+      render(<ClientPoliciesPanel data={connectionsFixture} canEdit saveClientPolicy={asyncNoop} />),
+    ).not.toContain("Web sites");
+    const policy = { default: null, caps: {} };
+    expect(withWebDomains(policy, ["gong.io"])).toEqual({ default: null, caps: {}, webDomains: ["gong.io"] });
+    expect(withWebDomains({ ...policy, webDomains: ["gong.io"] }, [])).toEqual(policy);
+    expect(policyNarrows(policy)).toBe(false);
+    expect(policyNarrows({ ...policy, webDomains: ["gong.io"] })).toBe(true);
+    const departments = {
+      ...data,
+      departments: data.departments.map((d, i) =>
+        i === 0 ? { ...d, sandbox: { webDomains: ["help.gong.io"] } } : d,
+      ),
+    };
+    const view = (onSave?: (id: string, domains: string[]) => Promise<void>) =>
+      render(
+        <DepartmentsView
+          data={departments}
+          onNewDepartment={noop}
+          onDissolve={asyncNoop}
+          onOpenBoard={noop}
+          onCycleCell={asyncNoop}
+          onHire={noop}
+          onDesign={noop}
+          {...(onSave ? { onSaveWebDomains: onSave } : {})}
+        />,
+      );
+    expect(view(asyncNoop)).toContain('value="help.gong.io"');
+    expect(view()).toContain("help.gong.io");
+    expect(view()).toContain("Its web sites narrow what web reads for its tasks");
+    const grant = render(
+      <ConnectionGrant connection={web} grant={{ mode: "read", picked: null }} onChange={noop} />,
+    );
+    expect(grant).toContain("the board&#x27;s fetch: only gong.io and the sites under it");
+  });
+
+  it("names each page in Activity, never what it says", () => {
+    const at = "2026-10-21T12:00:00.000Z";
+    const ev = (payload: Record<string, unknown>) => ({
+      id: "e-web",
+      companyId: fixture.company.id,
+      seq: 900,
+      type: "tool.called" as const,
+      actor: { kind: "teammate" as const, id: fixture.teammates[0]!.id },
+      subject: { kind: "connection" as const, id: "c-web" },
+      payload: { connection: "web", tool: "fetch", number: 140, ...payload },
+      createdAt: at,
+    });
+    expect(
+      describeEvent(ev({ url: "https://help.gong.io/calls", ok: true, status: 200, bytes: 34_816 }), fixture)
+        .text,
+    ).toContain("read https://help.gong.io/calls for #140 · 200 · 34 KB");
+    expect(
+      describeEvent(
+        ev({
+          url: "https://intranet.gong.io/",
+          ok: false,
+          status: null,
+          bytes: 0,
+          note: "intranet.gong.io resolves to 10.0.0.5",
+        }),
+        fixture,
+      ).text,
+    ).toContain("could not read https://intranet.gong.io/ for #140: intranet.gong.io resolves to 10.0.0.5");
+    expect(describeEvent(ev({ ok: true }), fixture).text).toContain("read web · fetch for #140");
+    const made = { ...ev({}), type: "connection.created" as const, payload: { name: "web", kind: "web" } };
+    expect(describeEvent(made, fixture).text).toContain("added the web connection web");
+    const checked = {
+      ...ev({}),
+      type: "connection.checked" as const,
+      payload: { name: "web", kind: "web", ok: true, latencyMs: 0 },
+    };
+    expect(describeEvent(checked, fixture).text).toContain("checked web: the board reads the web");
+    const sites = {
+      ...ev({}),
+      type: "connection.updated" as const,
+      payload: { name: "web", domains: ["gong.io"] },
+    };
+    expect(describeEvent(sites, fixture).text).toContain(
+      "set the sites web reads: only gong.io and the sites under it",
+    );
+    expect(describeEvent({ ...sites, payload: { name: "web", domains: null } }, fixture).text).toContain(
+      "set the sites web reads: any public site",
+    );
+  });
+});
+
 describe("sign-in page", () => {
   const noop = async () => {};
   it("offers the identity provider by name, the dev login only when the board allows it, and says why a sign-in failed", () => {
@@ -1136,6 +1570,30 @@ describe("pure helpers", () => {
       t.status === "blocked" ? { ...t, status: "cancelled" as const } : t,
     );
     expect(teammateStatus(fixture.teammates[3]!, dropped).text).not.toMatch(/^Blocked/);
+  });
+
+  it("a task waiting on a person is amber and needs you: on its card, its department and in the feed", () => {
+    const onTeammate = fixture.tasks.find((t) => t.status === "blocked")!;
+    expect(blockerLine(onTeammate)).toBe("Waiting on @brody");
+    expect(blockerNeedsYou(onTeammate.blocker)).toBe(false);
+    const blocker = blockerFor("waiting_on_person", {
+      what: "Blocked: waiting on @manager to grant web fetch access.",
+      why: "@manager is not a teammate here, so a person has to answer.",
+    });
+    const onPerson = { ...onTeammate, blocker };
+    expect(blockerLine(onPerson)).toBe("Needs you");
+    expect(blockerNeedsYou(onPerson.blocker)).toBe(true);
+    const data = { ...fixture, tasks: fixture.tasks.map((t) => (t.id === onPerson.id ? onPerson : t)) };
+    expect(render(<CompanyView data={fixture} {...companyProps} />)).not.toContain("waiting on you");
+    expect(render(<CompanyView data={data} {...companyProps} />)).toContain(
+      "2 teammates · 0 working · waiting on you",
+    );
+    const ev = fixture.events.find((e) => e.type === "task.blocked")!;
+    expect(describeEvent(ev, fixture).attention).toBe(false);
+    expect(describeEvent({ ...ev, payload: { number: 140, blocker } }, fixture)).toMatchObject({
+      text: "#140 is blocked: Blocked: waiting on @manager to grant web fetch access.",
+      attention: true,
+    });
   });
 
   it("relative time and event sentences", () => {
@@ -1191,6 +1649,55 @@ describe("pure helpers", () => {
         fixture,
       ).text,
     ).toBe("Cody's runs cost 3.2× their usual (410k tokens against 128k tokens on #12)");
+    // A discovery says how many tools only the server calls read-only; a person's confirmation says which.
+    const daniel = { kind: "user" as const, id: fixture.members[0]!.userId };
+    expect(
+      describeEvent(
+        ev("connection.updated", daniel, {
+          name: "github",
+          discovered: 5,
+          writes: ["create_issue", "issue_read", "pull_request_read"],
+          unconfirmed: ["issue_read", "pull_request_read"],
+        }),
+        fixture,
+      ).text,
+    ).toBe("Daniel discovered 5 tools on github · 3 write · 2 to confirm as reads");
+    expect(
+      describeEvent(
+        ev("connection.updated", daniel, { name: "github", discovered: 2, writes: [], unconfirmed: [] }),
+        fixture,
+      ).text,
+    ).toBe("Daniel discovered 2 tools on github · 0 write");
+    expect(
+      describeEvent(
+        ev("connection.updated", daniel, {
+          name: "github",
+          reclassified: ["issue_read"],
+          confirmed: ["issue_read"],
+        }),
+        fixture,
+      ).text,
+    ).toBe("Daniel confirmed issue_read on github as a read");
+    expect(
+      describeEvent(
+        ev("connection.updated", daniel, {
+          name: "github",
+          reclassified: ["issue_read", "pull_request_read"],
+          confirmed: ["issue_read", "pull_request_read"],
+        }),
+        fixture,
+      ).text,
+    ).toBe("Daniel confirmed issue_read, pull_request_read on github as reads");
+    expect(
+      describeEvent(
+        ev("connection.updated", daniel, {
+          name: "github",
+          reclassified: ["issue_read", "create_issue"],
+          confirmed: ["issue_read"],
+        }),
+        fixture,
+      ).text,
+    ).toBe("Daniel reclassified issue_read, create_issue on github");
     // A cancelled task says why, and a reopened one says so.
     const cancelled = { number: 12, title: "Map it", from: "todo", to: "cancelled", toLabel: "Cancelled" };
     expect(
@@ -1350,6 +1857,22 @@ describe("pure helpers", () => {
     expect(
       describeEvent(ev("review.approved", verifier, { number: 142, title: "Map VMS" }), fixture).text,
     ).toBe("Verifier approved #142 Map VMS");
+    // A person approving over a failed credential scan or failing tests is said so in the line.
+    expect(
+      describeEvent(
+        ev(
+          "review.approved",
+          { kind: "user", id: fixture.members[0]!.userId },
+          {
+            number: 142,
+            title: "Map VMS",
+            overrodeChecks: [{ kind: "tests", title: "npm test failed: 2 failing" }],
+          },
+        ),
+        fixture,
+        fixture.members[0]!.userId,
+      ).text,
+    ).toBe("You approved #142 Map VMS over a failed check: npm test failed: 2 failing");
     expect(
       describeEvent(
         ev("pr.opened", verifier, { number: 142, prNumber: 42, repo: "acme/gtm", reviewId: "rev1" }),
@@ -1455,9 +1978,46 @@ describe("pure helpers", () => {
     ])
       expect(html).toContain(s);
     expect(html).toContain("Last 14 days");
+    // Peter's planning calls count beside the runs, never as runs.
+    expect(html).toContain("9 runs · 3 planning calls · 3 teammates");
+    expect(html).toContain('2<div class="hint">3 planning calls</div>');
+    expect(html).toContain("2 runs · 3 planning calls");
+    expect(workCount({ runs: 1, calls: 0 })).toBe("1 run");
+    expect(workCount({ runs: 0, calls: 1 })).toBe("0 runs · 1 planning call");
     expect(html).toContain("Export CSV");
     expect(html).toContain('href="/api/companies/c1/costs/export.csv?window=week"');
     expect(html).toContain("Monthly report");
+    // A stub teammate's runs read as the stub engine, never as the model the teammate names.
+    const stubTokens = { input: 1200, output: 300, cacheRead: 0, cacheWrite: 0, total: 1500 };
+    const stub = {
+      model: "stub",
+      providerId: null,
+      provider: "This board's own models",
+      tokens: stubTokens,
+      costMinorUnits: null,
+      runs: 1,
+      calls: 0,
+    };
+    const withStub = render(
+      <CostsView
+        data={fixture}
+        initial={{
+          ...costFixture,
+          byTeammate: [{ ...costFixture.byTeammate[0]!, ...stub, name: "Stubby", engine: "stub" }],
+          byModel: [{ ...stub, teammates: 1 }],
+        }}
+        loadCosts={async () => costFixture}
+        loadMonthly={async () => monthlyFixture}
+        usageCsvUrl={(w) => `/api/companies/c1/costs/export.csv?window=${w}`}
+        chargebackCsvUrl={(m) => `/api/companies/c1/costs/monthly.csv?month=${m}`}
+        onOpenTeammate={noop}
+        onOpenProject={noop}
+        onOpenSettings={noop}
+      />,
+    );
+    expect((withStub.match(/Stub \(no model\)/g) ?? []).length).toBe(2);
+    expect(withStub).not.toContain("claude-sonnet-5");
+    expect(modelLabel("claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
     const monthly = render(
       <MonthlyView
         month="2026-08"
@@ -1492,6 +2052,24 @@ describe("pure helpers", () => {
       deleteBudget: asyncNoop,
       initialPrices: priceFixture,
       initialBudgets: budgetFixture,
+      models: {
+        features: { oauth: true, objectStore: false },
+        load: async () => ({ offered: { kinds: [], board: true }, providers: [] }),
+        loadSecrets: async () => [],
+        setSecret: asyncNoop,
+        replaceSecret: asyncNoop,
+        checkNew: async () => ({ ok: true }),
+        create: async () => Promise.reject(new Error("not in this test")),
+        update: async () => Promise.reject(new Error("not in this test")),
+        remove: asyncNoop,
+        initial: { offered: { kinds: [], board: true }, providers: [] },
+        initialSecrets: [],
+        loadPrices: async () => priceFixture,
+        savePrice: async () => priceFixture[0]!,
+        deletePrice: asyncNoop,
+        fillListPrices: async () => ({ added: [], unknown: [] }),
+        initialPrices: priceFixture,
+      },
       connections: {
         loadCatalog: async () => [],
         createConnection: async () => connectionFixtures[0]!,
@@ -1534,6 +2112,7 @@ describe("pure helpers", () => {
     for (const t of SETTINGS_TABS) expect(prices).toContain(t.label);
     expect(SETTINGS_TABS.map((t) => t.value)).toEqual([
       "prices",
+      "models",
       "peter",
       "style",
       "connections",
@@ -1888,6 +2467,63 @@ describe("pure helpers", () => {
     );
     expect(office).toContain("Daniel · 1 to approve");
   });
+
+  it("a rejected write leaves the task saying so, and owners and admins can cancel it from the status menu", () => {
+    const stale = fixture.tasks.find((t) => t.status === "blocked")!;
+    const rejected = {
+      ...stale,
+      blocker: {
+        code: "approval_rejected" as const,
+        what: "Stub write: create_note on notes (notes · create_note) was rejected: written once already.",
+        why: "Nothing was sent and nothing waits for a decision any more.",
+        resolution:
+          "Start it again with a note on what to do instead of that write, reassign it, or cancel it.",
+        retrySafe: false,
+      },
+    };
+    const data = { ...fixture, tasks: fixture.tasks.map((t) => (t.id === stale.id ? rejected : t)) };
+    const props = {
+      projectId: "all" as const,
+      departmentId: "all" as const,
+      selectedTaskId: stale.id,
+      onFilterProject: noop,
+      onFilterDepartment: noop,
+      onSelectTask: noop,
+      onNewTask: noop,
+      onMove: asyncNoop,
+      onRefuseDone: noop,
+      onOpenReview: noop,
+      onAssign: asyncNoop,
+      onSetDepartment: asyncNoop,
+      loadMessages: async () => [],
+      onPostMessage: asyncNoop,
+      loadRuns: async () => [],
+      loadRun: async () => {
+        throw new Error("not in this test");
+      },
+      loadArtifacts: async () => [],
+      loadArtifact: async () => {
+        throw new Error("not in this test");
+      },
+      onStartRun: asyncNoop,
+      onStopRun: asyncNoop,
+    };
+    const cancel = '<option value="cancelled">Cancelled</option>';
+    const owner = render(<BoardView data={data} {...props} canCancel onCancel={asyncNoop} />);
+    // The card and the drawer tell what happened: no approval to give, nothing waiting.
+    expect(owner).toContain("was rejected: written once already.");
+    expect(owner).toContain("Nothing was sent and nothing waits for a decision any more.");
+    expect(owner).not.toContain("Needs your approval");
+    expect(owner).toContain(cancel);
+    // Nobody else is offered it, and a task in review is its reviewer's to decide.
+    expect(render(<BoardView data={data} {...props} />)).not.toContain(cancel);
+    const inReview = fixture.tasks.find((t) => t.status === "review")!;
+    expect(
+      render(
+        <BoardView data={data} {...props} selectedTaskId={inReview.id} canCancel onCancel={asyncNoop} />,
+      ),
+    ).not.toContain(cancel);
+  });
 });
 
 describe("toolbox grants", () => {
@@ -1936,6 +2572,37 @@ describe("toolbox grants", () => {
       mode: "off",
       picked: null,
     });
+  });
+  it("a tool picked or dropped is a change to save, and a refresh of the same teammate keeps it", () => {
+    const cody = connectionsFixture.teammates.find((t) => t.handle === "cody")!;
+    const hubspot = connectionsFixture.connections.find((c) => c.name === "hubspot")!;
+    const clean = editorState(cody);
+    expect(draftDirty(clean)).toBe(false);
+    // One read set to never: the mode stays "ask", only the names move.
+    const grant = { mode: clean.draft.toolbox.hubspot!, picked: clean.draft.picked.hubspot ?? null };
+    const dropped = nextGrant(grant, hubspot.tools, ["get_properties"], false);
+    expect(dropped).toEqual({ mode: "ask", picked: ["search_crm_objects", "manage_crm_objects"] });
+    const s = { ...clean, draft: withGrant(clean.draft, "hubspot", dropped) };
+    expect(draftDirty(s)).toBe(true);
+    expect(toolboxLines(s.draft)).toEqual([
+      { connection: "hubspot", mode: "ask", tools: ["search_crm_objects", "manage_crm_objects"] },
+    ]);
+    // Every event in the company fetches the teammates again: the same teammate in new objects. The draft stays.
+    expect(refreshed(s, structuredClone(cody))).toBe(s);
+    // Saved: the teammate comes back holding the grant, at a new time; nothing is left to save.
+    const saved = refreshed(s, {
+      ...cody,
+      toolbox: toolboxLines(s.draft),
+      updatedAt: "2026-09-12T05:00:00.000Z",
+    });
+    expect(draftDirty(saved)).toBe(false);
+    expect(saved.draft.picked.hubspot).toEqual(["search_crm_objects", "manage_crm_objects"]);
+    // Picking it back is no change after all; a connection never granted, set to never, saves nothing.
+    const back = nextGrant(dropped, hubspot.tools, ["get_properties"], true);
+    expect(draftDirty({ ...clean, draft: withGrant(s.draft, "hubspot", back) })).toBe(false);
+    expect(
+      draftDirty({ ...clean, draft: withGrant(clean.draft, "crm", { mode: "off", picked: null }) }),
+    ).toBe(false);
   });
 });
 
@@ -2243,5 +2910,53 @@ describe("the pixel office: people, their words and their ways", () => {
     );
     expect(quiet).toContain("Nobody has said anything here yet.");
     expect(quiet).toContain('aria-label="Pixel office"');
+  });
+});
+
+describe("what the board offers, company by company", () => {
+  it("drops the last company's private destinations at once, asks for this one's, and ignores a late answer", async () => {
+    const a: Features = {
+      oauth: true,
+      objectStore: false,
+      privateDestinations: ["10.20.0.0/16", "ollama.a.internal"],
+      companyPrivateDestinations: ["ollama.a.internal"],
+    };
+    let state = a;
+    const set = (next: Features | ((f: Features) => Features)) => {
+      state = typeof next === "function" ? next(state) : next;
+    };
+    // The board cannot be asked: the other company's destinations are gone all the same.
+    const asked: (string | undefined)[] = [];
+    loadFeatures(
+      { features: (id) => (asked.push(id), Promise.reject(new Error("offline"))) },
+      "company-b",
+      set,
+    );
+    expect(state).toEqual({ oauth: true, objectStore: false });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(state).toEqual({ oauth: true, objectStore: false });
+    expect(asked).toEqual(["company-b"]);
+    // An answer for a company the person has already left does not land.
+    let answer!: (f: Features) => void;
+    const stop = loadFeatures({ features: () => new Promise((r) => (answer = r)) }, "company-c", set);
+    stop();
+    answer(a);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(state.privateDestinations).toBeUndefined();
+    // The answer for the company still shown does.
+    loadFeatures({ features: () => Promise.resolve({ ...a, companyPrivateDestinations: [] }) }, null, set);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(state.privateDestinations).toEqual(["10.20.0.0/16", "ollama.a.internal"]);
+  });
+});
+
+describe("an authorisation that comes back refused", () => {
+  it("says the connection moved when it did, and what to do", () => {
+    expect(oauthErrorText("moved")).toBe(
+      "The connection's server moved to another authorization server while you were authorising; press Authorise again.",
+    );
+    expect(oauthErrorText("state")).toBe(
+      "That authorisation took too long or was started elsewhere; press Authorise again.",
+    );
   });
 });

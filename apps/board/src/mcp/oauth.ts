@@ -5,19 +5,86 @@
 // the board registers a client there when it was not given one (RFC 7591),
 // then authorization code with PKCE (RFC 7636) and the server URL as the
 // resource (RFC 8707), and refresh when the access token is about to expire.
-// No client library: a few requests over an injected fetch. Nothing here
+// No client library: a few requests through the board's egress (web/egress.ts),
+// since every URL here is one the MCP server or its authorization server named:
+// each reaches only a public address or a private one the operator lists.
+// Discovery follows a redirect, every hop checked again; registration and the
+// token requests, which carry a secret or a code, follow none. Nothing here
 // stores anything: the caller keeps the tokens in the secret store, and every
 // error text is free of them.
-import { trimTrailingSlashes } from "@rosterdock/shared";
+import { addressListed, hostListed, isAddress, trimTrailingSlashes } from "@rosterdock/shared";
 import { codeChallenge } from "../auth/oidc.js";
+import { egressFetch, readCapped, type Egress } from "../web/egress.js";
+
+/** One request to an authorization server: its names, its answer and its body. */
+export const OAUTH_TIMEOUT_MS = 15_000;
+/** The most of a metadata document or a token answer the board reads, decoded. */
+export const OAUTH_MAX_BYTES = 256 * 1024;
+
+/**
+ * Plain http to a name that did not resolve while the operator lists ranges it could resolve into: refused for
+ * now, but perhaps only for now (a lookup that failed).
+ */
+export const UNRESOLVED = "is plain http to a name that does not resolve";
+
+/**
+ * Why a URL the metadata names is not one the board calls or sends a person's browser to, or null: https, or
+ * plain http to a destination the operator lists (a server on this machine in development). Anything else,
+ * a script URL above all, would run in the board's page when a person presses Authorise.
+ */
+export async function endpointRefusal(
+  raw: unknown,
+  egress: Pick<Egress, "resolve" | "allow">,
+): Promise<string | null> {
+  let url: URL;
+  try {
+    url = new URL(String(raw));
+  } catch {
+    return "is not a URL";
+  }
+  if (url.protocol === "https:") return null;
+  if (url.protocol !== "http:") return `is a ${url.protocol.replace(":", "")} URL, not https`;
+  // Listed by name, written as a listed address, or a name every address of which is in a listed range.
+  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (hostListed(host, egress.allow)) return null;
+  if (!isAddress(host)) {
+    const addresses = await egress.resolve(host).catch(() => [] as string[]);
+    // With no listed range, a name is refused whatever it resolves to; with one, it may resolve into it later.
+    if (!addresses.length && egress.allow.ranges.length) return UNRESOLVED;
+    if (addresses.length && addresses.every((a) => addressListed(a, egress.allow))) return null;
+  }
+  return "is plain http to a server this board's operator does not list";
+}
+
+/**
+ * Whether a resource an MCP server declares is one it may speak for: on its own origin, and a path its MCP
+ * URL is at or under, the rule the MCP SDK keeps (checkResourceAllowed). RFC 9728 asks for the very URL the
+ * metadata was read for; this takes Notion's origin-only identifier (`https://mcp.notion.com` for
+ * `https://mcp.notion.com/mcp`) and refuses a sibling on the same origin (`/servers/b` for `/servers/a/mcp`),
+ * whose token would otherwise be sent here.
+ */
+export function resourceAllowed(resource: string, mcpUrl: string): boolean {
+  let declared: URL;
+  let at: URL;
+  try {
+    declared = new URL(resource);
+    at = new URL(mcpUrl);
+  } catch {
+    return false;
+  }
+  if (declared.origin !== at.origin || at.pathname.length < declared.pathname.length) return false;
+  const slash = (p: string) => (p.endsWith("/") ? p : `${p}/`);
+  return slash(at.pathname).startsWith(slash(declared.pathname));
+}
 
 export interface OAuthDeps {
-  fetch: typeof fetch;
+  /** How the servers are reached; tests inject its transport and resolver. */
+  egress: Egress;
   now?: () => number;
   log: { warn(msg: string): void };
 }
 
-export type OAuthErrorCode = "server" | "registration" | "state" | "token" | "store" | "forbidden";
+export type OAuthErrorCode = "server" | "registration" | "state" | "moved" | "token" | "store" | "forbidden";
 
 export class OAuthError extends Error {
   readonly code: OAuthErrorCode;
@@ -28,6 +95,16 @@ export class OAuthError extends Error {
     this.name = "OAuthError";
     this.code = code;
     this.detail = detail;
+  }
+}
+
+/**
+ * An issuer the board refuses (its address, or an endpoint its metadata names), or one that answers that it
+ * publishes no metadata: not one that is down or answering 5xx, which may answer later.
+ */
+export class IssuerUnusable extends OAuthError {
+  constructor(message: string) {
+    super("server", message);
   }
 }
 
@@ -76,10 +153,31 @@ async function getJson(
   deps: OAuthDeps,
 ): Promise<{ status: number; json: Record<string, unknown> | null }> {
   try {
-    const res = await deps.fetch(url, { headers: { accept: "application/json" } });
-    const json = res.ok ? ((await res.json().catch(() => null)) as Record<string, unknown> | null) : null;
+    const res = await egressFetch(deps.egress, {
+      redirect: "follow",
+      timeoutMs: OAUTH_TIMEOUT_MS,
+      maxBytes: OAUTH_MAX_BYTES + 1,
+    })(url, { headers: { accept: "application/json" } });
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      return { status: res.status, json: null };
+    }
+    const read = await readCapped(res, OAUTH_MAX_BYTES);
+    // The server answered: too much is not "could not reach".
+    if (read.cut)
+      throw new OAuthError(
+        "server",
+        `${new URL(url).host} answered with a document larger than ${OAUTH_MAX_BYTES / 1024} KB`,
+      );
+    let json: Record<string, unknown> | null = null;
+    try {
+      json = JSON.parse(Buffer.from(read.bytes).toString("utf8")) as Record<string, unknown>;
+    } catch {
+      // not JSON: as if there were no document
+    }
     return { status: res.status, json };
   } catch (err) {
+    if (err instanceof OAuthError) throw err;
     throw new OAuthError("server", `could not reach ${new URL(url).host}: ${(err as Error).message}`);
   }
 }
@@ -101,22 +199,35 @@ function wellKnown(base: string, suffix: string): string[] {
 export async function discoverResource(
   mcpUrl: string,
   deps: OAuthDeps,
-): Promise<{ authorizationServer: string; scopes: string[] | null; resource: string | null }> {
+): Promise<{
+  authorizationServer: string;
+  scopes: string[] | null;
+  resource: string | null;
+  /** Whether the server's own document named the authorization server; false: its origin, by default. */
+  named: boolean;
+}> {
   for (const url of wellKnown(mcpUrl, "oauth-protected-resource")) {
     const { status, json } = await getJson(url, deps);
     if (status === 200 && json) {
       const list = json.authorization_servers;
       const first = Array.isArray(list) && typeof list[0] === "string" ? trimTrailingSlashes(list[0]) : null;
       if (first) {
+        const host = new URL(mcpUrl).host;
+        const why = await endpointRefusal(first, deps.egress);
+        if (why) throw new OAuthError("server", `${host} names an authorization server that ${why}`);
         const scopes = Array.isArray(json.scopes_supported)
           ? json.scopes_supported.filter((s): s is string => typeof s === "string")
           : null;
         const resource = typeof json.resource === "string" && json.resource ? json.resource : null;
-        return { authorizationServer: first, scopes, resource };
+        // RFC 9728: the server speaks for itself only (resourceAllowed); another server's resource would have
+        // the board ask for that server's token and send it here.
+        if (resource !== null && !resourceAllowed(resource, mcpUrl))
+          throw new OAuthError("server", `${host} declares itself a resource that is not this server`);
+        return { authorizationServer: first, scopes, resource, named: true };
       }
     }
   }
-  return { authorizationServer: new URL(mcpUrl).origin, scopes: null, resource: null };
+  return { authorizationServer: new URL(mcpUrl).origin, scopes: null, resource: null, named: false };
 }
 
 /** The authorization server's endpoints, cached ten minutes. */
@@ -125,20 +236,34 @@ export async function discoverAuthorizationServer(
   deps: OAuthDeps,
 ): Promise<AuthorizationServer> {
   const key = trimTrailingSlashes(issuer);
+  // An issuer kept from before these checks is held to them too.
+  const issuerRefused = await endpointRefusal(key, deps.egress);
+  // A name that did not resolve may resolve later: not a reason to move the connection on.
+  const refusal = (why: string, message: string) =>
+    why === UNRESOLVED ? new OAuthError("server", message) : new IssuerUnusable(message);
+  if (issuerRefused) throw refusal(issuerRefused, `the authorization server's address ${issuerRefused}`);
   const now = deps.now?.() ?? Date.now();
-  const cached = servers.get(key);
+  // Kept per list of private destinations, as well as per issuer: a document read for one company, through
+  // what the operator gave it alone, is never handed to a company that may not reach that server.
+  const slot = `${key}\n${deps.egress.allow.entries.join(",")}`;
+  const cached = servers.get(slot);
   if (cached && now - cached.at < DISCOVERY_TTL_MS) return cached.doc;
   const candidates = [
     ...wellKnown(key, "oauth-authorization-server"),
     `${key}/.well-known/openid-configuration`,
     ...wellKnown(key, "openid-configuration"),
   ];
+  // A server that is down, busy or slow may publish its metadata later; one that answered every URL is unusable.
+  let down: number | null = null;
   for (const url of candidates) {
     const { status, json } = await getJson(url, deps);
+    if (status >= 500 || status === 408 || status === 429) down ??= status;
     if (status !== 200 || !json) continue;
     if (typeof json.authorization_endpoint !== "string" || typeof json.token_endpoint !== "string") continue;
     const doc: AuthorizationServer = {
-      issuer: typeof json.issuer === "string" ? trimTrailingSlashes(json.issuer) : key,
+      // The issuer asked for, which was checked, not the document's own word: RFC 8414 wants them equal, and
+      // what the row keeps is what the next Authorise asks again.
+      issuer: key,
       authorization_endpoint: json.authorization_endpoint,
       token_endpoint: json.token_endpoint,
       ...(typeof json.registration_endpoint === "string"
@@ -160,10 +285,24 @@ export async function discoverAuthorizationServer(
     };
     if (doc.code_challenge_methods_supported && !doc.code_challenge_methods_supported.includes("S256"))
       throw new OAuthError("server", `${new URL(key).host} does not support PKCE with S256`);
-    servers.set(key, { at: now, doc });
+    // A person's browser goes to the first; the board sends a code or a secret to the others.
+    for (const [field, label] of [
+      ["authorization_endpoint", "an authorization endpoint"],
+      ["token_endpoint", "a token endpoint"],
+      ["registration_endpoint", "a registration endpoint"],
+    ] as const) {
+      const why = doc[field] === undefined ? null : await endpointRefusal(doc[field], deps.egress);
+      if (why) throw refusal(why, `${new URL(key).host} names ${label} that ${why}`);
+    }
+    servers.set(slot, { at: now, doc });
     return doc;
   }
-  throw new OAuthError("server", `${new URL(key).host} publishes no authorization server metadata`);
+  if (down !== null)
+    throw new OAuthError(
+      "server",
+      `${new URL(key).host} answered HTTP ${down} for its authorization server metadata`,
+    );
+  throw new IssuerUnusable(`${new URL(key).host} publishes no authorization server metadata`);
 }
 
 /** Register the board as a client (RFC 7591). The secret, when one is issued, is the caller's to keep. */
@@ -180,7 +319,11 @@ export async function registerClient(
     );
   let res: Response;
   try {
-    res = await deps.fetch(as.registration_endpoint, {
+    res = await egressFetch(deps.egress, {
+      redirect: "error",
+      timeoutMs: OAUTH_TIMEOUT_MS,
+      maxBytes: OAUTH_MAX_BYTES,
+    })(as.registration_endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({
@@ -226,6 +369,12 @@ export function authorizationUrl(
   },
 ): string {
   const url = new URL(as.authorization_endpoint);
+  // Checked at discovery too: only a web page is ever where a person is sent.
+  if (url.protocol !== "https:" && url.protocol !== "http:")
+    throw new OAuthError(
+      "server",
+      `${new URL(as.issuer).host} names an authorization endpoint that is not a web page`,
+    );
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", input.clientId);
   url.searchParams.set("redirect_uri", input.redirectUri);
@@ -243,6 +392,9 @@ async function tokenRequest(
   client: { clientId: string; clientSecret: string | null; tokenAuth?: TokenAuth | null },
   deps: OAuthDeps,
 ): Promise<TokenSet> {
+  // A token endpoint a row kept from before these checks is held to them before a secret goes there.
+  const refused = await endpointRefusal(tokenEndpoint, deps.egress);
+  if (refused) throw new OAuthError("token", `the token endpoint ${refused}`);
   const headers: Record<string, string> = {
     "content-type": "application/x-www-form-urlencoded",
     accept: "application/json",
@@ -258,7 +410,15 @@ async function tokenRequest(
   }
   let res: Response;
   try {
-    res = await deps.fetch(tokenEndpoint, { method: "POST", headers, body: form.toString() });
+    res = await egressFetch(deps.egress, {
+      redirect: "error",
+      timeoutMs: OAUTH_TIMEOUT_MS,
+      maxBytes: OAUTH_MAX_BYTES,
+    })(tokenEndpoint, {
+      method: "POST",
+      headers,
+      body: form.toString(),
+    });
   } catch (err) {
     throw new OAuthError("token", `could not reach the token endpoint: ${(err as Error).message}`);
   }

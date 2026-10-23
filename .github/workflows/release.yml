@@ -3,6 +3,8 @@ name: release
 # A tag v<version> publishes that version: the three images for linux/amd64 and linux/arm64 on GHCR, and the
 # chart as an OCI artifact whose version and appVersion are the version, so it installs those images. CI
 # (ci.yml) runs on the tagged commit first and must pass; the chart goes last, once every image is up.
+# Each image is built once per architecture on a runner of that architecture (arm64 on ubuntu-24.04-arm,
+# never under emulation), pushed by digest, and the two are merged into one image under its tags.
 # Run it from the Actions tab for a dry run: everything is built and nothing is pushed.
 # The steps around a release, and what to switch on before the first, are in docs/releasing.md.
 
@@ -16,22 +18,31 @@ on:
         required: true
         default: 0.0.0-dryrun
 
-# Nothing by default; each job names what it needs, and only the two that push may write packages.
+# Nothing by default; each job names what it needs, and only the three that push may write packages.
 permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # What GHCR shows for each image, in one place: the build's manifests and labels and the merge's index.
+  DESCRIPTIONS: >-
+    {"rosterdock-board": "RosterDock board: the API, the event stream, Peter and the migrations.",
+    "rosterdock-web": "RosterDock web: the UI on nginx, /api proxied to the board.",
+    "rosterdock-worker": "RosterDock worker: runs teammates on Codex or the stub engine. Claude Code is not included (docs/install.md)."}
+
 jobs:
   version:
     name: version
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
       minor: ${{ steps.version.outputs.minor }}
       prerelease: ${{ steps.version.outputs.prerelease }}
       push: ${{ steps.version.outputs.push }}
+      created: ${{ steps.version.outputs.created }}
     steps:
       - id: version
         env:
@@ -52,6 +63,10 @@ jobs:
             echo "minor=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
             echo "prerelease=$prerelease"
             echo "push=$push"
+            # One build time for every image and architecture of this run, so the two halves and the index
+            # agree and "Re-run failed jobs" pushes the same index. "Re-run all jobs" takes a new time,
+            # builds again and moves the tags to the new index.
+            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> "$GITHUB_OUTPUT"
           echo "Building $version (push: $push, prerelease: $prerelease)" >> "$GITHUB_STEP_SUMMARY"
 
@@ -60,32 +75,38 @@ jobs:
     permissions:
       contents: read
 
-  images:
-    name: image ${{ matrix.image }}
+  build:
+    name: build ${{ matrix.image }} ${{ matrix.arch }}
     needs: [version, ci]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    runs-on: ${{ matrix.runner }}
+    # A native build takes a few minutes; a hang ends here, not at the hour QEMU's crash once ran to.
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
     strategy:
-      # A failing image leaves the others to finish their pushes whole; re-run it alone, and the chart follows.
+      # A failing build leaves the others to finish; re-run it alone, and its merge and the chart follow.
       fail-fast: false
       matrix:
+        image: [rosterdock-board, rosterdock-web, rosterdock-worker]
+        arch: [amd64, arm64]
         include:
+          # Each architecture on its own hardware: under QEMU the board's arm64 pnpm install died on an
+          # illegal instruction and the build hung until the job timed out.
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
           - image: rosterdock-board
             dockerfile: apps/board/Dockerfile
             # Never the model CLIs in a published image: Claude Code's licence does not allow passing it on.
             build-args: WITH_MODEL_CLIS=0
-            description: "RosterDock board: the API, the event stream, Peter and the migrations."
           - image: rosterdock-web
             dockerfile: apps/web/Dockerfile
             build-args: ""
-            description: "RosterDock web: the UI on nginx, /api proxied to the board."
           - image: rosterdock-worker
             dockerfile: apps/worker/Dockerfile
             build-args: WITH_CLAUDE_CODE=0
-            description: "RosterDock worker: runs teammates on Codex or the stub engine. Claude Code is not included (docs/install.md)."
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,9 +115,6 @@ jobs:
         env:
           IMAGE: ${{ matrix.image }}
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$IMAGE" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        with:
-          platforms: arm64
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: needs.version.outputs.push == 'true'
@@ -104,13 +122,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # The version, MAJOR.MINOR and latest; a prerelease gets its version only. The labels carry the
-      # source repository (which links the package to it on GHCR) and the licence; the index annotations
-      # carry the description GHCR shows for a multi-arch image.
+      # The same inputs as the merge's, at the manifest level: this architecture's labels (the source
+      # repository links the package to it on GHCR; the licence) and its manifest's annotations. The tags
+      # are the merge's to push.
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         env:
-          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest
         with:
           images: ${{ steps.image.outputs.name }}
           flavor: latest=false
@@ -120,30 +138,182 @@ jobs:
             type=raw,value=latest,enable=${{ needs.version.outputs.prerelease == 'false' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.image }}
-            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.description=${{ fromJSON(env.DESCRIPTIONS)[matrix.image] }}
             org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.created=${{ needs.version.outputs.created }}
           annotations: |
             org.opencontainers.image.title=${{ matrix.image }}
-            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.description=${{ fromJSON(env.DESCRIPTIONS)[matrix.image] }}
             org.opencontainers.image.version=${{ needs.version.outputs.version }}
-      # The cache is CI's from main (a tag's own cache would serve no one else); it holds the amd64 layers.
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+            org.opencontainers.image.created=${{ needs.version.outputs.created }}
+      # By digest only, under no tag, with this architecture's provenance and SBOM; a dry run builds the same
+      # and pushes nothing. The cache is CI's from main (a tag's own cache would serve no one else); it holds
+      # amd64 layers only, so arm64 builds cold.
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        timeout-minutes: 10
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           build-args: ${{ matrix.build-args }}
-          push: ${{ needs.version.outputs.push == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.image.outputs.name }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
-          cache-from: type=gha,scope=${{ matrix.image }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ needs.version.outputs.push }}
+          cache-from: ${{ matrix.arch == 'amd64' && format('type=gha,scope={0}', matrix.image) || '' }}
           provenance: mode=max
           sbom: true
+      - name: digest
+        env:
+          IMAGE: ${{ matrix.image }}
+          ARCH: ${{ matrix.arch }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::the linux/$ARCH build of $IMAGE gave no digest: '$DIGEST'"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/digest"
+          printf '%s' "$DIGEST" > "$RUNNER_TEMP/digest/$ARCH"
+          echo "$IMAGE linux/$ARCH: \`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+      # Kept as long as a run can be re-run, so a merge re-run alone still finds both halves.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digest/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+  merge:
+    name: merge ${{ matrix.image }}
+    needs: [version, build]
+    # Only a tag pushes, so only a tag merges; a dry run ends with the builds. A failed build leaves the other
+    # images to merge whole, and its own merge fails on the missing digest.
+    if: ${{ !cancelled() && needs.version.outputs.push == 'true' && needs.build.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # No checkout: it reads the run's digests and writes the registry.
+    permissions:
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [rosterdock-board, rosterdock-web, rosterdock-worker]
+    steps:
+      - id: image
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$IMAGE" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-${{ matrix.image }}-*
+          path: ${{ runner.temp }}/digest
+          merge-multiple: true
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The version, MAJOR.MINOR and latest; a prerelease gets its version only. The index annotations carry
+      # the description GHCR shows for a multi-arch image. imagetools create takes index annotations, never
+      # manifest ones ("manifest" annotations are not supported); the manifests keep the build's.
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=raw,value=${{ needs.version.outputs.minor }},enable=${{ needs.version.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.version.outputs.prerelease == 'false' }}
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.description=${{ fromJSON(env.DESCRIPTIONS)[matrix.image] }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.created=${{ needs.version.outputs.created }}
+      # One index over the two digests, under every tag; each architecture's provenance and SBOM come along
+      # as its attestation manifest. The index is checked before anything is pushed under a tag, and again
+      # once it is. The same digests and annotations make the same index, so a re-run pushes nothing new.
+      - name: merge
+        timeout-minutes: 5
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          ANNOTATIONS: ${{ steps.meta.outputs.annotations }}
+          DIGESTS: ${{ runner.temp }}/digest
+        run: |
+          sources=()
+          for arch in amd64 arm64; do
+            digest="$(cat "$DIGESTS/$arch" 2>/dev/null || true)"
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::$IMAGE has no linux/$arch build in this run: re-run the failed jobs"
+              exit 1
+            fi
+            sources+=("$IMAGE@$digest")
+          done
+          args=()
+          while IFS= read -r tag; do
+            if [ -n "$tag" ]; then args+=(--tag "$tag"); fi
+          done <<< "$TAGS"
+          while IFS= read -r annotation; do
+            if [ -n "$annotation" ]; then args+=(--annotation "$annotation"); fi
+          done <<< "$ANNOTATIONS"
+          for source in "${sources[@]}"; do
+            for attestation in Provenance SBOM; do
+              found="$(docker buildx imagetools inspect "$source" --format "{{json .$attestation}}")"
+              case "$found" in "" | null | "{}")
+                echo "::error::$source has no $attestation; nothing pushed"
+                exit 1
+              esac
+            done
+          done
+          index="$(docker buildx imagetools create --dry-run "${args[@]}" "${sources[@]}")"
+          if ! jq -e '
+            ([.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort) == ["amd64", "arm64"]
+            and ([.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length) == 2
+            and (.annotations["org.opencontainers.image.description"] // "") != ""
+          ' <<< "$index" > /dev/null; then
+            echo "::error::$IMAGE would not be linux/amd64 and linux/arm64 with an attestation each and a description; nothing pushed"
+            echo "$index"
+            exit 1
+          fi
+          docker buildx imagetools create "${args[@]}" "${sources[@]}"
+      - name: check
+        timeout-minutes: 5
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          ref="$IMAGE:$VERSION"
+          raw="$(docker buildx imagetools inspect --raw "$ref")"
+          if ! jq -e '
+            ([.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort) == ["amd64", "arm64"]
+            and ([.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length) == 2
+            and (.annotations["org.opencontainers.image.description"] // "") != ""
+          ' <<< "$raw" > /dev/null; then
+            echo "::error::$ref is not linux/amd64 and linux/arm64 with an attestation each and a description"
+            echo "$raw"
+            exit 1
+          fi
+          for attestation in Provenance SBOM; do
+            platforms="$(docker buildx imagetools inspect "$ref" --format "{{json .$attestation}}" | jq -r 'keys | join(" ")')"
+            if [ "$platforms" != "linux/amd64 linux/arm64" ]; then
+              echo "::error::$ref has $attestation for '$platforms', not linux/amd64 and linux/arm64"
+              exit 1
+            fi
+          done
+          docker buildx imagetools inspect "$ref"
+          echo "Pushed $ref, \`$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')\`" >> "$GITHUB_STEP_SUMMARY"
 
   chart:
     name: chart
-    needs: [version, images]
+    needs: [version, build, merge]
+    # Every image built and, on a tag, every image merged. A dry run merges nothing and still packages the chart.
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.merge.result == 'success' || (needs.merge.result == 'skipped' && needs.version.outputs.push != 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

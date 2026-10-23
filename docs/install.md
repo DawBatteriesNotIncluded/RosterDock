@@ -49,6 +49,12 @@ deploy/scripts/local-cluster.sh
 kubectl --context kind-rosterdock -n rosterdock port-forward svc/rosterdock-web 8080:80
 ```
 
+A worker on a Windows machine runs best where it runs in production, in Linux: under Docker Desktop (the
+cluster above, or `docker compose --profile worker up -d worker`) or in WSL2. `pnpm dev:worker` also runs
+natively on Windows with Git for Windows on PATH (CI runs the worker's tests there), but then a run's engine,
+its shell and the repository's tests run as your Windows user, outside any container: keep that to
+repositories you would run yourself (`docs/security.md`, Workers run model output).
+
 ## A URL your other devices can open
 
 The compose stack on `localhost:8080` is enough to see everything, but some OAuth providers refuse a
@@ -149,11 +155,12 @@ and which optional secrets exist. Everything in `values.yaml` is commented. The 
 | `board.oauth.enabled`            | Connections may authorise by OAuth; the board keeps the tokens in Secrets of its own (a Role).        |
 | `board.sharedEnvNames`           | Keys of `rosterdock-connections` every company may name; no other key reaches a company. Empty: none. |
 | `board.stdioCommands`            | Command lines a stdio connection may run inside the board, exactly (a final `*`: more arguments).     |
+| `board.privateDestinations`      | Private names, addresses and ranges companies' connections may reach. Empty: public addresses only.   |
 | `board.companyCreators`          | Who may create a company: emails, `@domain`s or `*`. Empty: the first company only.                   |
 | `worker.autoscaling`             | A KEDA ScaledObject: one worker per waiting run between the bounds. Needs KEDA installed.             |
 | `worker.image`                   | The worker image with Claude Code that you build (Engines on the worker, below). Empty: the chart's.  |
 | `worker.engineEnvNames`          | Env var NAMES the worker hands to the engine, read from `worker.engineSecret`.                        |
-| `worker.gitSecret`               | A token for cloning private repositories, by name.                                                    |
+| `worker.gitSecret`               | A token for cloning private repositories, by name, and `hosts`, the git hosts it is sent to.          |
 | `worker.podMetrics.enabled`      | Pod CPU and memory from the metrics API (a worker account, a Role, the token) instead of the cgroup.  |
 | `postgres.cidr`, `postgres.port` | Where Postgres answers; the network policies let the board and workers reach only that.               |
 | `storage.*`                      | Endpoint, bucket, region, path style; credentials from `storage.externalSecret`.                      |

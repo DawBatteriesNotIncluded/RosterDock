@@ -51,6 +51,11 @@ board:
   #  - "npx -y @modelcontextprotocol/server-memory@2026.8.31"
   #  - "npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /home/node/data/drive"
   stdioCommands: []
+  # The model provider kinds a company may add (ROSTERDOCK_MODEL_PROVIDERS): anthropic, openai, azure_openai,
+  # bedrock, openai_compatible, and board, which lends the board's own models to every company. A provider's
+  # credentials are names, resolved as connections' are (its own secrets, then sharedEnvNames). Empty: every
+  # kind and board. [board] alone: no company providers. The board does not start on an entry it does not know.
+  modelProviders: []
   # Needs-you notifications go to this webhook URL (may carry a token), by NAME from a Secret. Empty: none,
   # unless a company names its own (one of its secrets, or a name in sharedEnvNames) in Settings.
   notifySecret:
@@ -106,9 +111,33 @@ board:
   # callback), counted per board replica (ROSTERDOCK_SIGNIN_RATE_LIMIT); 0 turns the limit off. Any wider
   # limit belongs at the ingress, which must set X-Forwarded-For itself (docs/security.md).
   signInRateLimit: 60
-  # When a research review opens, the board fetches the public http(s) sources its documents cite and hands
-  # the reviewer what they say (ROSTERDOCK_FETCH_SOURCES). false keeps the board off the web.
+  # The board reads the public web: the sources a research review's documents cite, and the pages teammates
+  # read through a company's web connection (ROSTERDOCK_FETCH_SOURCES). false keeps the board off the web.
   fetchSources: true
+  # The private destinations companies may make the board reach (ROSTERDOCK_PRIVATE_DESTINATIONS). What a
+  # company chooses (an MCP server or OpenAPI service, the OAuth endpoints its server names, its own webhook
+  # and SMTP server) must be at a public address unless it is listed here: loopback, private, link-local
+  # (where cloud metadata lives) and the other special-purpose ranges are refused, a name that resolves to
+  # one included. The board judges an address by its range alone: cluster addresses outside those ranges
+  # (GKE's privately used public IPs, routable pod IPv6) and public addresses that lead inside (a node's
+  # NodePort, Azure's 168.63.129.16) pass it, so keep networkPolicy.board.egressTo narrow (docs/security.md).
+  # Entries: host names, matched as a connection's URL writes them ("*.tools.svc.cluster.local" for the
+  # names under one), addresses and ranges ("10.20.0.0/16"). A listed name is trusted with whatever it
+  # resolves to: never list a wildcard over the cluster's domain (*.cluster.local, *.svc.cluster.local,
+  # *.pod.cluster.local), whose DNS answers some names with any address, cloud metadata included; list each
+  # service, or a namespace only you create services in. With networkPolicy.enabled, add the services'
+  # ports to networkPolicy.board.egressPorts. What you configure yourself (the git hosts, OIDC, OTLP, the
+  # bucket, the API server, the model API, notifySecret and notifyEmail above) is not held to it. Empty:
+  # public addresses only.
+  # An entry for one company alone takes its id (Settings > Connections shows it to its owners and admins):
+  # no other company reaches it through a connection or sees it (a stdio command with free arguments, above,
+  # is not held to this list at all), unless an entry for every company covers it too (a range it is in, a
+  # `*.` name it is under, a range its address falls in). A destination may be a list of entries for that
+  # company; a plain string that holds a company's entry and a comma is refused: one entry per item.
+  #  - "playwright-mcp.tools.svc.cluster.local" # http://playwright-mcp.tools.svc.cluster.local:8931/mcp
+  #  - company: "4f1aee73-e65e-4c8d-83f7-aa1169379d7f"
+  #    destination: "ollama.acme.svc.cluster.local"
+  privateDestinations: []
   # More environment for the board container, as Kubernetes env entries, for the settings with no value of
   # their own above (docs/operator.md, Environment reference): ROSTERDOCK_DB_POOL_MAX,
   # ROSTERDOCK_RUN_STALE_AFTER_MS, ROSTERDOCK_SESSION_TTL_SECONDS and the like. A credential belongs in a
@@ -195,7 +224,9 @@ worker:
   # with the rules it uses them under. A department's sandbox only narrows it: a tool listed there and not
   # here is left out of the run. Empty: the worker's
   # default, Read, Write, Edit, Glob and Grep inside the workspace. A department that needs the web
-  # (WebSearch, WebFetch) gets it from a pool that lists them. Codex runs in its own sandbox instead.
+  # (WebSearch, WebFetch) gets it from a pool that lists them; those reach the web outside the board's
+  # address checks, site lists and records, so prefer a company's web connection (docs/operator.md, Web
+  # access for teammates). Codex runs in its own sandbox instead.
   claudeAllowedTools: []
   # More environment for the worker container, as Kubernetes env entries, for the settings with no value of
   # their own above (docs/operator.md, Environment reference): ROSTERDOCK_RUN_REPO_TESTS ("0" turns the
@@ -205,10 +236,13 @@ worker:
   extraEnv: []
   #  - name: ROSTERDOCK_RUN_REPO_TESTS
   #    value: "0"
-  # Optional git token the worker clones private repositories with, by NAME from a Secret.
+  # Optional git token the worker clones private repositories with, by NAME from a Secret, and the git hosts
+  # it is sent to (ROSTERDOCK_GIT_TOKEN_HOSTS), with a port where it is not 443: a repository on any other
+  # host is cloned without it. List your GitLab or GitHub Enterprise Server host here.
   gitSecret:
     name: ""
     key: ROSTERDOCK_GIT_TOKEN
+    hosts: [github.com]
   workVolumeSize: 4Gi
   # The worker serves its own counters (runs by outcome, seconds on runs, in flight) on this port; the pod
   # is annotated for scraping, and with observability.serviceMonitor.enabled a ServiceMonitor covers the
@@ -308,8 +342,11 @@ networkPolicy:
   # Extra sources allowed to reach the board's port directly (a metrics scraper, an admin pod).
   boardIngressFrom: []
   board:
-    # Everything the board calls lives outside the cluster; allow all egress on these ports, or list
-    # destinations as NetworkPolicyPeers below to narrow.
+    # The board calls the model API, the git hosts, companies' MCP servers, services and webhooks, and the
+    # private destinations board.privateDestinations lists. With egressTo empty it may reach any address on
+    # these ports (its own check still refuses a company's private destination that is not listed); list
+    # NetworkPolicyPeers in egressTo to narrow, and add the ports of the private destinations you list
+    # (8931 for the Playwright browser, 11434 for Ollama).
     egressPorts: [443, 80]
     egressTo: []
   worker:

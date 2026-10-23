@@ -4,7 +4,9 @@
 // risky is enforced here: only manifest operations exist, a mutating method is
 // always a write, request and response sizes and time are capped, the
 // credential is an env var NAME resolved at call time (from `deps.env`: a
-// company's secrets over the names the board shares), and answers come back
+// company's secrets over the names the board shares), a request reaches only a
+// public address or a private one the operator lists and follows no redirect
+// (web/egress.ts), and answers come back
 // with secret-shaped keys redacted. Carried over from the v1 prototype without
 // its governance ladder; the broker decides, this module calls.
 
@@ -16,7 +18,9 @@ import {
 } from "@rosterdock/shared";
 import YAML from "yaml";
 import { notSetForCompany } from "../secrets/company.js";
+import { defaultEgress, egressFetch, readCapped, type Egress } from "../web/egress.js";
 import type { McpCallOutcome } from "./client.js";
+import { scrubber, scrubText, type Scrubber } from "./scrub.js";
 
 export type OpenApiManifest = OpenApiManifestInput;
 export type OpenApiOperation = OpenApiOperationInput;
@@ -211,8 +215,12 @@ export interface OpenApiTarget {
   authEnvName?: string | null;
 }
 
+/** A check reads no body; this bounds what is pulled before the body is dropped. */
+const PROBE_MAX_BYTES = 64 * 1024;
+
 export interface OpenApiDeps {
-  fetch?: typeof fetch;
+  /** How the service is reached (web/egress.ts); tests inject its transport and resolver. Default: the board's own. */
+  egress?: Egress;
   /** Where the credential's NAME resolves: a company's secrets over the names the board shares. Default: none. */
   env?: NodeJS.ProcessEnv;
 }
@@ -231,10 +239,6 @@ function deepRedact(value: unknown, depth = 0): unknown {
     return out;
   }
   return value;
-}
-
-function scrub(text: string, secret: string | null): string {
-  return secret && secret.length >= 6 ? text.split(secret).join("[redacted]") : text;
 }
 
 function buildUrl(
@@ -278,13 +282,20 @@ export async function probeOpenApi(
     const header = (manifest.authHeader ?? "authorization").toLowerCase();
     headers[header] = (manifest.authScheme ?? "bearer") === "bearer" ? `Bearer ${secret}` : secret;
   }
-  const doFetch = deps.fetch ?? fetch;
+  // A redirect is an answer like any other here: the service is there. Nothing follows it.
+  const doFetch = egressFetch(deps.egress ?? defaultEgress(), {
+    redirect: "manual",
+    timeoutMs: manifest.timeoutMs,
+    maxBytes: PROBE_MAX_BYTES,
+  });
   try {
     const response = await doFetch(target.url, {
       method: "GET",
       headers,
       signal: AbortSignal.timeout(manifest.timeoutMs),
     });
+    // The status says it all; the body is never read.
+    await response.body?.cancel().catch(() => {});
     if (response.status === 401 || response.status === 403)
       return {
         ok: false,
@@ -298,7 +309,7 @@ export async function probeOpenApi(
     return {
       ok: false,
       status: null,
-      error: `could not reach the service: ${scrub((err as Error).message, secret).slice(0, 200)}`,
+      error: `could not reach the service: ${scrubText((err as Error).message, [secret]).slice(0, 200)}`,
     };
   }
 }
@@ -342,7 +353,12 @@ export async function callOpenApiOperation(
     const header = (manifest.authHeader ?? "authorization").toLowerCase();
     headers[header] = (manifest.authScheme ?? "bearer") === "bearer" ? `Bearer ${secret}` : secret;
   }
-  const doFetch = deps.fetch ?? fetch;
+  // A redirect is refused: an operation, a write above all, goes to the URL the manifest names or nowhere.
+  const doFetch = egressFetch(deps.egress ?? defaultEgress(), {
+    redirect: "error",
+    timeoutMs: manifest.timeoutMs,
+    maxBytes: manifest.maxResponseBytes + 1,
+  });
   let response: Response;
   try {
     response = await doFetch(built.url, {
@@ -354,30 +370,65 @@ export async function callOpenApiOperation(
   } catch (err) {
     return {
       ok: false,
-      error: `${name} could not reach the service: ${scrub((err as Error).message, secret).slice(0, 200)}`,
+      error: `${name} could not reach the service: ${scrubText((err as Error).message, [secret]).slice(0, 200)}`,
     };
   }
   if (!response.ok) {
-    // Error bodies never travel: the status line only.
+    // Error bodies never travel, nor the server's reason phrase, which may echo the credential: the status only.
+    await response.body?.cancel().catch(() => {});
+    return { ok: false, error: `${name} answered HTTP ${response.status}` };
+  }
+  // Read up to the cap and no further, decoded: what a server compresses never grows past it in memory.
+  let read: Awaited<ReturnType<typeof readCapped>>;
+  try {
+    read = await readCapped(response, manifest.maxResponseBytes);
+  } catch (err) {
     return {
       ok: false,
-      error: `${name} answered HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`,
+      error: `${name} could not be read: ${scrubText((err as Error).message, [secret]).slice(0, 200)}`,
     };
   }
-  let text = await response.text();
-  let truncated = false;
-  if (Buffer.byteLength(text, "utf8") > manifest.maxResponseBytes) {
-    text = text.slice(0, manifest.maxResponseBytes);
-    truncated = true;
+  const truncated = read.cut;
+  // A byte order mark is no part of the answer, and JSON.parse refuses one.
+  const raw = Buffer.from(read.bytes)
+    .toString("utf8")
+    .replace(/^\uFEFF/, "");
+  const clean = scrubber([secret]);
+  return {
+    ok: true,
+    result: truncated ? { truncated: true, text: clean.digits(clean.cut(raw)) } : readAnswer(raw, clean),
+  };
+}
+
+/** A parsed value with secret-looking keys redacted and the credential out of every string. */
+function cleaned(value: unknown, clean: Scrubber): unknown {
+  return clean.value(deepRedact(value));
+}
+
+/** The value a JSON text holds, or undefined when it holds none. */
+function parsed(text: string): { value: unknown } | undefined {
+  try {
+    return { value: JSON.parse(text) as unknown };
+  } catch {
+    return undefined;
   }
-  text = scrub(text, secret);
-  let result: unknown = text;
-  if (!truncated) {
-    try {
-      result = deepRedact(JSON.parse(text));
-    } catch {
-      // A non-JSON answer stays as capped, scrubbed text.
-    }
+}
+
+/**
+ * A whole answer as the teammate reads it, scrubbed once and then read as JSON, so a credential written into
+ * it unescaped goes as text does and a number in it is looked at as a number: JSON cleaned; newline-delimited
+ * JSON (a log, an export) cleaned line by line and written back as lines; anything else, scrubbing having
+ * broken the JSON or not, the scrubbed text with its numbers looked at too.
+ */
+function readAnswer(raw: string, clean: Scrubber): unknown {
+  const scrubbed = clean.text(raw);
+  const whole = parsed(scrubbed);
+  if (whole) return cleaned(whole.value, clean);
+  const lines = scrubbed.split("\n");
+  if (lines.filter((l) => l.trim()).length >= 2) {
+    const read = lines.map((l) => (l.trim() ? parsed(l) : null));
+    if (read.every((r) => r !== undefined))
+      return read.map((r, i) => (r ? JSON.stringify(cleaned(r.value, clean)) : lines[i])).join("\n");
   }
-  return { ok: true, result: truncated ? { truncated: true, text } : result };
+  return clean.digits(scrubbed);
 }

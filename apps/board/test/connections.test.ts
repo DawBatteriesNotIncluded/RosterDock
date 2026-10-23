@@ -6,12 +6,23 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { classifyOn } from "../src/broker/broker.js";
+import { migrate } from "../src/db/migrate.js";
 import { callMcpTool, discoverTools, mcpClientPool } from "../src/mcp/client.js";
+import type { ConnectionRow } from "../src/mcp/connections.js";
 import { fakeMcp } from "./mcp-fake.js";
-import { addProject, addTeammate, seedCompany, startTestBoard, type TestBoard } from "./helpers.js";
+import {
+  addProject,
+  addTeammate,
+  seedCompany,
+  startTestBoard,
+  testEgress,
+  type TestBoard,
+} from "./helpers.js";
 
 let board: TestBoard;
 const mcp = fakeMcp();
+const READS_BY_NAME = "0035_reads_by_name.sql";
 const env: NodeJS.ProcessEnv = { HUBSPOT_MCP_TOKEN: "fixture-token-000000" };
 const stdioScript = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -111,7 +122,8 @@ describe("connections", () => {
     expect(byName.manage_crm_objects).toMatchObject({ write: true, source: "annotation" });
     expect(byName.get_properties).toMatchObject({ write: false, source: "catalog" });
     expect(byName.run_report).toMatchObject({ write: true, source: "default" });
-    expect(byName.whoami).toMatchObject({ write: false, source: "annotation" });
+    // Labelled read-only by the server, but neither its name nor the catalog says it reads: held for a person.
+    expect(byName.whoami).toMatchObject({ write: true, source: "unconfirmed" });
     expect(byName.run_report!.description).toContain("saved report");
     expect(discovered.body.discoveredAt).not.toBeNull();
     // The credential travelled as a header, by value resolved from the NAME, and never into the row or events.
@@ -122,7 +134,8 @@ describe("connections", () => {
     expect(JSON.stringify(events)).not.toContain("fixture-token");
     const ev = events.find((e) => e.type === "connection.updated");
     expect(ev?.payload.discovered).toBe(5);
-    expect(ev?.payload.writes).toEqual(["manage_crm_objects", "run_report"]);
+    expect(ev?.payload.writes).toEqual(["manage_crm_objects", "run_report", "whoami"]);
+    expect(ev?.payload.unconfirmed).toEqual(["whoami"]);
 
     // A person reclassifies run_report as a read; the next discovery keeps their word.
     const patched = await api.patch(`${base}/connections/${created.body.id}`, {
@@ -144,18 +157,19 @@ describe("connections", () => {
     });
     expect(off.body.tools.find((t: { name: string }) => t.name === "whoami")).toMatchObject({
       off: true,
-      write: false,
-      source: "annotation",
+      write: true,
+      source: "unconfirmed",
     });
     const rediscovered = await api.post(`${base}/connections/${created.body.id}/discover`, {});
     expect(rediscovered.body.tools.find((t: { name: string }) => t.name === "whoami")).toMatchObject({
       off: true,
-      source: "annotation",
+      source: "unconfirmed",
     });
-    const offEvent = (await api.get(`${base}/events?limit=10`)).body.find(
-      (e: { type: string; payload: any }) => e.type === "connection.updated" && e.payload.switchedOff?.length,
-    );
+    const offEvents = (await api.get(`${base}/events?limit=10`)).body as { type: string; payload: any }[];
+    const offEvent = offEvents.find((e) => e.type === "connection.updated" && e.payload.switchedOff?.length);
     expect(offEvent?.payload).toMatchObject({ switchedOff: ["whoami"], off: ["whoami"] });
+    // Switched off, it waits for no confirmation.
+    expect(offEvents.find((e) => e.type === "connection.updated")?.payload.unconfirmed).toEqual([]);
     const on = await api.patch(`${base}/connections/${created.body.id}`, {
       tools: [{ name: "whoami", off: false }],
     });
@@ -216,7 +230,7 @@ describe("connections", () => {
       discoverTools(
         { transport: "http", url: "https://mcp.gong.test/mcp", authEnvName: "GONG_MCP_TOKEN" },
         {
-          fetch: mcp.fetch,
+          egress: testEgress(mcp.fetch),
           env,
         },
       ),
@@ -230,7 +244,7 @@ describe("connections", () => {
       authEnvName: "HUBSPOT_MCP_TOKEN",
     };
     mcp.calls.length = 0;
-    const read = await callMcpTool(target, { fetch: mcp.fetch, env }, "search_crm_objects", {
+    const read = await callMcpTool(target, { egress: testEgress(mcp.fetch), env }, "search_crm_objects", {
       objectType: "company",
       query: "warm",
     });
@@ -245,7 +259,7 @@ describe("connections", () => {
       name: "search_crm_objects",
       arguments: { objectType: "company", query: "warm" },
     });
-    const write = await callMcpTool(target, { fetch: mcp.fetch, env }, "manage_crm_objects", {
+    const write = await callMcpTool(target, { egress: testEgress(mcp.fetch), env }, "manage_crm_objects", {
       action: "create",
       objectType: "company",
       properties: { name: "Q3 warm accounts" },
@@ -253,14 +267,14 @@ describe("connections", () => {
     expect(write.ok).toBe(true);
     expect((write as { result: { id: string } }).result.id).toBe("301");
     mcp.errorTools.add("whoami");
-    const failed = await callMcpTool(target, { fetch: mcp.fetch, env }, "whoami", {});
+    const failed = await callMcpTool(target, { egress: testEgress(mcp.fetch), env }, "whoami", {});
     mcp.errorTools.delete("whoami");
     expect(failed).toEqual({ ok: false, error: "unauthorized: no credential was presented" });
-    const unknown = await callMcpTool(target, { fetch: mcp.fetch, env }, "no_such_tool", {});
+    const unknown = await callMcpTool(target, { egress: testEgress(mcp.fetch), env }, "no_such_tool", {});
     expect(unknown.ok).toBe(false);
     expect((unknown as { error: string }).error).toContain("unknown tool");
     mcp.failWith = 503;
-    const down = await callMcpTool(target, { fetch: mcp.fetch, env }, "whoami", {});
+    const down = await callMcpTool(target, { egress: testEgress(mcp.fetch), env }, "whoami", {});
     mcp.failWith = null;
     expect(down.ok).toBe(false);
     expect((down as { error: string }).error).not.toContain("fixture-token");
@@ -308,7 +322,7 @@ describe("connections", () => {
     // HTTP is never pooled.
     await callMcpTool(
       { transport: "http", url: "https://mcp.hubspot.test/mcp", authEnvName: "HUBSPOT_MCP_TOKEN" },
-      { fetch: mcp.fetch, env, pool },
+      { egress: testEgress(mcp.fetch), env, pool },
       "whoami",
       {},
     );
@@ -403,5 +417,84 @@ describe("connections", () => {
       default: "read",
       caps: { slack: "off" },
     });
+  });
+
+  it("a name makes a tool a read only with a reading verb and no second verb, at a call and in what discovery kept", async () => {
+    // Not discovered and not in the catalog: the broker reads the name when the call comes.
+    const bare = { tools: [], discovered_at: null, catalog_id: null } as unknown as ConnectionRow;
+    for (const tool of ["export_contacts", "preview_campaign", "check_in", "get_or_create_contact"])
+      expect(classifyOn(bare, tool).write, tool).toBe(true);
+    expect(classifyOn(bare, "list_contacts").write).toBe(false);
+
+    // A discovery under the old rule kept some of those as reads by their name: the upgrade makes them
+    // writes. What a person, an annotation or the catalog said stays as it was.
+    const { api, base } = await seedCompany(board, "cn6@example.com");
+    const conn = (await api.post(`${base}/connections`, { name: "crm", url: "https://crm.test/mcp" })).body;
+    const kept = [
+      { name: "export_contacts", description: "Export to CSV", write: false, source: "name" },
+      { name: "crm.preview_campaign", description: "", write: false, source: "name", off: true },
+      { name: "find_and_merge_duplicates", description: "", write: false, source: "name" },
+      { name: "list_contacts", description: "", write: false, source: "name" },
+      { name: "export_audit_log", description: "", write: false, source: "person" },
+      { name: "check_quota", description: "", write: false, source: "annotation" },
+      { name: "create_contact", description: "", write: true, source: "default" },
+    ];
+    await board.db.query("UPDATE connections SET tools = $2, discovered_at = now() WHERE id = $1", [
+      conn.id,
+      JSON.stringify(kept),
+    ]);
+    await board.db.query("DELETE FROM schema_migrations WHERE name = $1", [READS_BY_NAME]);
+    expect((await migrate(board.db)).applied).toEqual([READS_BY_NAME]);
+    expect((await api.get(`${base}/connections/${conn.id}`)).body.tools).toEqual([
+      { name: "export_contacts", description: "Export to CSV", write: true, source: "default" },
+      { name: "crm.preview_campaign", description: "", write: true, source: "default", off: true },
+      { name: "find_and_merge_duplicates", description: "", write: true, source: "default" },
+      ...kept.slice(3),
+    ]);
+  });
+
+  it("a person confirms a tool only the server calls read-only: their word, recorded as theirs, outlives discovery", async () => {
+    const { api, base, owner } = await seedCompany(board, "cn7@example.com");
+    const conn = (
+      await api.post(`${base}/connections`, {
+        name: "crm",
+        url: "https://mcp.hubspot.test/mcp",
+        authEnvName: "HUBSPOT_MCP_TOKEN",
+      })
+    ).body;
+    type Tool = { name: string; write: boolean; source: string };
+    const toolOf = (body: { tools: Tool[] }, name: string) => body.tools.find((t) => t.name === name);
+    const recent = async () =>
+      (await api.get(`${base}/events?limit=5`)).body as {
+        type: string;
+        actor: unknown;
+        payload: Record<string, unknown>;
+      }[];
+    // No catalog entry: the label holds where the name reads, and whoami waits for a person.
+    const discovered = (await api.post(`${base}/connections/${conn.id}/discover`, {})).body;
+    expect(toolOf(discovered, "search_crm_objects")).toMatchObject({ write: false, source: "annotation" });
+    expect(toolOf(discovered, "whoami")).toMatchObject({ write: true, source: "unconfirmed" });
+
+    const confirmed = await api.patch(`${base}/connections/${conn.id}`, {
+      tools: [{ name: "whoami", write: false }],
+    });
+    expect(confirmed.status).toBe(200);
+    expect(toolOf(confirmed.body, "whoami")).toMatchObject({ write: false, source: "person" });
+    expect((await recent()).find((e) => e.type === "connection.updated")).toMatchObject({
+      actor: { kind: "user", id: owner.userId },
+      payload: { name: "crm", confirmed: ["whoami"], reclassified: ["whoami"] },
+    });
+    // A person's word wins over the server's labels either way; flipping a tool that was not held confirms nothing.
+    await api.patch(`${base}/connections/${conn.id}`, {
+      tools: [{ name: "search_crm_objects", write: true }],
+    });
+    expect((await recent()).find((e) => e.type === "connection.updated")?.payload).toMatchObject({
+      reclassified: ["search_crm_objects"],
+      confirmed: [],
+    });
+    const again = (await api.post(`${base}/connections/${conn.id}/discover`, {})).body;
+    expect(toolOf(again, "whoami")).toMatchObject({ write: false, source: "person" });
+    expect(toolOf(again, "search_crm_objects")).toMatchObject({ write: true, source: "person" });
+    expect((await recent()).find((e) => e.type === "connection.updated")?.payload.unconfirmed).toEqual([]);
   });
 });

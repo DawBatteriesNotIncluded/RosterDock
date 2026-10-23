@@ -39,7 +39,16 @@ board, Postgres and, by default, public HTTPS for the model API and the git host
   the monthly report by chargeback tag, and the CSVs for finance. Budgets alert at 80% and 100%. A Claude
   Code run that is stopped or hits its time limit counts what its messages reported (the output of the
   last one may be short); Codex reports tokens only at the end, so a stopped Codex run counts none, and
-  its run log says so.
+  its run log says so. A run on the stub engine counts under the stub, whatever model its teammate names:
+  it called none, so it has no price. Peter's own model calls (a goal's plan, a re-plan note, an org
+  proposal) count like runs: under Peter, or the department's lead who made the call, the model that
+  answered, and the project, department and goal they served when made; priced from the same table, a
+  line each in the usage CSV (`kind` plan, re-plan or org proposal, beside run), and against budgets,
+  which they also alert. A spent budget stops runs at dispatch, not his planning. On upgrade, what goals
+  and org proposals had already spent planning is carried over, dated when each goal was planned. A
+  company keeps its prices in one currency, the one its first price is in: a price in another is refused
+  (409, naming the currency to give), and so are list prices (in USD) for a company that prices in another. Both CSVs end with a `provider` column, and the chargeback CSV has
+  a line per project and provider (Company model providers, below).
 - **Drift.** A teammate whose runs suddenly cost or take far more than their own usual, or whose work is
   sent back far more often, raises one alert per day: in Activity, in the notifications, on their page.
   Nothing stops; open their recent runs and reviews and decide. What counts as "far more" is the
@@ -50,21 +59,39 @@ board, Postgres and, by default, public HTTPS for the model API and the git host
 Everything that needs a person is one sentence in the webhook (`board.notifySecret`, or a per-company env
 var name in Settings) and a row in the Approvals or Company page:
 
-| Sentence                                   | What to do                                                                                               |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| A teammate asks approval to write …        | Approvals: read the exact payload and its hash; Approve and run, or Reject with a note (Peter re-plans). |
-| The approved write could not be sent       | The connection is off, gone or refusing: Settings, Connections; fix and let the teammate propose again.  |
-| Peter has questions before planning …      | The goal card: answer them; Peter plans.                                                                 |
-| Peter needs you on … (a goal turned amber) | The goal card: a task failed three times; read the runs, fix the brief or the toolbox, restart the task. |
-| Pull request opened for …                  | Merge it (or not) on the git host; merging is yours by design.                                           |
-| Budget alert                               | Settings: raise the budget, or leave it and let runs wait at the gate.                                   |
-| Peter proposes … / audited …               | The Company page: accept or decline the draft.                                                           |
-| … runs cost 3× their usual                 | The teammate's page and their last runs; a bigger model, a bigger task, or a loop. Nothing stopped.      |
+| Sentence                                    | What to do                                                                                               |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| A teammate asks approval to write …         | Approvals: read the exact payload and its hash; Approve and run, or Reject with a note (see below).      |
+| The approved write could not be sent        | The connection is off, gone or refusing: Settings, Connections; fix and let the teammate propose again.  |
+| Peter has questions before planning …       | The goal card: answer them; Peter plans.                                                                 |
+| Peter needs you on … (a goal turned amber)  | The goal card: a task failed three times; read the runs, fix the brief or the toolbox, restart the task. |
+| Pull request opened for …                   | Merge it (or not) on the git host; merging is yours by design.                                           |
+| … carries binary files a review cannot show | Reviews: the review is a person's now. Look at the files on the run, then approve or request changes.    |
+| Budget alert                                | Settings: raise the budget, or leave it and let runs wait at the gate.                                   |
+| Peter proposes … / audited …                | The Company page: accept or decline the draft.                                                           |
+| … runs cost 3× their usual                  | The teammate's page and their last runs; a bigger model, a bigger task, or a loop. Nothing stopped.      |
+
+A task waiting on a person is amber on the board, "Needs you", and turns its goal amber (a task outside any
+open goal gets Peter's "Needs a person" note on it instead). A teammate's blocker names who it waits on by
+handle; a name that is no teammate here (`@manager`, someone's first name) is a person. A wait on the task's
+manager, on Peter or on a teammate that no longer exists goes to a person once `ROSTERDOCK_CHASE_BLOCKED_FOR_MS`
+(10 min) has passed, and so does a wait on a teammate who has not answered that long after Peter chased them
+(he chases once). Give the task what it asks for, then **Unblock** it: its goal carries on.
 
 A teammate's pull request (a merge request on GitLab) is one commit on the branch `rosterdock/task-12`,
 titled `Task 12: <the task's title>`. Its body names the round, the reviewer who approved it, the checks and
 the diff's sha256. The board never writes a bare `#12`: the git host would link that to the repository's
-own issue or pull request 12.
+own issue or pull request 12. Only build work on a project with a repository opens one; research documents
+stay on the board. **New goal** puts a goal in a project that exists, or opens one on the repository URL and
+branch you give it, and Peter plans changes to code only on a project that has one. A task filed into a
+project after the goal that opened it closed is work outside that goal.
+
+A write a person rejects leaves its task Blocked on the rejection, with the note: nothing waits for a decision
+any more. Peter (or the department's lead) re-plans a teammate's task without that write, unless its goal was
+stopped or closed or he has re-planned it twice already; any other task waits with the rejection for its
+assignee when a person is, or for any person to start it again with a note, reassign it or cancel it. The
+rejected card on Approvals, and the toast, say which. A task nobody will finish is cancelled from its status
+menu (owners and admins); a cancelled task is reopened from Details.
 
 ## Runs that go wrong
 
@@ -89,16 +116,23 @@ own issue or pull request 12.
   worker), or move the teammate to Codex.
 - **Failed at once with "no engine adapter"**: the teammate's engine is not on that worker image
   (`stub`, `claude_code` and `codex` ship).
+- **Failed at once with "Codex cannot keep to <department>'s tool list"**: the department's tool list leaves
+  out Bash, or allows only some shell commands, and Codex reads files and runs commands only through its
+  shell. Nothing started: no clone, no Codex. Name Bash on its own in the list (Codex's own sandbox still
+  holds it to the rest of the list, `docs/security.md`), or give the work to a Claude Code teammate. The
+  board refuses to seat a Codex teammate in such a department; Peter's audit names one seated before.
 - **"runs on opencode, which is not available"**: OpenCode has no worker yet, so the board starts no run on it
   and the pickers no longer offer it. Pick another engine in the teammate's editor.
 - **Failed with "git clone failed"**: the project's repository URL or branch, or the worker's git token
-  (`worker.gitSecret`). A clone that moves under 1 KB a second for a minute gives up, and the run's time
-  limit counts from the start of the clone.
+  (`worker.gitSecret`). The token goes only to the hosts in `worker.gitSecret.hosts` (github.com unless you
+  list others), so a private repository on GitLab or GitHub Enterprise Server needs its host listed there.
+  A clone that moves under 1 KB a second for a minute gives up, and the run's time limit counts from the
+  start of the clone to the end of the repository's tests.
 - **The board was down when a run finished.** The worker retries the report for about five minutes,
   heartbeating meanwhile, then leaves the run to pg-boss's retry, which runs it again. A report the board
   refuses outright is replaced by a failed run that says why.
 - **Stop a run.** The run panel's Stop: a queued run stops at once; a running one at its next heartbeat,
-  a clone in progress included.
+  a clone or the repository's tests in progress included.
 
 ## Changing the company from files
 
@@ -108,7 +142,10 @@ with personas and toolboxes, departments with leads, members, sandbox and pool) 
 happened and what could not be honoured (a connection the company does not have, an engine that is not
 enabled). The shipped examples are `deploy/templates/gtm-company.json` and `finance-department.json`;
 the format is `rosterdock/templates/1` (`TemplatesFileSchema` in `@rosterdock/shared`). Files carry names,
-never credential values: a persona or a playbook that carries one is refused whole.
+never credential values: a persona or a playbook that carries one is refused whole. The teammate templates
+a file brings are the company's own: Hire lists them after the built-in ones
+(`GET /api/companies/:companyId/templates/teammates`), and no other company sees them;
+`GET /api/templates/teammates` serves only the built-in ones.
 
 ## Worker pools
 
@@ -118,6 +155,175 @@ department's sandbox ("Runs on" when creating it, or PATCH `sandbox.pool`). Its 
 `runs.<pool>` and only that fleet takes them. A pool may run its own worker image (`image:` on the pool,
 a full reference) for a fleet on another engine build or a pinned tag; without one it runs `worker.image`,
 else the chart's. Check `rosterdock_runs_live` and the fleet's pods when such a department's tasks sit queued.
+
+## Web access for teammates
+
+A teammate reaches nothing outside the board on its own: Claude Code runs with the tools the worker lists
+(read, write and edit in the run's folder by default), and every live system is a connection the board
+governs. The web is one too.
+
+- **The web connection.** Settings > Connections > Web, built in: the board reads public pages for a
+  teammate (`fetch`, a read; one per company). Grant it in the teammate's toolbox, and the brief tells them
+  how to read a page; each page they read is a line in Activity (the URL, the status, the size, never what
+  it says). Leave its domains empty for any public site, or list the ones it may read: a department narrows
+  that list from its sandbox (`webDomains`), a project's client from its client policy (Settings >
+  Connections > Client policies), never wider. Over the API, a PATCH replaces a department's sandbox and a
+  project's client policy whole, so send their web sites with the rest. An address that is not public is
+  refused whatever a list says (`docs/security.md`, Reading the web). With `ROSTERDOCK_FETCH_SOURCES=0` the
+  board stays off the web, and the connection's Check says so.
+- **A web tool you already have.** Search, a real browser or a fetch server you run is a connection like any
+  other: add it under Settings > Connections (an MCP server over HTTP or stdio, or an OpenAPI service),
+  discover its tools, grant it in toolboxes. The catalog has the common ones, versions pinned, and the brief
+  names a connection added from one of them as a web tool: Brave Search, Tavily, Exa, the Playwright browser
+  and the MCP reference fetch server. Their reads run and are recorded like any connection's (the tool and
+  its argument names); the web connection's address checks and site lists are not theirs. A key goes by
+  name, as a company secret (Settings > Connections > Secrets) or a name the board shares: Tavily and Exa
+  are hosted and take it as a bearer (`TAVILY_API_KEY`, `EXA_API_KEY` at `https://mcp.tavily.com/mcp` and
+  `https://mcp.exa.ai/mcp`); Brave Search runs on the board and gets `BRAVE_API_KEY` in its environment.
+- **A stdio server runs inside the board pod**, as the board, so it starts only once `board.stdioCommands`
+  lists its exact line: `npx -y @brave/brave-search-mcp-server@2.1.4`, `npx -y tavily-mcp@0.2.22`,
+  `npx -y exa-mcp-server@3.4.2`. The reference fetch server is Python (`uvx mcp-server-fetch@2026.10.19`),
+  and the board image carries no uv, so it suits a board you run yourself; the web connection does its job
+  with the board's guard and a record of each page. A browser or a fetcher inside the board pod reaches
+  what the board reaches, the cluster included (`docs/security.md`), so run one as a service of its own and
+  connect over HTTP.
+- **The Playwright browser** as a service: the `mcr.microsoft.com/playwright/mcp` image, or
+  `npx -y @playwright/mcp@0.0.83 --headless --isolated --browser chromium --port 8931 --host 0.0.0.0` with
+  `--allowed-hosts` naming the service as the board reaches it, port included
+  (`playwright-mcp.tools.svc.cluster.local:8931`), in a pod whose network policy reaches public addresses
+  only; then a
+  connection to `http://playwright-mcp.<namespace>.svc.cluster.local:8931/mcp` (the catalog's example), with
+  that name, as the URL writes it, in `board.privateDestinations` and port 8931 in
+  `networkPolicy.board.egressPorts` (Private destinations, below). Snapshots and screenshots read; navigating,
+  clicking and typing
+  are writes, as the server marks them, so under a read grant the browser can only look at the page it is on.
+  To let teammates move between pages without asking, a person flips `browser_navigate` and
+  `browser_navigate_back` to read on the connection's card; clicks and typing stay writes, proposed for a
+  person.
+- **The engines' own web tools.** List WebFetch and WebSearch in `ROSTERDOCK_CLAUDE_ALLOWED_TOOLS` (chart
+  `worker.claudeAllowedTools`, or a pool's) and a department's sandbox may keep them for Claude Code. Codex
+  keeps its own web search unless the department's list leaves out WebSearch. The brief tells the teammate
+  what it has. They reach the web outside the board: no address check of the board's, no site list, no
+  record of each page (the run log shows the URL or query the engine asked for, as it shows every tool).
+  WebFetch fetches from the worker pod, so what it reaches is what the pod reaches; a web search runs at the
+  model's provider. Prefer the web connection; where you use WebFetch, give its department a pool whose
+  egress is public HTTPS only.
+
+## Private destinations
+
+A company's connections, the OAuth endpoints their servers name, and its own webhook and SMTP server reach
+public addresses only: the board refuses a loopback, private, link-local (cloud metadata) or other non-public
+address, and a name that resolves to one, before it sends anything (`docs/security.md`, What a company's
+connections reach). An MCP server inside the cluster, a model on a host of yours or an n8n on the office
+network is listed in `board.privateDestinations` (`ROSTERDOCK_PRIVATE_DESTINATIONS`):
+
+```yaml
+board:
+  privateDestinations:
+    - "playwright-mcp.tools.svc.cluster.local" # one service, by the name the connection's URL uses
+    - "*.ai.svc.cluster.local" # every service in a namespace only you create services in
+    - "10.20.0.0/16" # a range, whatever name leads to it
+networkPolicy:
+  board:
+    egressPorts: [443, 80, 8931, 11434] # and the ports those services listen on
+```
+
+- A name is matched as the connection's URL writes it, without the pod's search domains: list
+  `playwright-mcp.tools.svc.cluster.local` and use that name in the URL. The short `playwright-mcp` is
+  another name, refused until it is listed too. A range is matched by address, whatever the name.
+- A listed name is trusted with whatever it resolves to (except that one listed for every company never leads
+  into a private range given to one company alone, below). Never list a wildcard over the cluster's domain
+  (`*.cluster.local`, `*.svc.cluster.local`, `*.pod.cluster.local`): cluster DNS answers
+  `169-254-169-254.<namespace>.pod.cluster.local` with that address (CoreDNS's `pods insecure`, the default on
+  kubeadm, kind and EKS), and an ExternalName service is a CNAME to anywhere, so the wildcard would hand
+  every company the cloud's metadata service. List each service, or a namespace only you create services in.
+- Every company on the board may use what you list, unless you give an entry to one company: write it
+  `<company id>=<entry>` (in the chart, `{ company: "<id>", destination: "<entry>" }`), and only that company
+  reaches it, on connections of its own (its own lookup and kept connections, so no other company gets there
+  through a reused connection or a name that changes its answer). Its owners and admins find the id under
+  Settings > Connections, where they see your entries for every company and their own, marked "given to
+  this company"; no other company sees them. An entry for every company that covers one you give a company
+  makes it every company's: a range inside a listed range, a name under a listed `*.` name (the board warns
+  at start about both, and Settings does not mark them), or a name whose address is in a range listed for
+  every company, which nothing can see before the name resolves. Keep a company's own services out of the
+  ranges you list for every company. The other way round holds: a private range you give one company stays
+  its own, and a name listed for every company that resolves into it is refused for the others (a name you
+  give a company alone is trusted wherever it leads). The board warns at start about an id that names no company, whose
+  entries allow nothing. In the chart, a plain string that holds a company's entry and a comma is refused:
+  one entry per item. A stdio command you list with free arguments (a final `*`) runs inside the board pod, where no
+  list applies: one that fetches or proxies lets any company's admins point it at that destination too.
+
+  ```yaml
+  board:
+    privateDestinations:
+      - "playwright-mcp.tools.svc.cluster.local" # every company
+      - company: "4f1aee73-e65e-4c8d-83f7-aa1169379d7f"
+        destination: "ollama.acme.svc.cluster.local" # Acme alone
+  ```
+
+- A connection that points at an unlisted private address fails its Check, and its calls fail, with
+  "refused: … which this board's operator has not allowed"; Activity shows the same. Nothing else about it
+  changes: list the destination, or give the connection a public URL, and press Check. Owners and admins see
+  your list under Settings > Connections, and the add form flags a URL whose address the board refuses, or
+  whose name looks private and is not listed.
+- Your own destinations are not checked: the git hosts, OIDC, OTLP, the bucket, the Kubernetes API, the model
+  API, `board.notifySecret` and `board.notifyEmail`. A company that names its own webhook or SMTP server in
+  Settings is checked.
+- The board does not start on an entry it cannot read (a typo, a range past /32 or /128).
+- The network policy still applies on top: with `networkPolicy.enabled`, a listed service's port must be in
+  `networkPolicy.board.egressPorts`, and `egressTo` narrows where the board goes. The check is the board's;
+  it judges an address by its range, so cluster addresses outside the private ranges look public to it
+  (`docs/security.md`), and only the network policy keeps companies from those.
+
+## Company model providers
+
+A company can keep its own model accounts as providers, under Settings > Models
+(`/api/companies/:companyId/model-providers`): Anthropic, OpenAI, Azure OpenAI, Amazon Bedrock, or a server
+that speaks OpenAI's API (vLLM, Ollama, LiteLLM). A provider holds its endpoint or region, the models it
+serves, and the env var names of its credentials, never a value: a company pastes a key once, write-only, into
+its secrets (the Models form puts it under a name such as `MODELS_ACME_KEY`, and Settings > Connections >
+Secrets lists it), picks a secret it set before, or names one you share (`board.sharedEnvNames`). Pasting
+needs a secret store (`board.oauth.enabled`). Owners and admins add, change and remove providers; everyone in
+the company sees them by name.
+
+- The Models form asks the board first whether a provider would be added
+  (`POST /api/companies/:companyId/model-providers/check-new`, which writes nothing), then sets a pasted key
+  only under a name not set yet (`PUT /secrets/:name` with `If-None-Match: *`, refused with 409 otherwise),
+  then saves the provider. A key never replaces another one, nor hides a name you share, and a provider the
+  board refuses at its check leaves no key. One refused after the key is set (someone added the same name a
+  moment before) leaves the key under its name, listed under Settings > Connections > Secrets.
+- A provider's card changes its label, its endpoint or region and its key's name, and sets the value under its
+  key's name, replacing it for everything that names that secret, as Settings > Connections > Secrets does.
+  Removing asks first, and says the key stays in the company's secrets; Archive keeps everything. Without a
+  secret store a company pastes no key: it names one you share, and the page says so.
+- `board.modelProviders` (`ROSTERDOCK_MODEL_PROVIDERS`) lists the kinds a company may add: `anthropic`,
+  `openai`, `azure_openai`, `bedrock`, `openai_compatible`, and `board`, which lends the board's own models to
+  every company. Empty: all of them. `[board]` alone: no company providers. The board does not start on an
+  entry it does not know.
+
+  ```yaml
+  board:
+    modelProviders: [anthropic, bedrock, board] # Anthropic and Bedrock accounts, and the board's own models
+  ```
+
+- Taking a kind off the list deletes no provider. The company keeps it, marked as no longer offered, and can
+  switch it off, archive it or remove it.
+- An endpoint a company gives (an Azure resource, a compatible server) is checked as a connection's URL is:
+  public, or private where `board.privateDestinations` lists it (Private destinations, above), and plain http
+  only to a listed destination. An Azure private endpoint is a name that resolves to a private address, so it
+  needs an entry too. Anthropic, OpenAI and Bedrock have fixed hosts, or hosts taken from the region.
+- A price belongs to a provider and a model, set on the model's row of the provider's card under Settings >
+  Models (`PUT /prices` with `providerId`), or to the board's own models (Settings > Prices and budgets).
+  Tokens through a provider with no price of its own take the board's own per-token price for the model
+  (never a seat), then, for an Anthropic provider, Anthropic's list price while the company prices in USD or
+  has no price yet (Costs then shows USD); else they have no price yet. Fill list prices on a card (`POST /prices/list` with `providerId`) prices an
+  Anthropic provider's models at the list, and a Bedrock provider's Claude models at it too, marked as
+  estimates to check against the AWS bill. Costs says what went through each provider, a removed one's under its
+  label, marked removed. A provider bills per
+  token: its price gives one figure per million tokens at least, and no seat.
+- Teammates do not think with a company's provider yet: every run and every plan uses the board's own models.
+  Until they do, leaving `board` out of the list changes nothing for runs and plans; it only shows companies
+  that the board's own models are not lent.
 
 ## Upgrades and backups
 
@@ -135,6 +341,10 @@ else the chart's. Check `rosterdock_runs_live` and the fleet's pods when such a 
   reads those as missing.
 - Rotate a credential by changing the Secret and restarting the deployment that reads it; nothing on the
   board stores a value, so nothing else changes.
+- From a board before one currency per company, a company that priced models in two currencies keeps its
+  prices, and Costs adds them up as one, as it did. It may go on setting prices in either; one in a third is
+  refused (409). To bring it to one, remove its prices in all but one currency (Settings > Prices and
+  budgets, and each provider's on its card under Settings > Models) and give them again in that one.
 - From a board that let companies reach its own environment (before `ROSTERDOCK_SHARED_ENV_NAMES`), four
   things are closed by default. A connection or notification name whose value lives on the board pod
   (`board.connectionsSecret`, compose's `environment:`) resolves for companies only once
@@ -144,6 +354,16 @@ else the chart's. Check `rosterdock_runs_live` and the fleet's pods when such a 
   its calls fail, and it can still be switched off or removed. Only the people `board.companyCreators`
   lists create companies, besides the first on an empty board. And a public sign-in provider (Google and
   the like) with no `board.oidc.allowedDomains` does not start: list your domains, or `"*"`.
+- From a board before `ROSTERDOCK_PRIVATE_DESTINATIONS`, what a company chooses reaches public addresses
+  only. A connection, its OAuth or a company's webhook or SMTP server at a private address (a service in
+  the cluster, a host on your network) fails until `board.privateDestinations` lists it (Private
+  destinations, above). An MCP server that redirects within its own server with a 307 or 308 (`/mcp` to
+  `/mcp/`) is followed; a 301 or 302 (an http-to-https rule's) would turn the call into a GET, so it fails
+  and says what to change (over https, or with or without the trailing slash). One that redirects to another server, and an OpenAPI operation or a webhook
+  that answers with any redirect, fails and names the server it pointed to: give the connection that
+  address. A
+  local `apps/board/.env` copied before this change needs the `ROSTERDOCK_PRIVATE_DESTINATIONS` line from
+  `.env.example` to reach servers on your machine.
 
 ## Environment reference
 
@@ -155,7 +375,9 @@ setting with no value of its own from `board.extraEnv`. The ones an operator cha
 | `ROSTERDOCK_DEV_LOGIN`                       | Off in production.                                                                                                                                                                                                                                                                                                                                                     |
 | `ROSTERDOCK_SECRET_STORE`                    | A secret store the board may write to: the tokens a connection's OAuth flow obtains, and the values people set under Settings > Connections > Secrets (`rosterdock-company-<id>`, one key per name; resolved for that company before the shared names). `kubernetes` (the chart sets it with `board.oauth.enabled`) or `file:<dir>`. Unset: only shared names resolve. |
 | `ROSTERDOCK_SHARED_ENV_NAMES`                | Env var names on the board every company may name besides its own secrets (chart `board.sharedEnvNames`), comma-separated; nothing else on the board reaches a company. Any company's admins can send a shared value anywhere, so share only what every company may hold; the board will not start with one of its own names (`docs/security.md`). Empty: none.        |
+| `ROSTERDOCK_PRIVATE_DESTINATIONS`            | The private destinations a company may make the board reach (chart `board.privateDestinations`), comma-separated: host names (`*.` for the names under one), addresses and ranges, each for every company or, as `<company id>=<entry>`, for one. Unset: public addresses only. The board does not start on an entry it cannot read (Private destinations, above).     |
 | `ROSTERDOCK_STDIO_COMMANDS`                  | The command lines a stdio connection may run inside the board (chart `board.stdioCommands`), comma-separated: the command and its arguments, matched exactly; a final `*` lets a company add arguments. The server runs as the board and reads what it can, so list only what every company's admins may run (`docs/security.md`). Empty: none runs.                   |
+| `ROSTERDOCK_MODEL_PROVIDERS`                 | The model provider kinds a company may add (chart `board.modelProviders`), comma-separated: `anthropic`, `openai`, `azure_openai`, `bedrock`, `openai_compatible`, and `board`, which lends the board's own models to every company. Unset: all of them. The board does not start on an entry it does not know (Company model providers, above).                       |
 | `ROSTERDOCK_COMPANY_CREATORS`                | Who may create a company (chart `board.companyCreators`): emails and `@domain`s, comma-separated, or `*` for anyone who signs in. Unset: the first person to create one on an empty board owns it and nobody creates another (with the dev login on, anyone may). Everyone else joins a company when an owner invites their email.                                     |
 | `ROSTERDOCK_OIDC_*`, `ROSTERDOCK_PUBLIC_URL` | Sign-in (`docs/install.md`).                                                                                                                                                                                                                                                                                                                                           |
 | `ROSTERDOCK_SESSION_TTL_SECONDS`             | How long a sign-in lasts (default 30 days).                                                                                                                                                                                                                                                                                                                            |
@@ -167,12 +389,14 @@ setting with no value of its own from `board.extraEnv`. The ones an operator cha
 | `ROSTERDOCK_PETER_INTERVAL_MS`               | How often Peter's loop passes over every company; 0 disables it.                                                                                                                                                                                                                                                                                                       |
 | `ROSTERDOCK_RUN_STALE_AFTER_MS`              | How long a silent run is left before the reaper interrupts it.                                                                                                                                                                                                                                                                                                         |
 | `ROSTERDOCK_DB_POOL_MAX`                     | Postgres connections per board replica (the board and the queue).                                                                                                                                                                                                                                                                                                      |
-| `ROSTERDOCK_FETCH_SOURCES`                   | `0` keeps the board off the web: a research reviewer gets no fetched sources (chart `board.fetchSources: false`).                                                                                                                                                                                                                                                      |
+| `ROSTERDOCK_FETCH_SOURCES`                   | `0` keeps the board off the web: a research reviewer gets no fetched sources, and the web connection fetches nothing (chart `board.fetchSources: false`).                                                                                                                                                                                                              |
 | `OTEL_EXPORTER_OTLP_*`                       | Traces.                                                                                                                                                                                                                                                                                                                                                                |
 | Worker: `ROSTERDOCK_WORKER_POOL`             | Which queue this fleet consumes.                                                                                                                                                                                                                                                                                                                                       |
 | Worker: `ROSTERDOCK_HEARTBEAT_MS`            | How often a running run tells the board it is alive (15000). Keep it well under `ROSTERDOCK_RUN_STALE_AFTER_MS`, or the board takes the run over (chart `worker.extraEnv`).                                                                                                                                                                                            |
 | Worker: `ROSTERDOCK_ENGINE_PASS_ENV`         | Env var NAMES handed to the engine process.                                                                                                                                                                                                                                                                                                                            |
+| Worker: `ROSTERDOCK_GIT_TOKEN_HOSTS`         | The git hosts the worker's git token (`ROSTERDOCK_GIT_TOKEN`) is sent to, comma-separated, with a port where it is not 443 (chart `worker.gitSecret.hosts`). Default `github.com`; a repository on any other host clones without the token.                                                                                                                            |
 | Worker: `ROSTERDOCK_CLAUDE_ALLOWED_TOOLS`    | The most a Claude Code teammate may use (chart `worker.claudeAllowedTools`, per pool too). A department's sandbox only narrows it: Lighthouse's Research names WebSearch and WebFetch, which run only on a fleet that lists them.                                                                                                                                      |
+| Worker: `ROSTERDOCK_CODEX_SANDBOX`           | The widest sandbox Codex runs in: `workspace-write` (default), `read-only`, or `danger-full-access` for a pod that is sandboxed already (chart `worker.extraEnv`). A department's tool list only narrows it, and a list Codex cannot keep to stops its runs (`docs/security.md`). A mode Codex does not know stops the worker at start.                                |
 | Worker: `ROSTERDOCK_RUN_REPO_TESTS`          | Run the repository's tests after the harvest (a review check). The test script gets PATH, HOME, the temp directory, the locale and `CI=1`: no model key, board token or git token, so a private registry install fails there. `0` turns it off (chart `worker.extraEnv`; `docs/security.md`).                                                                          |
 | Worker: `ROSTERDOCK_POD_METRICS`             | Read the pod's CPU and memory from the metrics API instead of the cgroup (the chart sets it with `worker.podMetrics.enabled`, with the token and the Role it needs).                                                                                                                                                                                                   |
 | Worker: `ROSTERDOCK_LOG_FORMAT`              | `json` (default in a cluster) or `text` (chart `worker.extraEnv`).                                                                                                                                                                                                                                                                                                     |

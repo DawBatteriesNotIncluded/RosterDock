@@ -70,8 +70,11 @@ describe("OAuth on a connection", () => {
     expect((await api.get("/api/features")).body).toEqual({
       oauth: true,
       objectStore: false,
+      web: true,
       sharedEnvNames: ["HUBSPOT_OAUTH_CLIENT_SECRET"],
       stdioCommands: [],
+      privateDestinations: [],
+      companyPrivateDestinations: [],
     });
 
     const start = await api.post(`${base}/connections/${created.body.id}/oauth/start`, {});

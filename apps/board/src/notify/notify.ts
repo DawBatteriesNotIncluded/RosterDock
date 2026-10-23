@@ -13,7 +13,11 @@
 // shares (secrets/company.ts), never the rest of the board's environment.
 // The URL is never logged and never appears in an event. Email is the same
 // shape: an SMTP URL (credentials inside) by env var NAME, the recipients and
-// the sender, per company in settings.notify.email or board-wide.
+// the sender, per company in settings.notify.email or board-wide. A company's
+// own webhook and SMTP server are destinations it chose, reached through the
+// board's egress (web/egress.ts): a public address, or a private one the
+// operator lists, and no redirect followed. The board's own are the operator's
+// and are reached as they are.
 
 import { type ActorRef, type EventRecord, type EventType } from "@rosterdock/shared";
 import type { Db } from "../db/pool.js";
@@ -21,11 +25,13 @@ import type { EventBus } from "../events/bus.js";
 import { mutate } from "../mutate.js";
 import { companyEnv, notSetForCompany } from "../secrets/company.js";
 import type { SecretStore } from "../secrets/store.js";
+import { companyEgress, defaultEgress, egressFetch, egressSocket, type Egress } from "../web/egress.js";
 import { sendMail, type SmtpOptions } from "./smtp.js";
 
 export const NEEDS_YOU_EVENTS: readonly EventType[] = [
   "approval.proposed",
   "approval.failed",
+  "review.needs_person",
   "goal.questions",
   "goal.escalated",
   "pr.opened",
@@ -37,8 +43,13 @@ export const NEEDS_YOU_EVENTS: readonly EventType[] = [
 
 export interface NotifyDeps {
   db: Db;
-  /** Injected in tests; never the real network there. */
+  /** What the board's own webhook (ROSTERDOCK_NOTIFY_WEBHOOK_URL) is posted with; injected in tests. Default: global fetch. */
   fetch?: typeof fetch;
+  /**
+   * How a company's own webhook and SMTP server are reached (web/egress.ts); tests inject its transport and
+   * resolver. Default: the board's own, with nothing private allowed.
+   */
+  egress?: Egress;
   /** The names the board shares with every company (secrets/company.ts sharedEnv). Default: none. */
   env?: NodeJS.ProcessEnv;
   /** Where each company's own secrets live; they resolve before the shared names. */
@@ -111,6 +122,13 @@ export function needsYouText(ev: EventRecord, companyName: string): string | nul
       return `Budget alert: ${p.scopeKind} ${p.scopeName ?? ""} is at ${p.percent}% of its tokens.`;
     case "teammate.drift":
       return driftSentence(p);
+    case "review.needs_person": {
+      const files = (p.files as string[] | undefined) ?? [];
+      const named = `${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}`;
+      return p.reason === "unscanned"
+        ? `${n} ${p.title ?? ""} has binary files the secrets check did not read (${named}): it needs a person's approval in Reviews.`
+        : `${n} ${p.title ?? ""} carries binary files a review cannot show (${named}): its pull request needs a person's approval in Reviews.`;
+    }
     case "review.reassigned": {
       const r = p.reviewer as { kind: string; name: string | null } | null;
       return r?.kind === "user" ? `${n} ${p.title ?? ""} is ${r.name ?? "someone"}'s to review.` : null;
@@ -153,6 +171,8 @@ export interface NotifyTarget {
   url: string;
   /** Where the URL came from, by name only. */
   source: string;
+  /** The board's own, the operator's: reached as it is. A company's goes through the egress. */
+  operator: boolean;
 }
 
 /** Where the company's names resolve: its secrets over the names the board shares. */
@@ -171,14 +191,14 @@ export async function webhookFor(deps: NotifyDeps, companyId: string): Promise<N
   const settings = notifySettings(row?.settings);
   if (settings.webhookEnvName) {
     const url = (await envFor(deps, companyId))[settings.webhookEnvName]?.trim();
-    if (url) return { url, source: settings.webhookEnvName };
+    if (url) return { url, source: settings.webhookEnvName, operator: false };
     deps.log.warn(
       `${notSetForCompany(settings.webhookEnvName)}; ${row?.name ?? companyId} gets no notifications`,
     );
     return null;
   }
   return deps.defaultWebhookUrl
-    ? { url: deps.defaultWebhookUrl, source: "ROSTERDOCK_NOTIFY_WEBHOOK_URL" }
+    ? { url: deps.defaultWebhookUrl, source: "ROSTERDOCK_NOTIFY_WEBHOOK_URL", operator: true }
     : null;
 }
 
@@ -188,6 +208,8 @@ export interface EmailTarget {
   from: string;
   /** Where the URL came from, by name only. */
   source: string;
+  /** The board's own, the operator's: reached as it is. A company's goes through the egress. */
+  operator: boolean;
 }
 
 /** The email target for a company: its own SMTP URL env var NAME when set (and set for the company), else the board's. */
@@ -214,6 +236,7 @@ export async function emailFor(deps: NotifyDeps, companyId: string): Promise<Ema
         to: settings.email.to,
         from: settings.email.from ?? `rosterdock@${host}`,
         source: settings.email.smtpUrlEnvName,
+        operator: false,
       };
     }
     deps.log.warn(
@@ -221,7 +244,9 @@ export async function emailFor(deps: NotifyDeps, companyId: string): Promise<Ema
     );
     return null;
   }
-  return deps.defaultEmail ? { ...deps.defaultEmail, source: "ROSTERDOCK_NOTIFY_SMTP_URL" } : null;
+  return deps.defaultEmail
+    ? { ...deps.defaultEmail, source: "ROSTERDOCK_NOTIFY_SMTP_URL", operator: true }
+    : null;
 }
 
 export interface SendOutcome {
@@ -242,7 +267,11 @@ async function mail(
     await sendMail(
       target.smtpUrl,
       { from: target.from, to: target.to, subject, text },
-      { timeoutMs: deps.timeoutMs ?? 15_000, ...deps.smtp },
+      {
+        timeoutMs: deps.timeoutMs ?? 15_000,
+        ...deps.smtp,
+        ...(target.operator ? {} : { guard: egressSocket(deps.egress ?? defaultEgress()) }),
+      },
     );
     return { sent: true, target: target.source, error: null };
   } catch (err) {
@@ -275,6 +304,11 @@ function merge(outcomes: SendOutcome[]): SendOutcome {
   };
 }
 
+/** The deps as one company sends with them: its egress, the private destinations it may reach. */
+function forCompanyDeps(deps: NotifyDeps, companyId: string): NotifyDeps {
+  return { ...deps, egress: companyEgress(deps.egress ?? defaultEgress(), companyId) };
+}
+
 async function post(
   deps: NotifyDeps,
   target: NotifyTarget,
@@ -286,14 +320,20 @@ async function post(
     // A malformed URL would put its (token-bearing) value into fetch's error message; say only where it came from.
     return { sent: false, target: target.source, error: `the webhook URL in ${target.source} is not a URL` };
   }
-  const doFetch = deps.fetch ?? fetch;
+  const timeoutMs = deps.timeoutMs ?? 15_000;
+  // A company's webhook follows no redirect: its URL may carry a token, and the post goes there or nowhere.
+  const doFetch = target.operator
+    ? (deps.fetch ?? fetch)
+    : egressFetch(deps.egress ?? defaultEgress(), { redirect: "error", timeoutMs, maxBytes: 64 * 1024 });
   try {
     const res = await doFetch(target.url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(deps.timeoutMs ?? 15_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
+    // Only the status matters; the body is never read.
+    await res.body?.cancel().catch(() => {});
     if (!res.ok)
       return { sent: false, target: target.source, error: `the webhook answered HTTP ${res.status}` };
     return { sent: true, target: target.source, error: null };
@@ -333,11 +373,13 @@ export async function sendNeedsYou(deps: NotifyDeps, ev: EventRecord): Promise<S
   if (!(await claimNeedsYou(deps.db, ev.companyId, ev.seq)))
     return { sent: false, target: null, error: "another replica is sending it" };
   const [webhook, email] = await Promise.all([webhookFor(deps, ev.companyId), emailFor(deps, ev.companyId)]);
+  // A company's own webhook and SMTP server are reached as that company: its private destinations alone.
+  const as = forCompanyDeps(deps, ev.companyId);
   const outcomes: { channel: "webhook" | "email"; outcome: SendOutcome }[] = [];
   if (webhook)
     outcomes.push({
       channel: "webhook",
-      outcome: await post(deps, webhook, {
+      outcome: await post(as, webhook, {
         text: `${company.name} · ${text}`,
         company: company.name,
         companyId: ev.companyId,
@@ -349,7 +391,7 @@ export async function sendNeedsYou(deps: NotifyDeps, ev: EventRecord): Promise<S
   if (email)
     outcomes.push({
       channel: "email",
-      outcome: await mail(deps, email, `${company.name} · needs you`, `${text}\n\n(${ev.type})`),
+      outcome: await mail(as, email, `${company.name} · needs you`, `${text}\n\n(${ev.type})`),
     });
   for (const { channel, outcome } of outcomes) {
     if (outcome.sent) {
@@ -374,12 +416,13 @@ export async function sendTest(deps: NotifyDeps, companyId: string, actor: Actor
     await deps.db.query<{ name: string }>("SELECT name FROM companies WHERE id = $1", [companyId])
   ).rows[0];
   const [webhook, email] = await Promise.all([webhookFor(deps, companyId), emailFor(deps, companyId)]);
+  const as = forCompanyDeps(deps, companyId);
   const name = company?.name ?? "RosterDock";
   const outcomes: { channel: "webhook" | "email"; outcome: SendOutcome }[] = [];
   if (webhook)
     outcomes.push({
       channel: "webhook",
-      outcome: await post(deps, webhook, {
+      outcome: await post(as, webhook, {
         text: `${name} · Needs-you notifications reach you here.`,
         company: company?.name,
         companyId,
@@ -390,7 +433,7 @@ export async function sendTest(deps: NotifyDeps, companyId: string, actor: Actor
     outcomes.push({
       channel: "email",
       outcome: await mail(
-        deps,
+        as,
         email,
         `${name} · a test from RosterDock`,
         "Needs-you notifications reach you here.",

@@ -7,15 +7,18 @@ import type {
   CreateDepartmentInput,
   CreateGoalInput,
   UpdateGoalCapsInput,
+  UpdateModelProviderInput,
   CreateOpenApiConnectionInput,
   CreateProjectInput,
   CreateTaskInput,
   CreateTeammateInput,
   ModelPriceInput,
+  ModelProviderInput,
   MoveTaskInput,
   ReviewCommentInput,
   ReviewScoreInput,
   UpdateConnectionInput,
+  UpdateDepartmentInput,
   UpdateProjectInput,
   UpdateTaskInput,
   UpdateTeammateInput,
@@ -32,6 +35,8 @@ import type {
   Company,
   CompanySecret,
   Connection,
+  ModelProvider,
+  ModelProviders,
   CostReport,
   Department,
   Draft,
@@ -90,11 +95,16 @@ export function messageWithIssues(message: string, details: unknown): string {
   return issues.length ? `${message}: ${issues.join("; ")}` : message;
 }
 
-async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+async function request<T>(
+  method: string,
+  url: string,
+  body?: unknown,
+  extraHeaders: Record<string, string> = {},
+): Promise<T> {
   const res = await fetch(url, {
     method,
     credentials: "include",
-    headers: body !== undefined ? { "content-type": "application/json" } : {},
+    headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...extraHeaders },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -129,6 +139,11 @@ export interface Client {
     isLead: boolean,
   ): Promise<Department>;
   removeDepartmentMember(companyId: string, departmentId: string, teammateId: string): Promise<Department>;
+  updateDepartment(
+    companyId: string,
+    departmentId: string,
+    input: UpdateDepartmentInput,
+  ): Promise<Department>;
   teammates(companyId: string): Promise<Teammate[]>;
   templates(companyId: string): Promise<TeammateTemplate[]>;
   /** Where the browser downloads the company's templates file from. */
@@ -168,7 +183,8 @@ export interface Client {
   savePrice(companyId: string, input: ModelPriceInput): Promise<ModelPrice>;
   deletePrice(companyId: string, priceId: string): Promise<void>;
   /** Price every model the company uses and has not priced at the API list price. */
-  fillListPrices(companyId: string): Promise<ListPricesResult>;
+  /** List prices for the models the company uses on the board's own models, or for one provider's models. */
+  fillListPrices(companyId: string, providerId?: string): Promise<ListPricesResult>;
   styles(companyId: string): Promise<StylePackInfo[]>;
   setStyle(
     companyId: string,
@@ -237,11 +253,25 @@ export interface Client {
   checkConnection(companyId: string, connectionId: string): Promise<Connection>;
   /** Where to send the browser to authorise the connection; it comes back to the board's callback. */
   startOAuth(companyId: string, connectionId: string): Promise<{ url: string }>;
-  features(): Promise<Features>;
+  /** With a company: what applies to it too (the private destinations the operator gave it alone). */
+  features(companyId?: string): Promise<Features>;
   /** Company secrets: names only; the PUT body is the one value the board accepts, write-only. */
   secrets(companyId: string): Promise<CompanySecret[]>;
   setSecret(companyId: string, name: string, value: string): Promise<CompanySecret>;
+  /** A value under a new name only: a name already set, or one the operator shares, is refused (409). */
+  setNewSecret(companyId: string, name: string, value: string): Promise<CompanySecret>;
   deleteSecret(companyId: string, name: string): Promise<void>;
+  /** Company model providers: what the operator offers, and the company's own, by name. */
+  modelProviders(companyId: string): Promise<ModelProviders>;
+  createModelProvider(companyId: string, input: ModelProviderInput): Promise<ModelProvider>;
+  /** Would this provider be added? Writes nothing; refuses as adding it would. */
+  checkNewModelProvider(companyId: string, input: ModelProviderInput): Promise<{ ok: true }>;
+  updateModelProvider(
+    companyId: string,
+    providerId: string,
+    input: UpdateModelProviderInput,
+  ): Promise<ModelProvider>;
+  deleteModelProvider(companyId: string, providerId: string): Promise<void>;
   deleteConnection(companyId: string, connectionId: string): Promise<void>;
   updateCompany(companyId: string, input: { settings?: Record<string, unknown> }): Promise<Company>;
   /** One image of the office pack, as base64 PNG; the board keeps it and names it in settings.officePack. */
@@ -273,8 +303,9 @@ export const httpClient: Client = {
   setDepartmentMember: (id, d, t, isLead) =>
     request("PUT", `${c(id)}/departments/${d}/members/${t}`, { isLead }),
   removeDepartmentMember: (id, d, t) => request("DELETE", `${c(id)}/departments/${d}/members/${t}`),
+  updateDepartment: (id, d, input) => request("PATCH", `${c(id)}/departments/${d}`, input),
   teammates: (id) => request("GET", `${c(id)}/teammates`),
-  templates: (id) => request("GET", `/api/templates/teammates?companyId=${id}`),
+  templates: (id) => request("GET", `${c(id)}/templates/teammates`),
   templatesExportUrl: (id) => `${c(id)}/templates/export`,
   importTemplates: (id, file) => request("POST", `${c(id)}/templates/import`, file),
   createTeammate: (id, input) => request("POST", `${c(id)}/teammates`, input),
@@ -306,7 +337,8 @@ export const httpClient: Client = {
   prices: (id) => request("GET", `${c(id)}/prices`),
   savePrice: (id, input) => request("PUT", `${c(id)}/prices`, input),
   deletePrice: (id, p) => request("DELETE", `${c(id)}/prices/${p}`),
-  fillListPrices: (id) => request("POST", `${c(id)}/prices/list`, {}),
+  fillListPrices: (id, providerId) =>
+    request("POST", `${c(id)}/prices/list`, providerId ? { providerId } : {}),
   styles: (id) => request("GET", `${c(id)}/styles`),
   setStyle: (id, pack, input) => request("PUT", `${c(id)}/styles/${encodeURIComponent(pack)}`, input),
   budgets: (id) => request("GET", `${c(id)}/budgets`),
@@ -352,10 +384,18 @@ export const httpClient: Client = {
   discoverConnection: (id, cn) => request("POST", `${c(id)}/connections/${cn}/discover`, {}),
   checkConnection: (id, cn) => request("POST", `${c(id)}/connections/${cn}/check`, {}),
   startOAuth: (id, cn) => request("POST", `${c(id)}/connections/${cn}/oauth/start`, { returnTo: "/" }),
-  features: () => request("GET", "/api/features"),
+  features: (companyId) =>
+    request("GET", `/api/features${companyId ? `?companyId=${encodeURIComponent(companyId)}` : ""}`),
   secrets: (id) => request("GET", `${c(id)}/secrets`),
   setSecret: (id, name, value) => request("PUT", `${c(id)}/secrets/${encodeURIComponent(name)}`, { value }),
+  setNewSecret: (id, name, value) =>
+    request("PUT", `${c(id)}/secrets/${encodeURIComponent(name)}`, { value }, { "if-none-match": "*" }),
   deleteSecret: (id, name) => request("DELETE", `${c(id)}/secrets/${encodeURIComponent(name)}`),
+  modelProviders: (id) => request("GET", `${c(id)}/model-providers`),
+  createModelProvider: (id, input) => request("POST", `${c(id)}/model-providers`, input),
+  checkNewModelProvider: (id, input) => request("POST", `${c(id)}/model-providers/check-new`, input),
+  updateModelProvider: (id, pid, input) => request("PATCH", `${c(id)}/model-providers/${pid}`, input),
+  deleteModelProvider: (id, pid) => request("DELETE", `${c(id)}/model-providers/${pid}`),
   deleteConnection: (id, cn) => request("DELETE", `${c(id)}/connections/${cn}`),
   updateCompany: (id, input) => request("PATCH", c(id), input),
   putOfficeImage: (id, name, content) => request("PUT", `${c(id)}/office/images/${name}`, { content }),

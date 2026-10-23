@@ -6,6 +6,7 @@ import { timingSafeEqual } from "node:crypto";
 import {
   RunArtifactSchema,
   RunCheckpointSchema,
+  RunClonedSchema,
   RunCompleteSchema,
   RunEventsBatchSchema,
   RunHeartbeatSchema,
@@ -29,6 +30,7 @@ import {
   loadRun,
   runToJson,
   saveCheckpoint,
+  saveClonedSha,
 } from "../runs/service.js";
 import { renderRunPack } from "../runs/pack.js";
 import { parseBody, uuidParam } from "../validate.js";
@@ -62,12 +64,17 @@ export function registerWorkerRoutes(
     if (typeof presented !== "string" || !safeEqual(presented, config.workerToken))
       throw new HttpError(401, "worker token required");
     const body = parseBody(WorkerClaimSchema, req.body);
-    const claimed = await claimRun(db, body, { staleAfterMs: config.runStaleAfterMs, store });
+    const claimed = await claimRun(db, body, {
+      staleAfterMs: config.runStaleAfterMs,
+      store,
+      web: config.fetchSources,
+    });
     reply.code(201);
     return {
       run: runToJson(claimed.run),
       token: claimed.token,
       tokenExpiresAt: claimed.tokenExpiresAt,
+      cloneKey: claimed.cloneKey,
       pack: claimed.pack,
       spec: claimed.spec,
     };
@@ -76,7 +83,7 @@ export function registerWorkerRoutes(
   app.get("/api/worker/runs/:runId", { config: {} }, async (req) => {
     const runId = requireRunToken(req);
     const run = await loadRun(db, runId);
-    const spec = await buildRunSpec(db, run, store);
+    const spec = await buildRunSpec(db, run, store, { web: config.fetchSources });
     return { run: runToJson(run), pack: renderRunPack(spec), spec };
   });
 
@@ -96,6 +103,14 @@ export function registerWorkerRoutes(
     const runId = requireRunToken(req);
     const body = parseBody(RunCheckpointSchema, req.body);
     await saveCheckpoint(db, runId, body.checkpoint);
+    return { ok: true };
+  });
+
+  // The commit the clone is at, before the engine runs: a pull request is built on it and on no other.
+  app.post("/api/worker/runs/:runId/cloned", { config: {} }, async (req) => {
+    const runId = requireRunToken(req);
+    const body = parseBody(RunClonedSchema, req.body);
+    await saveClonedSha(db, runId, body.sha, body.key);
     return { ok: true };
   });
 

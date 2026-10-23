@@ -5,16 +5,19 @@
 import {
   isPublicOidcIssuer,
   otlpHeaders,
+  parseModelProviders,
   otlpTracesEndpoint,
   parseCompanyCreators,
   parseSharedEnvNames,
   parseStdioCommands,
   type CompanyCreators,
+  type ModelProvidersPolicy,
   type OtlpTarget,
   type StdioCommand,
 } from "@rosterdock/shared";
 import type { OidcConfig } from "./auth/oidc.js";
 import type { S3Config } from "./storage/s3.js";
+import { parsePrivateDestinations, type PrivateDestinations } from "./web/address.js";
 
 export interface BoardConfig {
   databaseUrl: string;
@@ -31,7 +34,10 @@ export interface BoardConfig {
   workerToken: string | null;
   reaperIntervalMs: number;
   runStaleAfterMs: number;
-  /** A task blocked on a teammate for longer than this is chased (by Peter's loop). */
+  /**
+   * A task blocked on a teammate for longer than this is chased (by Peter's loop), once; this long after the
+   * chase, or past it when nobody can be chased, the wait goes to a person.
+   */
   chaseBlockedForMs: number;
   /** Connections per replica: the board's pool and the queue's pool each get this many. */
   dbPoolMax: number;
@@ -65,6 +71,11 @@ export interface BoardConfig {
   metricsToken: string | null;
   /** Fetch the sources a research document cites when its review opens (public http(s) only). */
   fetchSources: boolean;
+  /**
+   * The private destinations a company's connections, their OAuth, its webhook and its SMTP server may reach
+   * (ROSTERDOCK_PRIVATE_DESTINATIONS: names, addresses and ranges). Empty: public addresses only.
+   */
+  privateDestinations: PrivateDestinations;
   /** Object storage for artifacts over the inline limit (S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY by name). Null: larger artifacts are refused. */
   storage: S3Config | null;
   /** A secret store the board may write to (ROSTERDOCK_SECRET_STORE: `kubernetes`, the pod's namespace; `file:<dir>` for dev). Null: none, so no OAuth on connections. */
@@ -75,6 +86,11 @@ export interface BoardConfig {
   stdioCommands: StdioCommand[];
   /** Who may create a company (ROSTERDOCK_COMPANY_CREATORS). Null: the first company on an empty board, or anyone with the dev login on. */
   companyCreators: CompanyCreators | null;
+  /**
+   * The model provider kinds a company may add, and whether the board lends its own models
+   * (ROSTERDOCK_MODEL_PROVIDERS). Unset: every kind, and the board's own.
+   */
+  modelProviders: ModelProvidersPolicy;
 }
 
 export type SecretStoreConfig = { kind: "kubernetes" } | { kind: "file"; dir: string };
@@ -204,9 +220,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BoardConfig {
     storage: storageFrom(env),
     metricsToken: env.ROSTERDOCK_METRICS_TOKEN?.trim() || null,
     fetchSources: env.ROSTERDOCK_FETCH_SOURCES !== "0" && env.ROSTERDOCK_FETCH_SOURCES !== "false",
+    privateDestinations: parsePrivateDestinations(env.ROSTERDOCK_PRIVATE_DESTINATIONS),
     secretStore: secretStoreFrom(env),
     sharedEnvNames: parseSharedEnvNames(env.ROSTERDOCK_SHARED_ENV_NAMES),
     stdioCommands: parseStdioCommands(env.ROSTERDOCK_STDIO_COMMANDS),
     companyCreators: parseCompanyCreators(env.ROSTERDOCK_COMPANY_CREATORS),
+    modelProviders: parseModelProviders(env.ROSTERDOCK_MODEL_PROVIDERS),
   };
 }

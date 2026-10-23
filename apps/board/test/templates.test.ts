@@ -46,6 +46,40 @@ describe("the built-in templates", () => {
     expect(new Set(builtIn.map((t) => t.engine))).toEqual(new Set(["claude_code"]));
     expect(new Set(builtIn.map((t) => t.model))).toEqual(new Set(["claude-opus-5-5", "claude-sonnet-5-5"]));
   });
+
+  it("a company's own templates are read through the company, and nobody else's company sees them", async () => {
+    const a = await seedCompany(board, "tf-own-a@example.com");
+    const imported = await a.api.post(`${a.base}/templates/import`, {
+      format: "rosterdock/templates/1",
+      teammateTemplates: [
+        {
+          name: "Closer",
+          role: "account executive",
+          model: "claude-sonnet-5",
+          personaMd: "Our pricing floor.",
+        },
+      ],
+    });
+    expect(imported.status).toBe(200);
+    const own = (await a.api.get(`${a.base}/templates/teammates`)).body as any[];
+    expect(own.filter((t) => t.companyId === null)).toHaveLength(9);
+    expect(own.find((t) => t.name === "Closer")).toMatchObject({
+      companyId: a.companyId,
+      personaMd: "Our pricing floor.",
+    });
+
+    // A person or a teammate of another company names the company in the board-wide route, or asks it.
+    const b = await seedCompany(board, "tf-own-b@example.com");
+    const ricky = await addTeammate(b.api, b.base, "Ricky");
+    const asRicky = board.api((await b.api.post(`${b.base}/teammates/${ricky.id}/tokens`, {})).body.token);
+    for (const api of [b.api, asRicky]) {
+      const builtIn = await api.get(`/api/templates/teammates?companyId=${a.companyId}`);
+      expect(builtIn.status).toBe(200);
+      expect(builtIn.body).toHaveLength(9);
+      expect(builtIn.body.every((t: any) => t.companyId === null)).toBe(true);
+      expect((await api.get(`${a.base}/templates/teammates`)).status).toBe(403);
+    }
+  });
 });
 
 describe("templates as files", () => {
@@ -225,7 +259,7 @@ describe("templates as files", () => {
     const bookkeeper = (await api.get(`${base}/teammates`)).body.find((t: any) => t.name === "Bookkeeper");
     expect(bookkeeper.role).toBe("bookkeeper");
     expect(bookkeeper.personaMd).toMatch(/never post, pay or reconcile/);
-    const templates = (await api.get(`/api/templates/teammates?companyId=${base.split("/").at(-1)}`)).body;
+    const templates = (await api.get(`${base}/templates/teammates`)).body;
     expect(templates.some((t: any) => t.name === "Bookkeeper" && t.companyId !== null)).toBe(true);
   });
 
@@ -344,6 +378,48 @@ describe("templates as files", () => {
         );
       }
     }
+  });
+
+  it("leaves a Codex teammate out of a department whose tool list Codex cannot keep to, with a note", async () => {
+    const { api, base } = await seedCompany(board, "tf5@example.com");
+    const imported = await api.post(`${base}/templates/import`, {
+      format: "rosterdock/templates/1",
+      teammates: [
+        {
+          name: "Dex",
+          role: "automation engineer",
+          engine: "codex",
+          model: "gpt-6-astra",
+          personaMd: "Scripts.",
+        },
+        { name: "Scout", role: "market analyst", model: "claude-sonnet-5-5", personaMd: "Research." },
+      ],
+      departments: [
+        {
+          name: "Research",
+          lead: "Dex",
+          members: ["Scout", "Dex"],
+          sandbox: { allowedTools: ["Read(./**)", "Write(./**)", "WebSearch"] },
+        },
+        {
+          name: "Engineering",
+          lead: "Dex",
+          sandbox: { allowedTools: ["Read(./**)", "Write(./**)", "Bash"] },
+        },
+      ],
+    });
+    expect(imported.status).toBe(200);
+    expect(imported.body.created.departments).toEqual(["Research", "Engineering"]);
+    expect(imported.body.notes).toEqual([
+      "department Research: Dex runs on Codex, which cannot keep to its tool list (it reads files and runs commands only through its shell, and the list leaves out Bash); not added",
+    ]);
+    const depts = (await api.get(`${base}/departments`)).body;
+    expect(
+      depts.map((d: any) => [d.name, d.leadTeammateId !== null, d.members.map((m: any) => m.name)]),
+    ).toEqual([
+      ["Research", false, ["Scout"]],
+      ["Engineering", true, ["Dex"]],
+    ]);
   });
 
   it("refuses a file that carries a credential value, a wrong format, or a stranger's role", async () => {

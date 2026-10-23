@@ -1,5 +1,6 @@
 // Pure helpers: names, avatars, relative time, and event sentences. No React.
 import type { ActorRef, EventRecord } from "@rosterdock/shared";
+import { domainsPhrase } from "@rosterdock/shared/web";
 import type { CompanyData, Task, Teammate } from "../api/types.ts";
 
 export function relativeTime(iso: string, now: number = Date.now()): string {
@@ -159,11 +160,17 @@ export function standingDrift(t: Teammate, events: EventRecord[], now: number = 
   });
 }
 
+/** A blocker only a person can end: a write to approve, or a wait on a person. Amber, never red. */
+export function blockerNeedsYou(b: Pick<NonNullable<Task["blocker"]>, "code"> | null | undefined): boolean {
+  return b?.code === "approval_required" || b?.code === "waiting_on_person";
+}
+
 /** Blocked card line, in manager language. */
 export function blockerLine(task: Task): string {
   const b = task.blocker;
   if (!b) return "Blocked";
   if (b.code === "approval_required") return "Needs your approval";
+  if (b.code === "waiting_on_person") return "Needs you";
   if (b.waitingOn?.name) return `Waiting on ${b.waitingOn.kind === "teammate" ? "@" : ""}${b.waitingOn.name}`;
   return b.what;
 }
@@ -259,7 +266,7 @@ export function describeEvent(
       };
     case "task.blocked": {
       const b = p(ev).blocker as { code?: string; what?: string } | undefined;
-      const attention = b?.code === "approval_required";
+      const attention = b?.code === "approval_required" || b?.code === "waiting_on_person";
       return {
         text: `${n} is blocked: ${b?.what ?? "no reason given"}`,
         attention,
@@ -361,6 +368,17 @@ export function describeEvent(
         go: { view: "reviews", reviewId: ev.subject?.id, taskId: p(ev).taskId },
       };
     }
+    case "review.needs_person": {
+      const files = (p(ev).files as string[] | undefined) ?? [];
+      return {
+        text:
+          p(ev).reason === "unscanned"
+            ? `${n}${title} has binary files the secrets check did not read (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}): it waits for a person's approval`
+            : `${n}${title} carries binary files a review cannot show (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}): its pull request waits for a person's approval`,
+        attention: true,
+        go: { view: "reviews", reviewId: ev.subject?.id, taskId: p(ev).taskId },
+      };
+    }
     case "review.commented":
       return {
         text:
@@ -379,11 +397,13 @@ export function describeEvent(
         text: `${who} requested changes on ${n}${title}${p(ev).openComments ? ` · ${p(ev).openComments} open ${p(ev).openComments === 1 ? "comment" : "comments"}` : ""}`,
         go: { view: "reviews", reviewId: ev.subject?.id, taskId: p(ev).taskId },
       };
-    case "review.approved":
+    case "review.approved": {
+      const overrode = (p(ev).overrodeChecks as { title: string }[] | undefined) ?? [];
       return {
-        text: `${who} approved ${n}${title}`,
+        text: `${who} approved ${n}${title}${overrode.length ? ` over a failed check: ${overrode.map((c) => c.title).join("; ")}` : ""}`,
         go: { view: "reviews", reviewId: ev.subject?.id, taskId: p(ev).taskId },
       };
+    }
     case "review.vetoed":
       return {
         text: `${who} vetoed the approval of ${n}: ${p(ev).note ?? ""}`,
@@ -428,7 +448,10 @@ export function describeEvent(
       return { text: `${who} signed in` };
     // Peter (M4)
     case "goal.created":
-      return { text: `${who} handed Peter a goal: ${p(ev).title}`, go: { view: "company" } };
+      return {
+        text: `${who} handed Peter a goal${p(ev).projectName ? ` for ${p(ev).projectName}` : ""}: ${p(ev).title}`,
+        go: { view: "company" },
+      };
     case "goal.questions": {
       const qs = (p(ev).questions as string[] | undefined)?.length ?? 0;
       return {
@@ -556,17 +579,32 @@ export function describeEvent(
         go: { view: "approvals", approvalId: ev.subject?.id, taskId },
       };
     case "connection.created":
-      return { text: `${who} connected ${p(ev).name} (${p(ev).kind === "openapi" ? "OpenAPI" : "MCP"})` };
+      return {
+        text:
+          p(ev).kind === "web"
+            ? `${who} added the web connection ${p(ev).name}: the board reads the web for the teammates granted it`
+            : `${who} connected ${p(ev).name} (${p(ev).kind === "openapi" ? "OpenAPI" : "MCP"})`,
+      };
     case "connection.updated": {
       const n = p(ev).discovered as number | undefined;
       const flipped = (p(ev).reclassified as string[] | undefined) ?? [];
+      // Tools only the server calls read-only: held as writes at discovery, and a person's word that they read.
+      const held = ((p(ev).unconfirmed as string[] | undefined) ?? []).length;
+      const confirmed = (p(ev).confirmed as string[] | undefined) ?? [];
+      // The web connection's list of sites changed: say what it reads now.
+      if ("domains" in p(ev))
+        return {
+          text: `${who} set the sites ${p(ev).name} reads: ${domainsPhrase((p(ev).domains as string[] | null) ?? null)}`,
+        };
       return {
         text:
           n !== undefined
-            ? `${who} discovered ${n} tool${n === 1 ? "" : "s"} on ${p(ev).name} · ${((p(ev).writes as string[]) ?? []).length} write`
-            : flipped.length
-              ? `${who} reclassified ${flipped.join(", ")} on ${p(ev).name}`
-              : `${who} changed the connection ${p(ev).name}${p(ev).enabled === false ? " · switched off" : ""}`,
+            ? `${who} discovered ${n} tool${n === 1 ? "" : "s"} on ${p(ev).name} · ${((p(ev).writes as string[]) ?? []).length} write${held ? ` · ${held} to confirm as read${held === 1 ? "" : "s"}` : ""}`
+            : confirmed.length && confirmed.length === flipped.length
+              ? `${who} confirmed ${confirmed.join(", ")} on ${p(ev).name} as ${confirmed.length === 1 ? "a read" : "reads"}`
+              : flipped.length
+                ? `${who} reclassified ${flipped.join(", ")} on ${p(ev).name}`
+                : `${who} changed the connection ${p(ev).name}${p(ev).enabled === false ? " · switched off" : ""}`,
       };
     }
     case "connection.deleted":
@@ -575,6 +613,21 @@ export function describeEvent(
       return { text: `${who} ${p(ev).replaced ? "replaced" : "set"} the value of ${p(ev).name}` };
     case "secret.deleted":
       return { text: `${who} removed the value of ${p(ev).name}` };
+    case "model_provider.created":
+      return { text: `${who} added the model provider ${p(ev).label ?? p(ev).name}` };
+    case "model_provider.updated": {
+      const changes = (p(ev).changes as string[] | undefined) ?? [];
+      const what = p(ev).label ?? p(ev).name;
+      if (changes.includes("archived") && p(ev).archived === false)
+        return { text: `${who} brought back the model provider ${what}` };
+      if (changes.length === 1 && changes[0] === "enabled")
+        return { text: `${who} switched the model provider ${what} ${p(ev).enabled ? "on" : "off"}` };
+      return { text: `${who} changed the model provider ${what}` };
+    }
+    case "model_provider.archived":
+      return { text: `${who} archived the model provider ${p(ev).label ?? p(ev).name}` };
+    case "model_provider.deleted":
+      return { text: `${who} removed the model provider ${p(ev).label ?? p(ev).name}` };
     case "connection.checked": {
       const extra = ((p(ev).extra as string[] | undefined) ?? []).length;
       const missing = ((p(ev).missing as string[] | undefined) ?? []).length;
@@ -583,7 +636,9 @@ export function describeEvent(
         .join(", ");
       return {
         text: p(ev).ok
-          ? `${who} checked ${p(ev).name}: answered in ${p(ev).latencyMs} ms${drift ? ` · ${drift}` : ""}`
+          ? p(ev).kind === "web"
+            ? `${who} checked ${p(ev).name}: the board reads the web`
+            : `${who} checked ${p(ev).name}: answered in ${p(ev).latencyMs} ms${drift ? ` · ${drift}` : ""}`
           : `${who} checked ${p(ev).name}: ${p(ev).error ?? "no answer"}`,
         attention: !p(ev).ok,
       };
@@ -596,6 +651,15 @@ export function describeEvent(
             : `A needs-you notification went out through ${p(ev).target}`,
       };
     case "tool.called":
+      // The web connection's record names the page: where, the status and the size, never what it says.
+      if (typeof p(ev).url === "string")
+        return {
+          text:
+            p(ev).ok === false
+              ? `${who} could not read ${p(ev).url} for ${n}: ${p(ev).note ?? p(ev).error ?? "no answer"}`
+              : `${who} read ${p(ev).url} for ${n} · ${p(ev).status} · ${byteSize(Number(p(ev).bytes ?? 0))}`,
+          go: { view: "board", taskId: p(ev).taskId },
+        };
       return {
         text: `${who} read ${p(ev).connection} · ${p(ev).tool} for ${n}${p(ev).ok === false ? ` · failed: ${p(ev).error ?? ""}` : ""}`,
         go: { view: "board", taskId: p(ev).taskId },
@@ -603,6 +667,22 @@ export function describeEvent(
     default:
       return { text: `${who}: ${ev.type}` };
   }
+}
+
+/** "3.00" → 300 minor units; blank → null. */
+export function toMinor(major: string): number | null {
+  const t = major.trim();
+  if (!t) return null;
+  const n = Number(t);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100);
+}
+
+/** A size in bytes as people read it: 812 B, 34 KB, 1.2 MB. */
+export function byteSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function lowerFirst(s: string): string {

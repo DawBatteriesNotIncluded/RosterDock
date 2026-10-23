@@ -22,6 +22,7 @@ export const ACTIONS = [
   "teammate.manage",
   "teammate.token",
   "project.manage",
+  "project.configure",
   "goal.caps",
   "task.create",
   "task.update",
@@ -34,6 +35,7 @@ export const ACTIONS = [
   "review.assign",
   "approval.decide",
   "connection.manage",
+  "model.manage",
 ] as const;
 export type Action = (typeof ACTIONS)[number];
 
@@ -50,6 +52,9 @@ const MATRIX: Record<Action, readonly Role[]> = {
   "teammate.token": OWNERS_ADMINS,
   // Peter opens projects on handoff, so teammates may manage projects.
   "project.manage": ["owner", "admin", "teammate"],
+  // Set a project's repository, its default branch and its client policy: where the work goes and what the
+  // client allows. People only: a teammate never points its work elsewhere or loosens the policy it works under.
+  "project.configure": OWNERS_ADMINS,
   // Raise or lower a goal's caps. People only: a teammate at the cap asks, never widens it.
   "goal.caps": OWNERS_ADMINS,
   "task.create": CONTRIBUTORS,
@@ -69,6 +74,8 @@ const MATRIX: Record<Action, readonly Role[]> = {
   "approval.decide": OWNERS_ADMINS,
   // Add, discover, reclassify or remove a connection to an external system. Humans only.
   "connection.manage": OWNERS_ADMINS,
+  // Add, change, check or remove the company's model providers: whose account its teammates think with.
+  "model.manage": OWNERS_ADMINS,
 };
 
 export function can(role: Role, action: Action): boolean {

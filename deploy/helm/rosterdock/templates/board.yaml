@@ -76,6 +76,11 @@ spec:
             - name: ROSTERDOCK_COMPANY_CREATORS
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- with .Values.board.modelProviders }}
+            # The model provider kinds a company may add, and board when this board lends its own models.
+            - name: ROSTERDOCK_MODEL_PROVIDERS
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- if .Values.board.corsOrigin }}
             - name: CORS_ORIGIN
               value: {{ .Values.board.corsOrigin | quote }}
@@ -94,6 +99,33 @@ spec:
             # The only command lines a stdio connection may start in this pod.
             - name: ROSTERDOCK_STDIO_COMMANDS
               value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.board.privateDestinations }}
+            {{- $entries := list }}
+            {{- range . }}
+            {{- if kindIs "map" . }}
+            {{- $company := toString (required "a board.privateDestinations entry with a destination names its company" .company) }}
+            {{- $destinations := required "a board.privateDestinations entry with a company names its destination" .destination }}
+            {{- if regexMatch "[,=]" $company }}
+            {{- fail (printf "board.privateDestinations: company %q holds a comma or =; give its id alone" $company) }}
+            {{- end }}
+            {{- range (kindIs "slice" $destinations | ternary $destinations (list $destinations)) }}
+            {{- if regexMatch "[,=]" (toString .) }}
+            {{- fail (printf "board.privateDestinations: destination %q holds a comma or =; give one per entry, or a list" (toString .)) }}
+            {{- end }}
+            {{- $entries = append $entries (printf "%s=%s" $company (toString .)) }}
+            {{- end }}
+            {{- else }}
+            {{- if and (contains "=" (toString .)) (contains "," (toString .)) }}
+            {{- fail (printf "board.privateDestinations: %q holds a company's entry and more in one string, where the rest would go to every company; write one entry per item, or use { company, destination }" (toString .)) }}
+            {{- end }}
+            {{- $entries = append $entries (toString .) }}
+            {{- end }}
+            {{- end }}
+            # The private destinations a company may make the board reach; everything else it chooses is public.
+            # An entry <company id>=<destination> is that company's alone.
+            - name: ROSTERDOCK_PRIVATE_DESTINATIONS
+              value: {{ join "," $entries | quote }}
             {{- end }}
             {{- if .Values.board.oauth.enabled }}
             - name: ROSTERDOCK_SECRET_STORE

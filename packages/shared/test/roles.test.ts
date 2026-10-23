@@ -19,6 +19,9 @@ describe("permission matrix", () => {
     expect(can("teammate", "task.update")).toBe(true);
     expect(can("teammate", "message.post")).toBe(true);
     expect(can("teammate", "project.manage")).toBe(true);
+    // A teammate opens projects; a person says where their work goes and what their client allows.
+    expect(can("teammate", "project.configure")).toBe(false);
+    expect(can("admin", "project.configure")).toBe(true);
     expect(can("teammate", "department.manage")).toBe(false);
     expect(can("teammate", "teammate.manage")).toBe(false);
     expect(can("teammate", "teammate.token")).toBe(false);
@@ -30,6 +33,10 @@ describe("permission matrix", () => {
     expect(can("reviewer", "approval.decide")).toBe(false);
     expect(can("admin", "approval.decide")).toBe(true);
     expect(can("admin", "connection.manage")).toBe(true);
+    // Whose model account a teammate thinks with is a person's choice.
+    expect(can("teammate", "model.manage")).toBe(false);
+    expect(can("reviewer", "model.manage")).toBe(false);
+    expect(can("admin", "model.manage")).toBe(true);
   });
 
   it("reviewers contribute to tasks and conversations but do not manage structure", () => {

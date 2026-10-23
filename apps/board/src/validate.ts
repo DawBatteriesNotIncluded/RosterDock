@@ -19,6 +19,11 @@ export function parseBody<T>(schema: ZodType<T>, body: unknown): T {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Whether a value is a uuid, as ids are. */
+export function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_RE.test(value);
+}
+
 export function uuidParam(value: unknown, name: string): string {
   if (typeof value !== "string" || !UUID_RE.test(value)) throw new HttpError(400, `${name} must be a uuid`);
   return value;
