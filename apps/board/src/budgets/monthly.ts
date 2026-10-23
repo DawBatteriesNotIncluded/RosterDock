@@ -10,7 +10,7 @@ import type { Queryable } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
 import { costFor, usageModel } from "./cost.js";
 import type { CostLine, TokenTotals } from "./costs.js";
-import { BOARD_OWN_MODELS, priceTable } from "./prices.js";
+import { BOARD_OWN_MODELS, priceTable, type PriceTable } from "./prices.js";
 import { USAGE_ROWS, type PlanningPurpose } from "./usage.js";
 
 export interface Bounds {
@@ -81,8 +81,14 @@ export interface UsageLine {
 }
 
 /** Every run's and manager's call's usage in the bounds, one line per run and model or per call, with names. */
-export async function usageLines(db: Queryable, companyId: string, bounds: Bounds): Promise<UsageLine[]> {
-  const prices = await priceTable(db, companyId);
+export async function usageLines(
+  db: Queryable,
+  companyId: string,
+  bounds: Bounds,
+  /** The table to price with, when the caller reads its currency after; else one of its own. */
+  table?: PriceTable,
+): Promise<UsageLine[]> {
+  const prices = table ?? (await priceTable(db, companyId));
   const rows = await db.query<{
     created_at: Date;
     kind: UsageLine["kind"];
@@ -181,8 +187,9 @@ const KIND_LABEL: Record<UsageLine["kind"], string> = {
  * kind, goal and provider close the line, so the columns before them stay where they were.
  */
 export async function usageCsv(db: Queryable, companyId: string, bounds: Bounds): Promise<string> {
-  const { currency } = await priceTable(db, companyId);
-  const lines = await usageLines(db, companyId, bounds);
+  const prices = await priceTable(db, companyId);
+  const lines = await usageLines(db, companyId, bounds, prices);
+  const currency = prices.displayCurrency();
   return toCsv(
     [
       "date",
@@ -292,9 +299,9 @@ export async function monthlyReport(
 ): Promise<MonthlyReport> {
   const bounds = await monthBounds(db, month);
   const prices = await priceTable(db, companyId);
-  const { currency } = prices;
   const seatFor = (model: string, engine: string) => prices.seatFor(model, engine)?.month ?? 0;
-  const lines = await usageLines(db, companyId, bounds);
+  const lines = await usageLines(db, companyId, bounds, prices);
+  const currency = prices.displayCurrency();
   const teammates = (
     await db.query<{ id: string; name: string; handle: string; model: string; engine: string }>(
       "SELECT id, name, handle, model, engine FROM teammates WHERE company_id = $1 ORDER BY name",

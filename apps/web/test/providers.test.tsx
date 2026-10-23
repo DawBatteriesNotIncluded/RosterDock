@@ -400,8 +400,8 @@ describe("Settings > Models", () => {
     expect(
       modelPriceLine(anthropic, sonnet, [price({ providerId: null, model: "x", currency: "GBP" })]),
     ).toBe("No price yet");
-    // No prices at all: the board's default currency is GBP, so no list price either.
-    expect(modelPriceLine(anthropic, sonnet, [])).toBe("No price yet");
+    // No prices at all: no currency yet, so the list's applies, and would be the company's first.
+    expect(modelPriceLine(anthropic, sonnet, [])).toBe("Anthropic's list price");
     // A seat on the board's own models is not a price for a provider's tokens.
     const seat = price({
       providerId: null,
@@ -507,7 +507,7 @@ describe("Settings > Models", () => {
 
   it("says what removing takes and leaves, and never makes a name from a label that looks like a key", () => {
     expect(removeLine(providers.providers[0]!)).toBe(
-      "Remove Acme Anthropic? Its settings and its list of models go, for good. Its key stays in this company's secrets as MODELS_ACME_KEY. Archive it instead to keep it all, unused.",
+      "Remove Acme Anthropic? Its settings, its list of models and its prices go, for good. Its key stays in this company's secrets as MODELS_ACME_KEY. Archive it instead to keep it all, unused.",
     );
     expect(removeLine({ ...providers.providers[1]!, credentials: {} })).not.toContain("key stays");
     // A Mistral-style key pasted into Label: nothing is made from it, and nothing is sent.

@@ -178,7 +178,6 @@ export async function costReport(
     [companyId],
   );
 
-  const currency = prices.currency;
   const seatFor = prices.seatFor;
   const priceOf = (r: Pick<UsageRow, "provider_id" | "model">): ModelPrice | null =>
     prices.priceOf(r.provider_id, r.model);
@@ -320,6 +319,8 @@ export async function costReport(
     bySeat.set(key, s);
   }
 
+  // Asked once every line is priced: a list price on a company with no prices yet shows in USD.
+  const currency = prices.displayCurrency();
   const companyBudget = budgetFor("company", companyId);
   return {
     window,

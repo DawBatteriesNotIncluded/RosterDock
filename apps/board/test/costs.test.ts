@@ -202,7 +202,7 @@ describe("cost report", () => {
     const refused = await api.post(`${base}/prices/list`, {});
     expect(refused.status).toBe(409);
     expect(refused.body.error).toBe(
-      "list prices are in USD, and this company's prices are in GBP; a company keeps one currency, so type these prices in GBP",
+      "list prices are in USD, and this company's prices are in GBP; a company keeps one currency, so give these prices in GBP",
     );
     expect((await api.get(`${base}/prices`)).body.map((p: any) => p.model)).toEqual(["claude-sonnet-5-5"]);
     await api.del(`${base}/prices/${(await api.get(`${base}/prices`)).body[0].id}`);

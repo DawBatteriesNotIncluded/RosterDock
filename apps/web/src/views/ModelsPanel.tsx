@@ -168,9 +168,10 @@ export function modelPriceLine(
   // A seat on the board's own models says nothing of what a provider's tokens cost.
   const board = prices.find((x) => x.providerId === null && x.model === model.id && perTokenPrice(x));
   if (board) return `${perMillion(board)}, this board's own price for the model`;
-  // The company's one currency is its prices'; before it has any, the board's default, GBP.
-  const currency = prices[0]?.currency ?? "GBP";
-  if (provider.kind === "anthropic" && model.listPrice && currency === "USD") return "Anthropic's list price";
+  // The company's one currency is its prices'; before it has any, the list's may be its first.
+  const currency = prices[0]?.currency ?? null;
+  if (provider.kind === "anthropic" && model.listPrice && (currency === null || currency === "USD"))
+    return "Anthropic's list price";
   return "No price yet";
 }
 
@@ -667,7 +668,7 @@ function AddModelForm(p: {
 /** What removing a provider takes and what it leaves, said before it goes. */
 export function removeLine(v: Pick<ModelProvider, "label" | "credentials" | "kind">): string {
   const key = v.credentials[credentialRole(v.kind)];
-  return `Remove ${v.label}? Its settings and its list of models go, for good.${
+  return `Remove ${v.label}? Its settings, its list of models and its prices go, for good.${
     key ? ` Its key stays in this company's secrets as ${key}.` : ""
   } Archive it instead to keep it all, unused.`;
 }
@@ -816,9 +817,10 @@ function PriceEditor(p: {
   /** The company has no price yet, so this one sets its currency. */
   firstPrice: boolean;
   initial: ModelPrice | undefined;
-  onSave(input: Omit<ModelPriceInput, "model" | "providerId">): Promise<boolean>;
+  /** Null once saved, else why not: said under the editor, where it was asked. */
+  onSave(input: Omit<ModelPriceInput, "model" | "providerId">): Promise<string | null>;
   /** Take the provider's own price away, so the board's own price for the model, or none, applies again. */
-  onRemove?(): Promise<boolean>;
+  onRemove?(): Promise<string | null>;
 }) {
   const major = (minor: number | null | undefined) => (minor == null ? "" : (minor / 100).toFixed(2));
   const [typedCurrency, setCurrency] = useState(p.currency);
@@ -829,6 +831,7 @@ function PriceEditor(p: {
   const [cacheRead, setCacheRead] = useState(major(p.initial?.cacheReadPerMillion));
   const [cacheWrite, setCacheWrite] = useState(major(p.initial?.cacheWritePerMillion));
   const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const field = (label: string, value: string, set: (v: string) => void) => (
     <Field label={label}>
       <input
@@ -864,13 +867,15 @@ function PriceEditor(p: {
         disabled={busy || currency.length !== 3 || (toMinor(input) === null && toMinor(output) === null)}
         onClick={async () => {
           setBusy(true);
-          await p.onSave({
-            currency,
-            inputPerMillion: toMinor(input),
-            outputPerMillion: toMinor(output),
-            cacheReadPerMillion: toMinor(cacheRead),
-            cacheWritePerMillion: toMinor(cacheWrite),
-          });
+          setRefusal(
+            await p.onSave({
+              currency,
+              inputPerMillion: toMinor(input),
+              outputPerMillion: toMinor(output),
+              cacheReadPerMillion: toMinor(cacheRead),
+              cacheWritePerMillion: toMinor(cacheWrite),
+            }),
+          );
           setBusy(false);
         }}
       >
@@ -882,12 +887,17 @@ function PriceEditor(p: {
           disabled={busy}
           onClick={async () => {
             setBusy(true);
-            await p.onRemove!();
+            setRefusal(await p.onRemove!());
             setBusy(false);
           }}
         >
           Remove price
         </Button>
+      ) : null}
+      {refusal ? (
+        <span role="alert" className="basis-full text-[13px]" style={{ color: "var(--bad)" }}>
+          {refusal}
+        </span>
       ) : null}
     </div>
   );
@@ -1068,17 +1078,15 @@ function ProviderCard(p: {
                         initial={p.prices.find((x) => x.providerId === v.id && x.model === m.id)}
                         onSave={async (price) => {
                           const why = await p.onSavePrice({ ...price, model: m.id, providerId: v.id });
-                          setError(why);
                           if (why === null) setPricing(null);
-                          return why === null;
+                          return why;
                         }}
                         {...(own(m.id)
                           ? {
                               onRemove: async () => {
                                 const why = await p.onDeletePrice(own(m.id)!.id);
-                                setError(why);
                                 if (why === null) setPricing(null);
-                                return why === null;
+                                return why;
                               },
                             }
                           : {})}
@@ -1133,9 +1141,11 @@ export function ModelsPanel(p: ModelsPanelProps) {
   const [secretsFailed, setSecretsFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [prices, setPrices] = useState<ModelPrice[]>(p.initialPrices ?? []);
+  // Both at once, so no card shows its models before their prices; prices that cannot be read keep the last.
   const reload = async () => {
-    setInfo(await p.load());
-    setPrices(await p.loadPrices().catch(() => prices));
+    const [next, list] = await Promise.all([p.load(), p.loadPrices().catch(() => null)]);
+    setInfo(next);
+    if (list) setPrices(list);
   };
   // Loaded again when a provider, a secret or a price changes, here or anywhere: a change someone else made
   // is what the next change builds on.

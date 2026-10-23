@@ -39,8 +39,13 @@ export interface ProviderInfo {
 }
 
 export interface PriceTable {
-  /** The company's one currency: its prices', or GBP before it has any. */
-  currency: string;
+  /** The company's one currency: its prices'; null before it has any. */
+  currency: string | null;
+  /**
+   * The currency a report shows its money in: the company's; before it has a price, USD when Anthropic's list
+   * priced something (asked after pricing), else GBP, the board's default for a first price.
+   */
+  displayCurrency(): string;
   /** What a run or a call on this provider and model costs per token, or null: no price yet. */
   priceOf(providerId: ProviderId, model: string): ModelPrice | null;
   /** The board's own models' seat price for a teammate on this model or engine, the key it was found by. */
@@ -68,19 +73,20 @@ export function toPrice(r: PriceRow): ModelPrice {
 
 /**
  * A provider's price when there is none of its own: the board's own price for the model, then, for a company
- * Anthropic provider, Anthropic's list price, if the company's prices are in its currency.
+ * Anthropic provider, Anthropic's list price, if the company's prices are in its currency or it has none yet
+ * (its first then sets the list's).
  */
 export function fallbackPrice(
   kind: ProviderKind | null,
   model: string,
   own: ModelPrice | null,
-  currency: string,
+  currency: string | null,
 ): ModelPrice | null {
   // A seat on the board's own models says nothing of what a provider's tokens cost: a provider bills per token.
   if (own && perToken(own)) return own;
   if (kind !== "anthropic") return null;
   const list = listPriceFor(model);
-  return list && list.currency === currency ? { ...list, seatPriceMonth: null } : null;
+  return list && (currency === null || list.currency === currency) ? { ...list, seatPriceMonth: null } : null;
 }
 
 /** Whether a price says what tokens cost: a seat alone does not. */
@@ -90,13 +96,13 @@ export function perToken(p: ModelPrice): boolean {
   );
 }
 
-/** The company's one currency: its prices', or GBP before it has any. */
-export async function companyCurrency(db: Queryable, companyId: string): Promise<string> {
+/** The company's one currency: its prices'; null before it has any. */
+export async function companyCurrency(db: Queryable, companyId: string): Promise<string | null> {
   const res = await db.query<{ currency: string }>(
     "SELECT currency FROM model_prices WHERE company_id = $1 ORDER BY model LIMIT 1",
     [companyId],
   );
-  return res.rows[0]?.currency ?? "GBP";
+  return res.rows[0]?.currency ?? null;
 }
 
 export async function priceTable(db: Queryable, companyId: string): Promise<PriceTable> {
@@ -111,20 +117,37 @@ export async function priceTable(db: Queryable, companyId: string): Promise<Pric
       )
     ).rows.map((p) => [p.id, p]),
   );
+  // A removed provider's usage stays, under the label its removal recorded.
+  const removed = new Map(
+    (
+      await db.query<{ id: string; label: string | null }>(
+        `SELECT DISTINCT ON (subject_id) subject_id AS id, COALESCE(payload->>'label', payload->>'name') AS label
+           FROM events
+          WHERE company_id = $1 AND subject_kind = 'model_provider' AND type = 'model_provider.deleted'
+          ORDER BY subject_id, seq DESC`,
+        [companyId],
+      )
+    ).rows.map((r) => [r.id, r.label]),
+  );
   const key = (providerId: ProviderId, model: string) => `${providerId ?? ""}\u0000${model}`;
   const byKey = new Map(rows.map((r) => [key(r.provider_id, r.model), r]));
   const own = (model: string) => {
     const r = byKey.get(key(null, model));
     return r ? toPrice(r) : null;
   };
-  const currency = rows[0]?.currency ?? "GBP";
+  const currency = rows[0]?.currency ?? null;
+  let usedList = false;
   return {
     currency,
+    displayCurrency: () => currency ?? (usedList ? "USD" : "GBP"),
     priceOf(providerId, model) {
       if (providerId === null) return own(model);
       const r = byKey.get(key(providerId, model));
-      if (r) return toPrice(r);
-      return fallbackPrice(providers.get(providerId)?.kind ?? null, model, own(model), currency);
+      // A provider's row that says nothing per token prices nothing: the fallbacks do.
+      if (r && perToken(toPrice(r))) return toPrice(r);
+      const price = fallbackPrice(providers.get(providerId)?.kind ?? null, model, own(model), currency);
+      if (price && currency === null) usedList = true;
+      return price;
     },
     seatFor(model, engine) {
       for (const k of [model, engine]) {
@@ -136,8 +159,11 @@ export async function priceTable(db: Queryable, companyId: string): Promise<Pric
     providers,
     providerLabel(providerId) {
       if (providerId === null) return BOARD_OWN_MODELS;
-      // A removed provider's usage stays; each keeps a line of its own.
-      return providers.get(providerId)?.label ?? `A removed provider (${providerId.slice(0, 8)})`;
+      // Each removed provider keeps a line of its own, by id.
+      const label = providers.get(providerId)?.label;
+      if (label) return label;
+      const was = removed.get(providerId);
+      return was ? `${was} (removed)` : "A removed provider";
     },
     rows: rows.length,
   };
@@ -156,7 +182,7 @@ export async function priceFor(
       [companyId, providerId, model],
     )
   ).rows[0];
-  if (row) return toPrice(row);
+  if (row && (providerId === null || perToken(toPrice(row)))) return toPrice(row);
   if (providerId === null) return null;
   const kind = (
     await db.query<{ kind: ProviderKind }>(

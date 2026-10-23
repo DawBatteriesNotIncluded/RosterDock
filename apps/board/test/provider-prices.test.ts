@@ -125,7 +125,7 @@ describe("prices by provider", () => {
     expect((await api.del(`${base}/model-providers/${anthropic.id}`)).status).toBe(200);
     expect((await api.get(`${base}/prices`)).body.map((p: any) => p.providerId)).toEqual([null]);
     expect((await priceTable(board.db, companyId)).providerLabel(anthropic.id)).toBe(
-      `A removed provider (${anthropic.id.slice(0, 8)})`,
+      "Acme Anthropic (removed)",
     );
   });
 
@@ -144,7 +144,7 @@ describe("prices by provider", () => {
     });
     expect(usd.status).toBe(409);
     expect(usd.body.error).toBe(
-      "this company's prices are in GBP, and a company keeps one currency; give this price in GBP",
+      "this company's prices are in GBP; a company keeps one currency, so give this price in GBP",
     );
     // Replacing the one price in another currency is not a second currency.
     expect(
@@ -155,7 +155,67 @@ describe("prices by provider", () => {
     expect(await priceFor(board.db, companyOf(base), anthropic.id, "claude-sonnet-5-5")).toBeNull();
     const fill = await api.post(`${base}/prices/list`, { providerId: anthropic.id });
     expect(fill.status).toBe(409);
-    expect(fill.body.error).toContain("list prices are in USD, and this company's prices are in EUR");
+    expect(fill.body.error).toBe(
+      "list prices are in USD, and this company's prices are in EUR; a company keeps one currency, so give these prices in EUR",
+    );
+  });
+
+  it("lets a company two currencies reached before keep writing in either, and says how to get to one", async () => {
+    const { api, base, owner } = await seedCompany(board, "pp7@example.com");
+    const companyId = companyOf(base);
+    // Two currencies, as a board before this rule could leave a company.
+    for (const [model, currency] of [
+      ["claude-opus-5-5", "GBP"],
+      ["claude-sonnet-5-5", "USD"],
+    ])
+      await board.db.query(
+        "INSERT INTO model_prices (company_id, model, currency, input_per_million) VALUES ($1, $2, $3, 100)",
+        [companyId, model, currency],
+      );
+    void owner;
+    expect(
+      (await api.put(`${base}/prices`, { model: "claude-opus-5-5", currency: "GBP", inputPerMillion: 110 }))
+        .status,
+    ).toBe(200);
+    expect(
+      (await api.put(`${base}/prices`, { model: "claude-haiku-5-5", currency: "USD", inputPerMillion: 10 }))
+        .status,
+    ).toBe(200);
+    const third = await api.put(`${base}/prices`, { model: "x", currency: "EUR", inputPerMillion: 1 });
+    expect(third.status).toBe(409);
+    expect(third.body.error).toBe(
+      "this company's prices are in GBP and USD already; a company keeps one currency: remove its prices in all but one of them (Settings > Prices and budgets, and each provider's under Settings > Models), then give this price in that one",
+    );
+  });
+
+  it("prices a fresh company's Anthropic tokens at the list, in USD, and asks a provider's price for a per-token figure", async () => {
+    const { api, base } = await seedCompany(board, "pp8@example.com");
+    const { anthropic } = await providers(api, base);
+    const companyId = companyOf(base);
+    const peter = await seatedPeter(api, base);
+    // No prices yet: no currency yet, so Anthropic's list applies, and the report says USD.
+    expect((await priceFor(board.db, companyId, anthropic.id, "claude-opus-5-5"))?.inputPerMillion).toBe(400);
+    await recordPlanningUsage(board.db, {
+      companyId,
+      teammateId: peter.id,
+      purpose: "org",
+      providerId: anthropic.id,
+      model: "claude-opus-5-5",
+      usage: { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    });
+    const r = (await api.get(`${base}/costs?window=week`)).body;
+    expect(r.currency).toBe("USD");
+    expect(r.totals.costMinorUnits).toBe(400);
+    // A company with nothing priced shows the board's default.
+    const quiet = await seedCompany(board, "pp8-quiet@example.com");
+    expect((await quiet.api.get(`${quiet.base}/costs?window=week`)).body.currency).toBe("GBP");
+    // A provider's price says what its tokens cost.
+    const blank = await api.put(`${base}/prices`, {
+      model: "claude-opus-5-5",
+      providerId: anthropic.id,
+      currency: "USD",
+    });
+    expect(blank.status).toBe(400);
   });
 
   it("fills list prices for a provider's Claude models: Anthropic's at the list, Bedrock's as an estimate", async () => {

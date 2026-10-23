@@ -52,6 +52,9 @@ scheduled; delete it when it ships.
     repoint where a key is sent. It belongs with the worker's own database role (the fleet line above).
   - Codex on the worker past 0.144.5 (0.157.1 adds `amazon-bedrock-runtime`), in a pull request that records
     the worker's fixtures again.
+  - A price's currency is any three characters (`ModelPriceInputSchema`), and a company's first price sets its
+    one currency: a typo there (`GPB`) holds every later price to it until that price is removed. The schema
+    and both price editors should take three letters, or ISO 4217's codes.
 - A connection's credential name and a notification setting's name take a key shaped like a name: a
   32-character Azure key that starts with a letter, an AWS key id, a long token's tail. The raw-secret guard's
   check on reference fields wants 40 or more characters for a bare run. Model providers and company secrets'

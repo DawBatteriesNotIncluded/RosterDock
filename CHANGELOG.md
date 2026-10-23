@@ -45,6 +45,13 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
   the worker's git and file rules kept by Windows' own means; Docker or WSL2 stays the place for
   repositories you would not run yourself (`docs/security.md`). A board there plans with Claude Code or Codex
   as npm installs them.
+- Company model providers (Settings > Models): a company adds its own Anthropic, OpenAI, Azure OpenAI, Amazon
+  Bedrock or OpenAI-compatible account, with the models it serves and its key by name only; a key pasted
+  there goes once into the company's secrets, never over another. The operator lists the kinds companies may
+  add, and whether the board lends its own models, in `board.modelProviders` (`ROSTERDOCK_MODEL_PROVIDERS`;
+  all of them by default). A provider's models have prices of their own, Anthropic's list price on an
+  Anthropic provider and estimates from it for Bedrock's Claude models, and Costs says what went through each
+  provider. Teammates still think with the board's own models.
 
 ### Changed
 
@@ -67,6 +74,12 @@ Against the images built from the pre-release tree (then called Pharo, not publi
   for Peter, Verifier, Archy and Finn, Sonnet 5.5 for the rest. Opus 5.5 also costs less than the Opus 5 they
   named. The demo templates' Haiku teammates run on Haiku 5.5, and Settings fills its list price. A teammate
   already hired keeps its model.
+- A company keeps its prices in one currency, the one its first price is in. A price in another is refused,
+  and so is Add list prices (in USD) for a company that prices in another, where it added USD prices beside
+  the company's and Costs added them up as one. The usage CSV and the chargeback CSV end with a `provider`
+  column, and the chargeback CSV has a line per project and provider. Upgrading: a company already priced in
+  two currencies keeps its prices and may go on setting them in either, and Costs adds them up as before; it
+  comes to one by removing its prices in all but one (`docs/operator.md`, Upgrades and backups).
 - The web image carries its fonts, Schibsted Grotesk and IBM Plex Mono (SIL Open Font License), where the
   page loaded them from Google Fonts: an install without internet access shows them, and no page load sends
   a visitor's address to Google.

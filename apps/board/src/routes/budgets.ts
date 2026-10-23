@@ -47,26 +47,34 @@ function priceToJson(r: PriceRow) {
 }
 
 /**
- * The company's other currency, when a price in this one cannot join its prices, or null. A company keeps one
- * currency: Costs adds every price up, so a second would add pence to cents. The price being replaced does
- * not count.
+ * The company's currencies, when a price in this one cannot join its prices, or null. A company keeps one
+ * currency: Costs adds every price up, so a second would add pence to cents. The price being replaced does not
+ * count; and a company that two currencies reached before this rule keeps writing in either: only a currency
+ * new to it is refused.
  */
-async function otherCurrency(
+async function currenciesRefusing(
   db: Queryable,
   companyId: string,
   currency: string,
   replacing: { providerId: string | null; model: string } | null,
-): Promise<string | null> {
+): Promise<string[] | null> {
   // Held until the transaction ends: two prices written at once are checked one after the other.
   await db.query("SELECT pg_advisory_xact_lock(hashtext('model_prices:' || $1::text))", [companyId]);
-  const res = await db.query<{ currency: string }>(
-    `SELECT currency FROM model_prices
-      WHERE company_id = $1 AND currency <> $2
-        AND NOT (provider_id IS NOT DISTINCT FROM $3::uuid AND model = $4)
-      LIMIT 1`,
-    [companyId, currency, replacing?.providerId ?? null, replacing?.model ?? ""],
+  const res = await db.query<{ currency: string; replaced: boolean }>(
+    `SELECT currency, bool_and(provider_id IS NOT DISTINCT FROM $2::uuid AND model = $3) AS replaced
+       FROM model_prices WHERE company_id = $1 GROUP BY currency ORDER BY currency`,
+    [companyId, replacing?.providerId ?? null, replacing?.model ?? ""],
   );
-  return res.rows[0]?.currency ?? null;
+  const all = res.rows.map((r) => r.currency);
+  const others = res.rows.filter((r) => !r.replaced);
+  return others.length && !all.includes(currency) ? all : null;
+}
+
+/** What to do about a currency refused: give it in the company's, or bring two down to one. */
+function currencyWay(theirs: string[], what: string): string {
+  return theirs.length === 1
+    ? `a company keeps one currency, so give ${what} in ${theirs[0]}`
+    : `a company keeps one currency: remove its prices in all but one of them (Settings > Prices and budgets, and each provider's under Settings > Models), then give ${what} in that one`;
 }
 
 export function registerBudgetRoutes(app: FastifyInstance, db: Db): void {
@@ -202,14 +210,27 @@ export function registerBudgetRoutes(app: FastifyInstance, db: Db): void {
     const provider = providerId ? await loadProvider(db, req.companyId, providerId) : null;
     if (provider && body.seatPriceMonth != null)
       throw new HttpError(400, "a provider bills per token: give its prices per million tokens, not a seat");
+    if (
+      provider &&
+      [
+        body.inputPerMillion,
+        body.outputPerMillion,
+        body.cacheReadPerMillion,
+        body.cacheWritePerMillion,
+      ].every((v) => v == null)
+    )
+      throw new HttpError(
+        400,
+        "a provider's price says what its tokens cost: give one per million tokens at least",
+      );
     const { result } = await mutate(db, req.companyId, req.principal.actor, async (ctx) => {
-      const theirs = await otherCurrency(ctx.client, req.companyId, body.currency, {
+      const theirs = await currenciesRefusing(ctx.client, req.companyId, body.currency, {
         providerId,
         model: body.model,
       });
       if (theirs)
         throw conflict(
-          `this company's prices are in ${theirs}, and a company keeps one currency; give this price in ${theirs}`,
+          `this company's prices are in ${theirs.join(" and ")}${theirs.length > 1 ? " already" : ""}; ${currencyWay(theirs, "this price")}`,
         );
       // A price a person types is theirs: never an estimate, whatever it replaces.
       const res = await ctx.client.query<PriceRow>(
@@ -287,10 +308,10 @@ export function registerBudgetRoutes(app: FastifyInstance, db: Db): void {
       .map((w) => w.model);
     if (!fill.length) return { added: [], unknown };
     const { result } = await mutate(db, req.companyId, req.principal.actor, async (ctx) => {
-      const theirs = await otherCurrency(ctx.client, req.companyId, fill[0]!.currency, null);
+      const theirs = await currenciesRefusing(ctx.client, req.companyId, fill[0]!.currency, null);
       if (theirs)
         throw conflict(
-          `list prices are in ${fill[0]!.currency}, and this company's prices are in ${theirs}; a company keeps one currency, so type these prices in ${theirs}`,
+          `list prices are in ${fill[0]!.currency}, and this company's prices are in ${theirs.join(" and ")}${theirs.length > 1 ? " already" : ""}; ${currencyWay(theirs, "these prices")}`,
         );
       const added: string[] = [];
       for (const p of fill) {

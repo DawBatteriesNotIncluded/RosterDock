@@ -46,8 +46,8 @@ board, Postgres and, by default, public HTTPS for the model API and the git host
   line each in the usage CSV (`kind` plan, re-plan or org proposal, beside run), and against budgets,
   which they also alert. A spent budget stops runs at dispatch, not his planning. On upgrade, what goals
   and org proposals had already spent planning is carried over, dated when each goal was planned. A
-  company keeps its prices in one currency: a price in another is refused, and so are list prices (in USD)
-  for a company that prices in another. Both CSVs end with a `provider` column, and the chargeback CSV has
+  company keeps its prices in one currency, the one its first price is in: a price in another is refused
+  (409, naming the currency to give), and so are list prices (in USD) for a company that prices in another. Both CSVs end with a `provider` column, and the chargeback CSV has
   a line per project and provider (Company model providers, below).
 - **Drift.** A teammate whose runs suddenly cost or take far more than their own usual, or whose work is
   sent back far more often, raises one alert per day: in Activity, in the notifications, on their page.
@@ -306,11 +306,12 @@ the company sees them by name.
 - A price belongs to a provider and a model, set on the model's row of the provider's card under Settings >
   Models (`PUT /prices` with `providerId`), or to the board's own models (Settings > Prices and budgets).
   Tokens through a provider with no price of its own take the board's own per-token price for the model
-  (never a seat), then, for an Anthropic provider, Anthropic's list price while the company prices in USD;
-  else they have no price yet. Fill list prices on a card (`POST /prices/list` with `providerId`) prices an
+  (never a seat), then, for an Anthropic provider, Anthropic's list price while the company prices in USD or
+  has no price yet (Costs then shows USD); else they have no price yet. Fill list prices on a card (`POST /prices/list` with `providerId`) prices an
   Anthropic provider's models at the list, and a Bedrock provider's Claude models at it too, marked as
-  estimates to check against the AWS bill. Costs says what went through each provider. A provider bills per
-  token, so it has no seat price.
+  estimates to check against the AWS bill. Costs says what went through each provider, a removed one's under its
+  label, marked removed. A provider bills per
+  token: its price gives one figure per million tokens at least, and no seat.
 - Teammates do not think with a company's provider yet: every run and every plan uses the board's own models.
   Until they do, leaving `board` out of the list changes nothing for runs and plans; it only shows companies
   that the board's own models are not lent.
@@ -331,6 +332,10 @@ the company sees them by name.
   reads those as missing.
 - Rotate a credential by changing the Secret and restarting the deployment that reads it; nothing on the
   board stores a value, so nothing else changes.
+- From a board before one currency per company, a company that priced models in two currencies keeps its
+  prices, and Costs adds them up as one, as it did. It may go on setting prices in either; one in a third is
+  refused (409). To bring it to one, remove its prices in all but one currency (Settings > Prices and
+  budgets, and each provider's on its card under Settings > Models) and give them again in that one.
 - From a board that let companies reach its own environment (before `ROSTERDOCK_SHARED_ENV_NAMES`), four
   things are closed by default. A connection or notification name whose value lives on the board pod
   (`board.connectionsSecret`, compose's `environment:`) resolves for companies only once
