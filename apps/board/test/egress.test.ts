@@ -308,6 +308,7 @@ describe("a company's destination through the egress", () => {
       "https://away.example.com/port": moved(307, "https://away.example.com:8443/mcp"),
       "http://ported.example.com:8080/mcp": moved(308, "https://ported.example.com:8443/mcp"),
       "https://nginx.example.com/mcp": moved(301, "https://nginx.example.com/mcp/?v=2"),
+      "https://slash.example.com/mcp-sk-000000": moved(302, "/mcp-sk-000000/"),
     });
     const same = egressFetch(testEgress(t.fetch, { resolve }), {
       redirect: "same-origin",
@@ -334,16 +335,24 @@ describe("a company's destination through the egress", () => {
     await expect(same("http://ported.example.com:8080/mcp", { headers: bearer })).rejects.toThrow(
       "a redirect to https://ported.example.com:8443,",
     );
-    // A 301 or 302 would turn the call's POST into a GET without its body: refused, with the address to use.
-    await expect(
-      same("https://nginx.example.com/mcp", { method: "POST", headers: bearer, body: "{}" }),
-    ).rejects.toThrow(
-      "nginx.example.com answered 301 to a POST, which would arrive at https://nginx.example.com/mcp/ as a GET without its body: use that address",
+    // A 301 or 302 would turn the call's POST into a GET without its body: refused, saying what to change
+    // without naming a path, which may carry a token.
+    const post = (url: string) => same(url, { method: "POST", headers: bearer, body: "{}" });
+    await expect(post("http://plain.example.com/mcp")).rejects.toThrow(
+      "plain.example.com answered 301 to a POST, which would arrive as a GET without its body: give the connection its address over https",
     );
+    await expect(post("https://slash.example.com/mcp-sk-000000")).rejects.toThrow(
+      "slash.example.com answered 302 to a POST, which would arrive as a GET without its body: give the connection its address with the trailing slash",
+    );
+    const elsewhere = await post("https://nginx.example.com/mcp").catch((e: Error) => e.message);
+    expect(elsewhere).toBe(
+      "nginx.example.com answered 301 to a POST, which would arrive as a GET without its body: give the connection the address it points to, on the same server",
+    );
+    expect(elsewhere).not.toContain("/mcp");
     // A read moved the same way is followed.
     expect((await same("https://nginx.example.com/mcp", { headers: bearer })).status).toBe(200);
     expect(t.calls.at(-1)).toMatchObject({ url: "https://nginx.example.com/mcp/?v=2", method: "GET" });
-    expect(t.calls).toHaveLength(10);
+    expect(t.calls).toHaveLength(12);
     // Where a call site follows any redirect, a hop to another origin keeps no header that could be a credential.
     const follow = egressFetch(testEgress(t.fetch, { resolve }), {
       redirect: "follow",
@@ -470,8 +479,60 @@ describe("the pinned transport for a company's destinations", () => {
           res.write("event: message\ndata: one\n\n");
           release = () => res.end("event: message\ndata: two\n\n");
         } else if (req.url === "/mcp") mcpServer(req.method!, body, res);
-        else if (req.url === "/mcp-huge") mcpServer(req.method!, body, res, true);
-        else {
+        else if (req.url === "/mcp-huge") mcpServer(req.method!, body, res, "tools/list");
+        else if (req.url === "/mcp-huge-init") mcpServer(req.method!, body, res, "initialize");
+        else if (req.url === "/mcp-paged") {
+          // tools/list two at a time, 600 in all, as JSON.
+          if (req.method !== "POST") return void res.writeHead(405).end();
+          const msg = JSON.parse(body) as { id?: number; method: string; params?: { cursor?: string } };
+          if (msg.id === undefined) return void res.writeHead(202).end();
+          const from = Number(msg.params?.cursor ?? 0);
+          const result =
+            msg.method === "initialize"
+              ? fixture("initialize.json").result
+              : {
+                  tools: [from, from + 1].map((n) => ({ name: `t${n}`, inputSchema: { type: "object" } })),
+                  ...(from + 2 < 600 ? { nextCursor: String(from + 2) } : {}),
+                };
+          res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "session-1" });
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+        } else if (req.url === "/mcp-empty-pages" || req.url === "/mcp-slow-pages") {
+          // tools/list for ever: no tool on a page, or one tool a page, each 150 ms late.
+          if (req.method !== "POST") return void res.writeHead(405).end();
+          const msg = JSON.parse(body) as { id?: number; method: string; params?: { cursor?: string } };
+          if (msg.id === undefined) return void res.writeHead(202).end();
+          const at = Number(msg.params?.cursor ?? 0);
+          const slow = req.url === "/mcp-slow-pages";
+          const result =
+            msg.method === "initialize"
+              ? fixture("initialize.json").result
+              : {
+                  tools: slow ? [{ name: `t${at}`, inputSchema: { type: "object" } }] : [],
+                  nextCursor: String(at + 1),
+                };
+          setTimeout(
+            () => {
+              res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "session-1" });
+              res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+            },
+            slow && msg.method !== "initialize" ? 150 : 0,
+          );
+        } else if (req.url === "/mcp-empty") {
+          // Never an answer and never a byte of one: a priming event, then the end, every time.
+          res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
+          res.end(`id: ${seen.length}\nretry: 0\ndata: \n\n`);
+        } else if (req.url === "/mcp-resume") {
+          // Never an answer: a priming event, 7 MB of progress, then the end of the stream, every time, so
+          // the SDK resumes it again and again. No answer reaches the 8 MB cap.
+          res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
+          res.write(`id: ${seen.length}\nretry: 0\ndata: \n\n`);
+          const note = {
+            jsonrpc: "2.0",
+            method: "notifications/message",
+            params: { level: "info", data: "x".repeat(7 * 1024 * 1024) },
+          };
+          res.end(`event: message\ndata: ${JSON.stringify(note)}\n\n`);
+        } else {
           res.writeHead(404);
           res.end();
         }
@@ -631,6 +692,34 @@ describe("the pinned transport for a company's destinations", () => {
     ).toBe(200);
   });
 
+  it("keeps a range given to one company from another, even through a name listed for every company", async () => {
+    const a = "4f1aee73-e65e-4c8d-83f7-aa1169379d7f";
+    const b = "0b6c1f0e-27f4-4a8e-9a43-3d5c4c6c1d2e";
+    const get = (e: Egress) =>
+      egressFetch(e, { redirect: "error", timeoutMs: 5000, maxBytes: MB })(
+        `http://ollama.acme.cluster.test:${port}/echo`,
+        { method: "POST", body: "{}" },
+      );
+    const board = boardEgress(parsePrivateDestinations(`*.cluster.test,${a}=127.0.0.0/8`), toServer);
+    expect((await get(companyEgress(board, a))).status).toBe(200);
+    // In the words any private address gets: nothing says whose range it is.
+    const refused = `refused: ollama.acme.cluster.test resolves to a loopback address, ${NOT_ALLOWED}`;
+    await expect(get(companyEgress(board, b))).rejects.toThrow(refused);
+    await expect(get(board)).rejects.toThrow(refused);
+    // Where every company may reach the range too, the name is every company's way in.
+    const shared = boardEgress(
+      parsePrivateDestinations(`*.cluster.test,127.0.0.0/8,${a}=127.0.0.0/8`),
+      toServer,
+    );
+    expect((await get(companyEgress(shared, b))).status).toBe(200);
+    // A name the operator gave B alone is trusted with whatever it resolves to, A's range included.
+    const given = boardEgress(
+      parsePrivateDestinations(`*.cluster.test,${a}=127.0.0.0/8,${b}=ollama.acme.cluster.test`),
+      toServer,
+    );
+    expect((await get(companyEgress(given, b))).status).toBe(200);
+  });
+
   it("ends an MCP call whose event stream passes the cap with the cut, not its timeout", async () => {
     const started = Date.now();
     await expect(
@@ -640,6 +729,82 @@ describe("the pinned transport for a company's destinations", () => {
       ),
     ).rejects.toThrow(`mcp.cluster.test:${port} answered more than 8 MB; the board read no further`);
     expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("ends an MCP call cut during initialize with the cut, and never resumes the stream for a fresh 8 MB", async () => {
+    seen.length = 0;
+    const started = Date.now();
+    await expect(
+      discoverTools(
+        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-huge-init` },
+        { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
+      ),
+    ).rejects.toThrow(`mcp.cluster.test:${port} answered more than 8 MB; the board read no further`);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(seen.filter((s) => s.endsWith("/mcp-huge-init"))).toEqual([
+      `POST mcp.cluster.test:${port} /mcp-huge-init`,
+    ]);
+  });
+
+  it("reads no more than 16 MB in all for one MCP call, however often the SDK resumes a stream", async () => {
+    seen.length = 0;
+    const started = Date.now();
+    await expect(
+      discoverTools(
+        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-resume` },
+        { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
+      ),
+    ).rejects.toThrow(
+      `mcp.cluster.test:${port} answered more than 16 MB in all for one call; the board read no further`,
+    );
+    expect(Date.now() - started).toBeLessThan(10_000);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(seen.filter((s) => s.endsWith("/mcp-resume")).length).toBeLessThanOrEqual(3);
+  });
+
+  it("ends an MCP call whose stream the SDK resumes empty again and again, after 2000 requests", async () => {
+    seen.length = 0;
+    const started = Date.now();
+    await expect(
+      discoverTools(
+        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-empty` },
+        { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
+      ),
+    ).rejects.toThrow(
+      `mcp.cluster.test:${port} got more than 2000 requests for one call, too many requests; the board read no further`,
+    );
+    expect(Date.now() - started).toBeLessThan(15_000);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(seen.filter((s) => s.endsWith("/mcp-empty")).length).toBeLessThanOrEqual(2000);
+  });
+
+  it("ends a tools list that pages empty, or slowly, for ever", async () => {
+    const egress = boardEgress(parsePrivateDestinations("*.cluster.test"), toServer);
+    seen.length = 0;
+    await expect(
+      discoverTools(
+        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-empty-pages` },
+        { egress },
+      ),
+    ).rejects.toThrow("the server answered 20 pages of its tool list in a row with no tool");
+    expect(seen.filter((s) => s.startsWith("POST ") && s.endsWith(" /mcp-empty-pages")).length).toBe(22);
+    const started = Date.now();
+    await expect(
+      discoverTools(
+        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-slow-pages` },
+        { egress, discoverMaxMs: 1000 },
+      ),
+    ).rejects.toThrow("the server's tool list took longer than 1 second");
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it("reads a tools list paged two at a time, 600 tools, whole", async () => {
+    const tools = await discoverTools(
+      { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-paged` },
+      { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
+    );
+    expect(tools).toHaveLength(600);
   });
 
   it("carries MCP's streamable HTTP, its answers as event streams, to a listed name and to no other", async () => {
@@ -675,7 +840,7 @@ const fixture = (name: string) =>
  * The MCP fixtures (fixtures/mcp, written from the spec) over streamable HTTP, each as an event stream; the answer to
  * tools/list is never ended, so a client gets it only if the transport hands the stream on as it arrives.
  */
-function mcpServer(method: string, raw: string, res: http.ServerResponse, huge = false): void {
+function mcpServer(method: string, raw: string, res: http.ServerResponse, huge?: string): void {
   if (method !== "POST") {
     res.writeHead(method === "DELETE" ? 200 : 405);
     res.end();
@@ -694,13 +859,10 @@ function mcpServer(method: string, raw: string, res: http.ServerResponse, huge =
         ? fixture("tools-list.json").result
         : {};
   res.writeHead(200, { "content-type": "text/event-stream", "mcp-session-id": "session-1" });
-  // An answer past the board's 8 MB cap: a tool whose description is 9 MB.
-  const sent =
-    huge && msg.method === "tools/list"
-      ? {
-          tools: [{ name: "big", description: "x".repeat(9 * 1024 * 1024), inputSchema: { type: "object" } }],
-        }
-      : result;
+  // An answer past the board's 8 MB cap, on a stream the SDK would resume at once: a priming event (an id,
+  // retry: 0) comes first, whole.
+  const sent = huge === msg.method ? { ...result, padding: "x".repeat(9 * 1024 * 1024) } : result;
+  if (huge === msg.method) res.write("id: 1\nretry: 0\ndata: \n\n");
   res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: sent })}\n\n`);
   if (msg.method !== "tools/list") res.end();
 }

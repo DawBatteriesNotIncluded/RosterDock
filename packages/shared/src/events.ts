@@ -51,6 +51,7 @@ export const EVENT_TYPES = [
   "review.approved",
   "review.vetoed",
   "review.reassigned",
+  "review.needs_person",
   "task.done",
   "pr.proposed",
   "pr.opened",

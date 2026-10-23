@@ -38,6 +38,8 @@ export interface Workspace {
   repo: boolean;
   /** .git/config as the clone left it, put back before the harvest runs git. */
   gitConfig?: string;
+  /** The commit the clone is at: the run's changes are read back against it, and against no other. */
+  clonedSha?: string;
 }
 
 /** Where programs live, the temp directory, the locale (whose messages LC_ALL=C sets to English): all git needs. */
@@ -78,6 +80,8 @@ export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): Record<str
     LC_ALL: "C",
     GIT_TERMINAL_PROMPT: "0",
     GIT_CONFIG_NOSYSTEM: "1",
+    // Nor the system's attributes file, which a run on a worker outside the image may write.
+    GIT_ATTR_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
   };
 }
@@ -342,7 +346,13 @@ async function cloneInto(
   }
   // Never leave the credential in the checkout.
   if (credential) await git(["remote", "set-url", "origin", project.repoUrl], dir);
-  return { dir, repo: true, gitConfig: await readFile(path.join(dir, ".git", "config"), "utf8") };
+  const head = (await git(["rev-parse", "HEAD"], dir)).stdout.trim();
+  return {
+    dir,
+    repo: true,
+    gitConfig: await readFile(path.join(dir, ".git", "config"), "utf8"),
+    ...(head ? { clonedSha: head } : {}),
+  };
 }
 
 /**
@@ -358,6 +368,14 @@ async function restoreGitDir(ws: Workspace): Promise<void> {
     throw new Error(
       "the run replaced the repository's .git directory, so its changes cannot be read back for review",
     );
+  // What the run gave this clone alone in .git/info goes: attributes (`config.json -diff`) would have the diff
+  // call a text file binary, which the review cannot show, and an exclude would hide a .gitattributes that does
+  // the same, or any file, from the diff. The clone's own holds only comments. A link goes itself, never what it
+  // points at.
+  const info = path.join(gitDir, "info");
+  const infoSt = await lstat(info).catch(() => null);
+  if (infoSt?.isSymbolicLink()) await rm(info, { force: true });
+  else if (infoSt) await rm(info, { force: true, recursive: true });
   if (ws.gitConfig === undefined) return;
   const config = path.join(gitDir, "config");
   // Removed first: a symlink the run left there must not redirect the write.
@@ -563,6 +581,28 @@ async function readArtifact(
 }
 
 /**
+ * Entries the run flagged skip-worktree or assume-unchanged in the index stay as staged, whatever the file on
+ * disk holds: the review would show the index while the run delivered the file. The flags go before the add.
+ * False where git would not clear them.
+ */
+async function clearIndexFlags(ws: Workspace): Promise<boolean> {
+  const listed = decodeNames((await gitBytes(["ls-files", "-v", "-z"], ws.dir)).stdout).names;
+  // `S` (or `s`) skip-worktree; a lower-case tag, assume-unchanged. One flag a call: git applies the last.
+  const tagged = (test: (tag: string) => boolean) =>
+    listed.filter((e) => e.length > 2 && test(e[0]!)).map((e) => e.slice(2));
+  for (const [flag, paths] of [
+    ["--no-skip-worktree", tagged((t) => t === "S" || t === "s")],
+    ["--no-assume-unchanged", tagged((t) => t >= "a" && t <= "z")],
+  ] as const) {
+    for (let i = 0; i < paths.length; i += 200) {
+      const cleared = await git(["update-index", flag, "--", ...paths.slice(i, i + 200)], ws.dir);
+      if (cleared.code !== 0) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Where git checks a link out as a plain file holding its target (core.symlinks false, as Git for Windows has
  * it), git add keeps the link's type for that file, whatever the run wrote in it (or staged itself), and the
  * diff would show the link pointing at the file's new contents. The run wrote a file there: each committed
@@ -658,7 +698,7 @@ export async function harvestWorkspace(
     const files = entries.filter((e) => e.isFile());
     const { names, notUtf8 } = decodeNames(Buffer.concat(files.flatMap((e) => [e.name, Buffer.from([0])])));
     if (notUtf8.length)
-      out.unreadable = `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
+      out.unreadable ??= `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
     candidates = names
       .filter((n) => n !== HANDOVER_FILE && n !== BLOCKED_FILE)
       .slice(0, MAX_UNDECLARED_FILES);
@@ -689,6 +729,13 @@ export async function harvestWorkspace(
   if (ws.repo) {
     const head = await git(["rev-parse", "HEAD"], ws.dir);
     if (head.code === 0) out.baseSha = head.stdout.trim() || null;
+    // The changes are read back against the commit the clone was at: a run that checked out another ref, or
+    // committed, would bring into its pull request commits no review showed.
+    if (ws.clonedSha && out.baseSha !== ws.clonedSha)
+      out.unreadable ??= `the run's changes could not be read back for review (the clone is no longer at ${ws.clonedSha.slice(0, 12)}, the commit it was cloned at: a checkout or a commit moved it)`;
+    if (!(await clearIndexFlags(ws)))
+      out.unreadable ??=
+        "the run's changes could not be read back for review (git could not clear the flags the run set on its index)";
     await unstageLinksMadeFiles(ws);
     const add = await git(
       ["add", "-A", "--", ".", `:(exclude)${HANDOVER_FILE}`, `:(exclude)${BLOCKED_FILE}`],
@@ -705,7 +752,7 @@ export async function harvestWorkspace(
       : { names: [], notUtf8: [] };
     diffNames = names;
     if (notUtf8.length)
-      out.unreadable = `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
+      out.unreadable ??= `the run's changes could not be read back for review (a file's name is not UTF-8: ${notUtf8[0]})`;
     else {
       const diff = staged
         ? await git(
@@ -726,13 +773,19 @@ export async function harvestWorkspace(
         : { ...add, code: add.code || 1, stderr: skipped ?? add.stderr };
       // A part of the change the review would not show (an index.lock a git ended part-way left behind): no
       // diff, and the run that would complete fails with this rather than send half of it for review.
-      if (diff.code === 0) diffText = diff.stdout;
-      else {
+      // So too a NUL byte in a file git read as text (it looks for one in the first 8000 bytes only), which no
+      // review can hold.
+      const nul = diff.code === 0 && diff.stdout.includes("\0");
+      if (diff.code === 0 && !nul) diffText = diff.stdout;
+      else if (nul) {
+        const held = diff.stdout.split(/(?<=\n)(?=diff --git )/).find((stanza) => stanza.includes("\0"))!;
+        out.unreadable ??= `the run's changes could not be read back for review (a file git read as text holds a NUL byte: ${spellName(fileName(held))})`;
+      } else {
         let why = gitReason(diff.stderr);
         // The worker's own folders are none of the run's business: the clone's path as git writes it, `.`.
         for (const at of await Promise.all([ws.dir, realpath(ws.dir).catch(() => ws.dir)]))
           for (const form of new Set([at, at.replace(/\\/g, "/")])) why = why.split(form).join(".");
-        out.unreadable = `the run's changes could not be read back for review (git: ${why || "no message"})`;
+        out.unreadable ??= `the run's changes could not be read back for review (git: ${why || "no message"})`;
       }
     }
   } else {
@@ -758,6 +811,57 @@ export async function harvestWorkspace(
       })
       .join("");
     diffNames = [...rendered];
+  }
+  // A declared output git leaves out of the diff (one .gitignore matches, or under .git) is no file the review
+  // shows: it is not delivered, and a run that would complete fails, naming it. One the repository holds
+  // unchanged is its own.
+  if (ws.repo && declaredOutputs.length) {
+    // Where the file system ignores case (macOS, Windows), a declared Report.md is the report.md the run wrote.
+    const fold = (p: string) =>
+      process.platform === "darwin" || process.platform === "win32" ? p.toLowerCase() : p;
+    const named = (f: string) => fold(path.posix.normalize(f));
+    const inDiff = new Set(diffNames.map(fold));
+    // The handover and the blocked note are never part of the diff: the board takes them apart.
+    const outside = out.filesWritten.filter(
+      (f) => f !== HANDOVER_FILE && f !== BLOCKED_FILE && !inDiff.has(named(f)),
+    );
+    // What the index holds, by name as the file system reads it: the blob of each entry.
+    const index = new Map(
+      decodeNames((await gitBytes(["ls-files", "-s", "-z"], ws.dir)).stdout).names.map((e) => {
+        const tab = e.indexOf("\t");
+        return [fold(e.slice(tab + 1)), e.slice(0, tab).split(" ")[1]!] as const;
+      }),
+    );
+    const tracked = new Set(index.keys());
+    const unseen = outside.filter((f) => !tracked.has(named(f)));
+    // A declared output the fold matched travels under git's spelling, the one the review and its scan name.
+    const spelled = new Map(diffNames.map((n) => [fold(n), n]));
+    for (const a of out.artifacts) {
+      const git = a.kind === "handover" ? undefined : spelled.get(named(a.path));
+      if (git !== undefined && git !== path.posix.normalize(a.path)) {
+        out.filesWritten = out.filesWritten.map((f) => (f === a.path ? git : f));
+        a.path = git;
+      }
+    }
+    if (unseen.length) {
+      out.artifacts = out.artifacts.filter((a) => a.kind === "handover" || !unseen.includes(a.path));
+      out.filesWritten = out.filesWritten.filter((f) => !unseen.includes(f));
+      out.unreadable ??= `the run's changes could not be read back for review (a declared output git leaves out of the diff, which the review would not show: ${spellName(unseen[0]!)})`;
+    }
+    // Each declared output delivered is what git holds for it: an index entry the run wrote by hand (the clean
+    // blob, with the file's own size and time) would have the add pass the file over and the review show the
+    // blob, while the file itself, read from disk, is delivered.
+    const held = out.filesWritten.filter((f) => f !== HANDOVER_FILE && f !== BLOCKED_FILE);
+    if (held.length) {
+      const hashed = await git(["hash-object", "--", ...held], ws.dir);
+      const disk = hashed.code === 0 ? hashed.stdout.trim().split("\n") : [];
+      const forged = held.filter((f, i) => disk[i] === undefined || index.get(named(f)) !== disk[i]);
+      if (forged.length) {
+        out.artifacts = out.artifacts.filter((a) => a.kind === "handover" || !forged.includes(a.path));
+        out.filesWritten = out.filesWritten.filter((f) => !forged.includes(f));
+        out.unreadable ??= `the run's changes could not be read back for review (a declared output is not what git holds for it, so the review would not show it: ${spellName(forged[0]!)})`;
+      }
+    }
   }
   // Two files whose names are the same but for spaces or a U+FEFF at either end, which a reviewer cannot tell
   // apart: a run that would complete fails, naming both. Every name it delivers or its diff carries, as git

@@ -146,6 +146,8 @@ export function targetFor(row: ConnectionRow): McpTarget {
     oauth: row.oauth
       ? {
           secretName: connectionSecretName(row.id),
+          authorizationServer: row.oauth.authorizationServer,
+          authorizedAt: row.oauth.authorizedAt,
           tokenEndpoint: row.oauth.tokenEndpoint,
           clientId: row.oauth.clientId,
           clientSecretEnvName: row.oauth.clientSecretEnvName ?? null,

@@ -56,16 +56,17 @@ board, Postgres and, by default, public HTTPS for the model API and the git host
 Everything that needs a person is one sentence in the webhook (`board.notifySecret`, or a per-company env
 var name in Settings) and a row in the Approvals or Company page:
 
-| Sentence                                   | What to do                                                                                               |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| A teammate asks approval to write …        | Approvals: read the exact payload and its hash; Approve and run, or Reject with a note (see below).      |
-| The approved write could not be sent       | The connection is off, gone or refusing: Settings, Connections; fix and let the teammate propose again.  |
-| Peter has questions before planning …      | The goal card: answer them; Peter plans.                                                                 |
-| Peter needs you on … (a goal turned amber) | The goal card: a task failed three times; read the runs, fix the brief or the toolbox, restart the task. |
-| Pull request opened for …                  | Merge it (or not) on the git host; merging is yours by design.                                           |
-| Budget alert                               | Settings: raise the budget, or leave it and let runs wait at the gate.                                   |
-| Peter proposes … / audited …               | The Company page: accept or decline the draft.                                                           |
-| … runs cost 3× their usual                 | The teammate's page and their last runs; a bigger model, a bigger task, or a loop. Nothing stopped.      |
+| Sentence                                    | What to do                                                                                               |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| A teammate asks approval to write …         | Approvals: read the exact payload and its hash; Approve and run, or Reject with a note (see below).      |
+| The approved write could not be sent        | The connection is off, gone or refusing: Settings, Connections; fix and let the teammate propose again.  |
+| Peter has questions before planning …       | The goal card: answer them; Peter plans.                                                                 |
+| Peter needs you on … (a goal turned amber)  | The goal card: a task failed three times; read the runs, fix the brief or the toolbox, restart the task. |
+| Pull request opened for …                   | Merge it (or not) on the git host; merging is yours by design.                                           |
+| … carries binary files a review cannot show | Reviews: the review is a person's now. Look at the files on the run, then approve or request changes.    |
+| Budget alert                                | Settings: raise the budget, or leave it and let runs wait at the gate.                                   |
+| Peter proposes … / audited …                | The Company page: accept or decline the draft.                                                           |
+| … runs cost 3× their usual                  | The teammate's page and their last runs; a bigger model, a bigger task, or a loop. Nothing stopped.      |
 
 A task waiting on a person is amber on the board, "Needs you", and turns its goal amber (a task outside any
 open goal gets Peter's "Needs a person" note on it instead). A teammate's blocker names who it waits on by
@@ -227,7 +228,8 @@ networkPolicy:
 - A name is matched as the connection's URL writes it, without the pod's search domains: list
   `playwright-mcp.tools.svc.cluster.local` and use that name in the URL. The short `playwright-mcp` is
   another name, refused until it is listed too. A range is matched by address, whatever the name.
-- A listed name is trusted with whatever it resolves to. Never list a wildcard over the cluster's domain
+- A listed name is trusted with whatever it resolves to (except that one listed for every company never leads
+  into a private range given to one company alone, below). Never list a wildcard over the cluster's domain
   (`*.cluster.local`, `*.svc.cluster.local`, `*.pod.cluster.local`): cluster DNS answers
   `169-254-169-254.<namespace>.pod.cluster.local` with that address (CoreDNS's `pods insecure`, the default on
   kubeadm, kind and EKS), and an ExternalName service is a CNAME to anywhere, so the wildcard would hand
@@ -236,15 +238,22 @@ networkPolicy:
   `<company id>=<entry>` (in the chart, `{ company: "<id>", destination: "<entry>" }`), and only that company
   reaches it, on connections of its own (its own lookup and kept connections, so no other company gets there
   through a reused connection or a name that changes its answer). Its owners and admins find the id under
-  Settings > Connections, where they see your entries for every company and their own, marked; no other
-  company sees them. The board warns at start about an id that names no company, whose entries allow
-  nothing. A stdio command you list with free arguments (a final `*`) runs inside the board pod, where no
+  Settings > Connections, where they see your entries for every company and their own, marked "given to
+  this company"; no other company sees them. An entry for every company that covers one you give a company
+  makes it every company's: a range inside a listed range, a name under a listed `*.` name (the board warns
+  at start about both, and Settings does not mark them), or a name whose address is in a range listed for
+  every company, which nothing can see before the name resolves. Keep a company's own services out of the
+  ranges you list for every company. The other way round holds: a private range you give one company stays
+  its own, and a name listed for every company that resolves into it is refused for the others (a name you
+  give a company alone is trusted wherever it leads). The board warns at start about an id that names no company, whose
+  entries allow nothing. In the chart, a plain string that holds a company's entry and a comma is refused:
+  one entry per item. A stdio command you list with free arguments (a final `*`) runs inside the board pod, where no
   list applies: one that fetches or proxies lets any company's admins point it at that destination too.
 
   ```yaml
   board:
     privateDestinations:
-      - "10.20.0.0/16" # every company
+      - "playwright-mcp.tools.svc.cluster.local" # every company
       - company: "4f1aee73-e65e-4c8d-83f7-aa1169379d7f"
         destination: "ollama.acme.svc.cluster.local" # Acme alone
   ```
@@ -334,7 +343,7 @@ the company sees them by name.
   the cluster, a host on your network) fails until `board.privateDestinations` lists it (Private
   destinations, above). An MCP server that redirects within its own server with a 307 or 308 (`/mcp` to
   `/mcp/`) is followed; a 301 or 302 (an http-to-https rule's) would turn the call into a GET, so it fails
-  and names the address to use. One that redirects to another server, and an OpenAPI operation or a webhook
+  and says what to change (over https, or with or without the trailing slash). One that redirects to another server, and an OpenAPI operation or a webhook
   that answers with any redirect, fails and names the server it pointed to: give the connection that
   address. A
   local `apps/board/.env` copied before this change needs the `ROSTERDOCK_PRIVATE_DESTINATIONS` line from

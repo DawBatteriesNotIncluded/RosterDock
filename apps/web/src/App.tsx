@@ -1,6 +1,7 @@
 // Binds the store to the views. Views are pure; everything that talks to the
 // board lives here.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import type { Client } from "./api/client.ts";
 import type { AuthProviders, Features, TeammateTemplate } from "./api/types.ts";
 import { Shell } from "./components/Shell.tsx";
 import { Empty } from "./components/ui.tsx";
@@ -47,11 +48,33 @@ export function oauthErrorText(code: string, detail: string | null = null): stri
       return "That authorisation took too long or was started elsewhere; press Authorise again.";
     case "forbidden":
       return "You may not manage this company's connections.";
+    case "moved":
+      return "The connection's server moved to another authorization server while you were authorising; press Authorise again.";
     case "token":
       return `The authorization server did not issue a token; press Authorise again.${said}`;
     default:
       return `The authorization server refused; the board's log says why.${said}`;
   }
+}
+
+/**
+ * Asks the board what it offers this company, and returns what stops a late answer landing. The private
+ * destinations given to the last company are not this one's, so they go first, even if the board cannot be asked.
+ */
+export function loadFeatures(
+  client: Pick<Client, "features">,
+  companyId: string | null,
+  set: Dispatch<SetStateAction<Features>>,
+): () => void {
+  let alive = true;
+  set((f) => ({ ...f, privateDestinations: undefined, companyPrivateDestinations: undefined }));
+  client
+    .features(companyId ?? undefined)
+    .then((f) => alive && set(f))
+    .catch(() => undefined);
+  return () => {
+    alive = false;
+  };
 }
 
 export function App() {
@@ -66,14 +89,7 @@ export function App() {
   const [features, setFeatures] = useState<Features>({ oauth: false, objectStore: false });
   useEffect(() => {
     if (!me) return;
-    let alive = true;
-    client
-      .features(companyId ?? undefined)
-      .then((f) => alive && setFeatures(f))
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
+    return loadFeatures(client, companyId, setFeatures);
   }, [client, me, companyId]);
   // An OAuth authorisation comes back to the root with ?oauth=<connection> or ?oauth_error=<code>.
   useEffect(() => {

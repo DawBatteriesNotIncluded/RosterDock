@@ -1,5 +1,6 @@
 // Workspace against a local bare repository: no network.
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   chmod,
@@ -12,6 +13,7 @@ import {
   realpath,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -353,6 +355,7 @@ describe("workspace", () => {
       LC_ALL: "C",
       GIT_TERMINAL_PROMPT: "0",
       GIT_CONFIG_NOSYSTEM: "1",
+      GIT_ATTR_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: GIT_NO_CONFIG,
     });
     // git's messages in English whatever the worker's locale: the harvest and the rework read some of them.
@@ -491,6 +494,237 @@ describe("workspace", () => {
     // The config is the clone's again, a plain file, and what the symlink pointed at is untouched.
     expect((await lstat(path.join(ws.dir, ".git", "config"))).isSymbolicLink()).toBe(false);
     expect(await readFile(evil, "utf8")).toBe(evilConfig);
+    await cleanupWorkspace(ws);
+  });
+
+  it("reads back a file the run hid behind a flag in the index, as it is on disk", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-index-flags",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    const id = {
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.com",
+    };
+    // A tracked file flagged skip-worktree, then changed; a new one staged clean, flagged, then changed.
+    await writeFile(path.join(ws.dir, "README.md"), '# demo\napi_key = "not-a-real-value-123"\n', "utf8");
+    expect((await git(["update-index", "--skip-worktree", "README.md"], ws.dir, id)).code).toBe(0);
+    await writeFile(path.join(ws.dir, "report.md"), "# Report\nAll clean.\n", "utf8");
+    expect((await git(["add", "report.md"], ws.dir, id)).code).toBe(0);
+    expect((await git(["update-index", "--assume-unchanged", "report.md"], ws.dir, id)).code).toBe(0);
+    await writeFile(path.join(ws.dir, "report.md"), '# Report\npassword = "not-a-real-value-123"\n', "utf8");
+    const h = await harvestWorkspace(ws, ["README.md", "report.md"]);
+    expect(h.unreadable).toBeNull();
+    const diff = h.artifacts.find((a) => a.kind === "diff")!.content;
+    expect(diff).toContain('+api_key = "not-a-real-value-123"');
+    expect(diff).toContain('+password = "not-a-real-value-123"');
+    await cleanupWorkspace(ws);
+  });
+
+  it("delivers no declared output its index entry was forged to hide, and fails the run naming it", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-forged-index",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    const id = {
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.com",
+    };
+    // Staged with the key, then the entry's blob set back to HEAD's by hand, its size and times kept: git
+    // passes the file over, and its diff is empty.
+    await writeFile(path.join(ws.dir, "README.md"), '# demo\napi_key = "not-a-real-value-123"\n', "utf8");
+    // Its time well before the index's, so git takes the entry as it stands, as for any file not just written.
+    const before = new Date(Date.now() - 3600_000);
+    await utimes(path.join(ws.dir, "README.md"), before, before);
+    expect((await git(["add", "README.md"], ws.dir, id)).code).toBe(0);
+    const staged = (await git(["rev-parse", ":README.md"], ws.dir, id)).stdout.trim();
+    const clean = (await git(["rev-parse", "HEAD:README.md"], ws.dir, id)).stdout.trim();
+    const indexFile = path.join(ws.dir, ".git", "index");
+    const index = await readFile(indexFile);
+    Buffer.from(clean, "hex").copy(index, index.indexOf(Buffer.from(staged, "hex")));
+    const body = index.subarray(0, index.length - 20);
+    await writeFile(indexFile, Buffer.concat([body, createHash("sha1").update(body).digest()]));
+    expect((await git(["diff", "--cached", "--name-only"], ws.dir, id)).stdout).toBe("");
+    const h = await harvestWorkspace(ws, ["README.md"]);
+    expect(h.unreadable).toBe(
+      'the run\'s changes could not be read back for review (a declared output is not what git holds for it, so the review would not show it: "README.md")',
+    );
+    expect(h.artifacts.map((a) => a.path)).not.toContain("README.md");
+    await cleanupWorkspace(ws);
+  });
+
+  it("reads a run's changes back only against the commit its clone was at", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-moved-head",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    expect(ws.clonedSha).toMatch(/^[0-9a-f]{40}$/);
+    // A commit moves HEAD: its changes would ride into a pull request that no review showed.
+    const id = {
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.com",
+    };
+    await writeFile(path.join(ws.dir, "leaked.env"), 'api_key = "not-a-real-value-123"\n', "utf8");
+    await git(["add", "leaked.env"], ws.dir, id);
+    expect((await git(["commit", "-m", "hide"], ws.dir, id)).code).toBe(0);
+    await writeFile(path.join(ws.dir, "small.txt"), "small\n", "utf8");
+    const h = await harvestWorkspace(ws, []);
+    expect(h.unreadable).toBe(
+      `the run's changes could not be read back for review (the clone is no longer at ${ws.clonedSha!.slice(0, 12)}, the commit it was cloned at: a checkout or a commit moved it)`,
+    );
+    await cleanupWorkspace(ws);
+  });
+
+  it("delivers no declared output git leaves out of the diff, and fails the run naming it", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-ignored-output",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await writeFile(path.join(ws.dir, ".gitignore"), "*.log\n", "utf8");
+    await writeFile(path.join(ws.dir, "run.log"), 'api_key = "not-a-real-value-123"\n', "utf8");
+    await writeFile(path.join(ws.dir, "notes.md"), "n\n", "utf8");
+    // README.md is the repository's own, unchanged: delivered as it is.
+    const h = await harvestWorkspace(ws, ["README.md", "notes.md", "run.log", ".git/description"]);
+    expect(h.unreadable).toBe(
+      'the run\'s changes could not be read back for review (a declared output git leaves out of the diff, which the review would not show: "run.log")',
+    );
+    expect(h.filesWritten).toEqual(["README.md", "notes.md"]);
+    expect(h.artifacts.map((a) => a.path)).toEqual(["README.md", "notes.md", "changes.diff"]);
+    // Under .git too.
+    expect((await harvestWorkspace(ws, ["notes.md", ".git/description"])).unreadable).toMatch(
+      /leaves out of the diff, which the review would not show: "\.git\/description"/,
+    );
+    // Not the handover, which the board takes apart, nor a name in another case where the file system
+    // ignores it (on Linux, Readme.md is missing instead).
+    await writeFile(path.join(ws.dir, "handover-summary.md"), "Done.\n", "utf8");
+    expect(
+      (await harvestWorkspace(ws, ["notes.md", "handover-summary.md", "Readme.md"])).unreadable,
+    ).toBeNull();
+    await cleanupWorkspace(ws);
+  });
+
+  it.runIf(process.platform === "darwin" || process.platform === "win32")(
+    "sends a declared output spelled in another case under git's name, the one the review scans",
+    async () => {
+      const ws = await prepareWorkspace(
+        path.join(root, "work"),
+        "run-folded-output",
+        { repoUrl: bare, defaultBranch: "main" },
+        null,
+      );
+      await writeFile(path.join(ws.dir, "secret.bin"), Buffer.from([0, 1, 2, 3]));
+      const h = await harvestWorkspace(ws, ["Secret.bin"]);
+      expect(h.unreadable).toBeNull();
+      expect(h.filesWritten).toEqual(["secret.bin"]);
+      expect(h.artifacts.map((a) => a.path)).toEqual(["secret.bin", "changes.diff"]);
+      await cleanupWorkspace(ws);
+    },
+  );
+
+  it("says a run's changes cannot be read back where a file git reads as text holds a NUL byte", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-late-nul",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    // git looks for a NUL byte in a file's first 8000 bytes only: past them, the file is text to it.
+    await writeFile(path.join(ws.dir, "late.txt"), `${"x".repeat(9000)}\n\0 tail\n`, "utf8");
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    const h = await harvestWorkspace(ws, []);
+    expect(h.unreadable).toBe(
+      'the run\'s changes could not be read back for review (a file git read as text holds a NUL byte: "late.txt")',
+    );
+    expect(h.artifacts.find((a) => a.kind === "diff")).toBeUndefined();
+    await cleanupWorkspace(ws);
+  });
+
+  it("shows a text file as text whatever attributes the run gave the clone alone in .git/info", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-info-attributes",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    // `-diff` and `binary` would have git print "Binary files ... differ": the review would show none of it.
+    await mkdir(path.join(ws.dir, ".git", "info"), { recursive: true });
+    await writeFile(
+      path.join(ws.dir, ".git", "info", "attributes"),
+      "README.md -diff\n*.json binary\n",
+      "utf8",
+    );
+    await writeFile(path.join(ws.dir, "README.md"), '# demo\n\napi_key = "not-a-real-value-123"\n', "utf8");
+    await writeFile(
+      path.join(ws.dir, "config.json"),
+      '{ "smtp_password": "not-a-real-value-123" }\n',
+      "utf8",
+    );
+    const h = await harvestWorkspace(ws, []);
+    const files = parseUnifiedDiff(h.artifacts.find((a) => a.kind === "diff")!.content);
+    expect(files.map((f) => [f.path, f.binary])).toEqual([
+      ["README.md", false],
+      ["config.json", false],
+    ]);
+    expect(existsSync(path.join(ws.dir, ".git", "info", "attributes"))).toBe(false);
+    await cleanupWorkspace(ws);
+  });
+
+  it("shows a .gitattributes the run hid with .git/info/exclude, so the review sees why a file is binary", async () => {
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-info-exclude",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    await mkdir(path.join(ws.dir, ".git", "info"), { recursive: true });
+    await writeFile(path.join(ws.dir, ".git", "info", "exclude"), ".gitattributes\n", "utf8");
+    await writeFile(path.join(ws.dir, ".gitattributes"), "config.json -diff\n", "utf8");
+    await writeFile(
+      path.join(ws.dir, "config.json"),
+      '{ "smtp_password": "not-a-real-value-123" }\n',
+      "utf8",
+    );
+    const h = await harvestWorkspace(ws, []);
+    const files = parseUnifiedDiff(h.artifacts.find((a) => a.kind === "diff")!.content);
+    // The attribute is part of the change now, as the review shows; the board scans the file it makes binary.
+    expect(files.map((f) => [f.path, f.binary])).toEqual([
+      [".gitattributes", false],
+      ["config.json", true],
+    ]);
+    await cleanupWorkspace(ws);
+  });
+
+  it("takes out a .git/info the run made a link, never what it points at", async (ctx) => {
+    await skipWithoutSymlinks(ctx, root);
+    const ws = await prepareWorkspace(
+      path.join(root, "work"),
+      "run-info-link",
+      { repoUrl: bare, defaultBranch: "main" },
+      null,
+    );
+    const elsewhere = await mkdtemp(path.join(root, "elsewhere-"));
+    await writeFile(path.join(elsewhere, "attributes"), "README.md -diff\n", "utf8");
+    await rm(path.join(ws.dir, ".git", "info"), { recursive: true, force: true });
+    await symlink(elsewhere, path.join(ws.dir, ".git", "info"), "dir");
+    await writeFile(path.join(ws.dir, "README.md"), "# demo\n\nchanged\n", "utf8");
+    const h = await harvestWorkspace(ws, []);
+    expect(h.artifacts.find((a) => a.kind === "diff")?.content).toContain("+changed");
+    expect(existsSync(path.join(ws.dir, ".git", "info"))).toBe(false);
+    expect(await readFile(path.join(elsewhere, "attributes"), "utf8")).toBe("README.md -diff\n");
     await cleanupWorkspace(ws);
   });
 

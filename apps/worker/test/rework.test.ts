@@ -169,6 +169,7 @@ function fakeBoard(repoUrl: string, rework: Rework | null, declaredOutputs: stri
     heartbeat: async () => ({ stopRequested: false }),
     events: async (_t, _r, evs) => void out.shipped.push(...evs),
     checkpoint: async () => {},
+    cloned: async () => {},
     artifact: async (_t, _r, a) => void out.artifacts.push(a),
     complete: async (_t, _r, c) => void (out.completion = c),
   };

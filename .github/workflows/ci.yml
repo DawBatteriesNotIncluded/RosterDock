@@ -170,3 +170,22 @@ jobs:
       - run: helm template rosterdock deploy/helm/rosterdock --set postgres.externalSecret.name=rosterdock-db > /dev/null
       - run: helm lint deploy/helm/rosterdock --strict -f deploy/helm/rosterdock/examples/production.yaml
       - run: helm template rosterdock deploy/helm/rosterdock -f deploy/helm/rosterdock/examples/production.yaml > /dev/null
+      # board.privateDestinations renders as one value, and an entry whose comma or = would hand a company's
+      # destination to every company, or to another company, is refused.
+      - name: helm template, private destinations
+        run: |
+          set -euo pipefail
+          id=4f1aee73-e65e-4c8d-83f7-aa1169379d7f
+          values="$RUNNER_TEMP/private.yaml"
+          render() { helm template rosterdock deploy/helm/rosterdock --set postgres.externalSecret.name=rosterdock-db -f "$values"; }
+          refused() {
+            printf '%s\n' "board:" "  privateDestinations:" "    - $1" > "$values"
+            if render > /dev/null 2> "$RUNNER_TEMP/err.txt"; then echo "rendered: $1"; exit 1; fi
+            grep -F "$2" "$RUNNER_TEMP/err.txt"
+          }
+          printf '%s\n' "board:" "  privateDestinations:" "    - 10.20.0.0/16" \
+            "    - { company: \"$id\", destination: [ollama.internal, 10.30.0.0/16] }" > "$values"
+          render | grep -F "value: \"10.20.0.0/16,$id=ollama.internal,$id=10.30.0.0/16\""
+          refused "\"$id=a.internal,b.internal\"" "holds a company's entry and more in one string"
+          refused "{ company: \"$id\", destination: \"a.internal,b.internal\" }" "holds a comma or ="
+          refused "{ company: \"$id,x\", destination: a.internal }" "holds a comma or ="

@@ -286,8 +286,22 @@ export async function workerClaim(board: TestBoard, runId: string) {
     payload: { runId, jobId: job?.job_id ?? "00000000-0000-4000-8000-000000000000", workerId: "w" },
   });
   if (res.statusCode !== 201) throw new Error(`claim failed: ${res.statusCode} ${res.body}`);
-  const body = JSON.parse(res.body) as { token: string; pack: string; spec: Record<string, unknown> };
+  const body = JSON.parse(res.body) as {
+    token: string;
+    cloneKey: string;
+    pack: string;
+    spec: Record<string, unknown>;
+  };
+  cloneKeys.set(runId, body.cloneKey);
   return { ...body, api: board.api(body.token) };
+}
+
+/** The key each run's last claim gave the worker, for its report of the clone's commit. */
+export const cloneKeys = new Map<string, string>();
+
+/** As the worker does right after cloning: the commit the run's changes stand on, with its claim's key. */
+export async function reportCloned(board: TestBoard, token: string, runId: string, sha: string) {
+  return board.api(token).post(`/api/worker/runs/${runId}/cloned`, { sha, key: cloneKeys.get(runId) ?? "" });
 }
 
 /** Finish a claimed run as the worker would. */
@@ -297,6 +311,7 @@ export async function workerComplete(
   runId: string,
   body: Record<string, unknown> = { status: "completed", summary: "done" },
 ) {
+  if (typeof body.baseSha === "string") await reportCloned(board, token, runId, body.baseSha);
   const res = await board.api(token).post(`/api/worker/runs/${runId}/complete`, { usage: {}, ...body });
   if (res.status !== 200) throw new Error(`complete failed: ${res.status} ${JSON.stringify(res.body)}`);
   return res.body;

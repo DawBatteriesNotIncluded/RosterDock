@@ -11,11 +11,15 @@ import { fileURLToPath } from "node:url";
 import type { EventRecord } from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { callConnectionTool } from "../src/mcp/call.js";
+import { callMcpTool, discoverTools } from "../src/mcp/client.js";
+import { scrubbedChars } from "../src/mcp/scrub.js";
 import { loadConnection } from "../src/mcp/connections.js";
 import {
   authorizationUrl,
   discoverAuthorizationServer,
+  resourceAllowed,
   discoverResource,
+  IssuerUnusable,
   OAuthError,
   refreshTokens,
   registerClient,
@@ -24,6 +28,8 @@ import {
 import { rawUrl, STYLE_PACKS } from "../src/styles/catalog.js";
 import { parsePrivateDestinations } from "../src/web/address.js";
 import { companyEgress } from "../src/web/egress.js";
+import { fileSecretStore } from "../src/secrets/file.js";
+import { connectionSecretName } from "../src/secrets/store.js";
 import { fakeMcp } from "./mcp-fake.js";
 import { createOAuthFake } from "./oauth-fake.js";
 import { fakeOpenApi } from "./openapi-fake.js";
@@ -91,6 +97,8 @@ const documents: Record<string, unknown> = {
     code_challenge_methods_supported: ["S256"],
   },
 };
+/** Answered 500, by URL: a step a test makes fail. */
+const failing = new Set<string>();
 /** Every URL the transport was asked for: what the board sent. */
 const sent: string[] = [];
 const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -100,7 +108,10 @@ const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (moved) return new Response(null, { status: moved[0], headers: { location: moved[1] } });
   if (url in documents)
     return new Response(JSON.stringify(documents[url]), { headers: { "content-type": "application/json" } });
+  if (failing.has(url)) return new Response("{}", { status: 500 });
   const host = new URL(url).hostname;
+  // An authorization server that is down.
+  if (host === "auth.down.test") return new Response(null, { status: 503 });
   if (host.startsWith("crm.")) return crm.fetch(input, init);
   if (host.startsWith("hooks.")) return new Response("ok", { status: 200 });
   if (host === "raw.githubusercontent.com") return new Response("not the pinned file", { status: 200 });
@@ -196,6 +207,270 @@ describe("a company's MCP server over HTTP", () => {
     expect(checked.body.lastCheck).toMatchObject({ ok: true, error: null });
     expect(mcp.requests.every((r) => r.url === "https://mcp.slash.test/mcp/")).toBe(true);
     expect(mcp.requests[0]!.headers.authorization).toBe("Bearer slash-token-000000");
+  });
+
+  it("refuses to use or refresh a token a row kept for a resource its server may not speak for", async () => {
+    sent.length = 0;
+    const called = await callMcpTool(
+      {
+        transport: "http",
+        url: "https://mcp.hostile.test/mcp",
+        oauth: {
+          secretName: "rosterdock-connection-kept",
+          authorizationServer: "https://auth.real.test",
+          authorizedAt: "2026-10-01T00:00:00.000Z",
+          tokenEndpoint: "https://auth.real.test/token",
+          clientId: "c",
+          resource: "https://api.real.test/mcp",
+          tokenAuth: null,
+          clientSecretEnvName: null,
+        },
+      },
+      { egress: testEgress(transport, { resolve }) },
+      "whoami",
+      {},
+    );
+    expect(called).toEqual({
+      ok: false,
+      error:
+        "the connection's authorisation names a resource this server may not speak for (press Authorise on its card); nothing was called",
+    });
+    expect(sent).toEqual([]);
+  });
+
+  it("sends nothing another issuer issued, and a refresh that lost a race to Authorise writes nothing back", async () => {
+    const store = fileSecretStore(dir);
+    const secretName = "rosterdock-connection-race";
+    const target = {
+      transport: "http" as const,
+      url: "https://mcp.race.test/mcp",
+      oauth: {
+        secretName,
+        authorizationServer: "https://auth.race.test",
+        authorizedAt: "2026-10-01T00:00:00.000Z",
+        tokenEndpoint: "https://auth.race.test/token",
+        clientId: "c",
+        resource: "https://mcp.race.test/mcp",
+        tokenAuth: null,
+        clientSecretEnvName: null,
+      },
+    };
+    // An entry another issuer's, as a late write leaves one: neither sent nor refreshed.
+    sent.length = 0;
+    await store.put(secretName, {
+      issuer: "https://auth.other.test",
+      access_token: "other-access-0000",
+      refresh_token: "other-refresh-0000",
+    });
+    expect(
+      await callMcpTool(target, { egress: testEgress(transport, { resolve }), secrets: store }, "whoami", {}),
+    ).toEqual({
+      ok: false,
+      error: "the connection is not authorised (press Authorise on its card); nothing was called",
+    });
+    expect(sent).toEqual([]);
+    // A refresh in flight while Authorise moves the connection: its answer serves this call, and the store
+    // keeps what Authorise left, not the old issuer's secret and tokens.
+    await store.put(secretName, {
+      issuer: "https://auth.race.test",
+      client_secret: "race-secret-0000",
+      access_token: "race-access-0000",
+      refresh_token: "race-refresh-0000",
+      expires_at: "2026-01-01T00:00:00.000Z",
+    });
+    const racing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== "https://auth.race.test/token") return transport(input, init);
+      await store.put(secretName, { issuer: "https://auth.new.test" });
+      return new Response(
+        JSON.stringify({
+          access_token: "race-access-0001",
+          refresh_token: "race-refresh-0001",
+          expires_in: 3600,
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    expect(
+      await callMcpTool(target, { egress: testEgress(racing, { resolve }), secrets: store }, "whoami", {}),
+    ).toMatchObject({ ok: true });
+    expect(await store.get(secretName)).toEqual({ issuer: "https://auth.new.test" });
+  });
+
+  it("takes the credential out of what an MCP server says back, its errors included, however JSON escapes it", async () => {
+    // The recorded error answer, its words replaced by an echo of the bearer as a proxied API's log writes it:
+    // JSON in a string, PHP's \/ and .NET's +.
+    const recorded = (name: string) =>
+      JSON.parse(
+        readFileSync(
+          path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "mcp", name),
+          "utf8",
+        ),
+      ) as { result: Record<string, unknown> };
+    const error = recorded("tools-call-error.json");
+    // The recorded tools list, its first description echoing the bearer too: kept on the row, shown to teammates.
+    const listed = recorded("tools-list.json") as { result: { tools: Record<string, unknown>[] } };
+    const echoed = 'upstream refused {"authorization":"Bearer AbC\\u002BdEf\\u002BGhI\\/jKl="}';
+    const clean = 'upstream refused {"authorization":"Bearer [redacted]"}';
+    const echoing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as { id?: number; method?: string; params?: { name?: string } })
+        : null;
+      const json = (status: number, payload: unknown) =>
+        new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
+      // Text with a run of 256 backslashes, so every level is read, the credential echoed beside it.
+      const run = `${echoed} ${"\\".repeat(256)}x and some plain words between the runs `;
+      if (body?.method === "tools/list") {
+        const [first, ...rest] = listed.result.tools;
+        // At /mcp-wide, a page of 1,801 tools: the first with a name and a description of a megabyte each.
+        const wide = String(input instanceof Request ? input.url : input).endsWith("/mcp-wide");
+        const tools = wide
+          ? [
+              { ...first, name: run.repeat(2800), description: run.repeat(2800) },
+              ...Array.from({ length: 1800 }, (_, i) => ({ ...first, name: `t${i}`, description: run })),
+            ]
+          : [{ ...first, description: echoed }, ...rest];
+        return json(200, { ...listed, id: body.id, result: { ...listed.result, tools } });
+      }
+      if (body?.method !== "tools/call") return transport(input, init);
+      // A server error whose body the SDK repeats in its own words, short or of 3.6 MB.
+      if (body.params?.name === "broken") return json(500, { error: echoed });
+      if (body.params?.name === "broken-huge")
+        return json(500, { error: run.repeat(Math.ceil(3_600_000 / run.length)) });
+      // The recorded error answer's shape, its text and any structured content written in as JSON text: Node
+      // 22's JSON.stringify would overflow its stack on the 100,000 levels below.
+      const tool = body.params?.name;
+      const shaped = (text: string, structured: string | null) =>
+        new Response(
+          JSON.stringify({
+            ...error,
+            id: body.id,
+            result: {
+              ...error.result,
+              content: [{ type: "text", text: "@T" }],
+              isError: tool === "failing" || tool === "huge-error",
+              ...(structured === null ? {} : { structuredContent: { nested: "@S" } }),
+            },
+          })
+            .replace('"@T"', () => text)
+            .replace('"@S"', () => structured ?? ""),
+          { headers: { "content-type": "application/json" } },
+        );
+      // Structured content past what a teammate reads, nested past what the broker keeps; and 7 MB of text or
+      // of structured content, the credential echoed all through it beside chains of escapes.
+      const chain = run;
+      const mb = (n: number) => chain.repeat(Math.ceil((n * 1_000_000) / chain.length));
+      // One string of 3.6 MB as a value, one as a key, one as a tool's error; and JSON as text, its numbers
+      // holding a credential of digits.
+      if (tool === "huge-leaf") return shaped(JSON.stringify(echoed), JSON.stringify(mb(3.6)));
+      if (tool === "huge-key") return shaped(JSON.stringify(echoed), JSON.stringify({ [mb(3.6)]: 1 }));
+      if (tool === "huge-error") return shaped(JSON.stringify(mb(3.6)), null);
+      if (tool === "digits") return shaped(JSON.stringify('{"id":90012345678,"pin":12345678,"n":7}'), null);
+      // 7.8 MB of JSON as text, nested millions deep; and the credential written into JSON as it is.
+      if (tool === "nested-text")
+        return shaped(JSON.stringify(`${"[".repeat(3_900_000)}${"]".repeat(3_900_000)}`), null);
+      if (tool === "interpolated")
+        return shaped(JSON.stringify('{"echo":"Bearer tok\\n\\"en-12345","n":1}'), null);
+      if (tool === "large")
+        return shaped(
+          JSON.stringify(echoed),
+          JSON.stringify({ log: Array.from({ length: 4000 }, (_, i) => ({ i, echoed })) }),
+        );
+      if (tool === "deep")
+        return shaped(
+          JSON.stringify(echoed),
+          `${"[".repeat(100_000)}${JSON.stringify(echoed)}${"]".repeat(100_000)}`,
+        );
+      if (tool === "huge-text")
+        return shaped(JSON.stringify(chain.repeat(Math.ceil(3_600_000 / chain.length))), null);
+      if (tool === "huge-structured")
+        return shaped(
+          JSON.stringify(echoed),
+          JSON.stringify({ log: Array(Math.ceil(3_600_000 / chain.length)).fill(chain) }),
+        );
+      return shaped(JSON.stringify(echoed), null);
+    }) as typeof fetch;
+    const target = {
+      transport: "http" as const,
+      url: "https://mcp.echo.test/mcp",
+      authEnvName: "ECHO_TOKEN",
+    };
+    const deps = { egress: testEgress(echoing, { resolve }), env: { ECHO_TOKEN: "AbC+dEf+GhI/jKl=" } };
+    const call = (tool: string) => callMcpTool(target, deps, tool, {});
+    expect((await discoverTools(target, deps))[0]!.description).toBe(clean);
+    expect(await call("failing")).toEqual({ ok: false, error: clean });
+    expect(await call("answering")).toEqual({ ok: true, result: clean });
+    // Larger than a teammate reads: walked as a value as far as it goes, the credential out, and said to be cut.
+    const large = (await call("large")) as { ok: true; result: { truncated: boolean; value: unknown } };
+    expect(large.result.truncated).toBe(true);
+    expect(JSON.stringify(large.result.value).length).toBeLessThan(260_000);
+    expect(JSON.stringify(large.result.value)).toContain("[redacted]");
+    expect(JSON.stringify(large.result.value)).not.toMatch(/AbC|dEf|GhI/);
+    // Nested past twelve levels: written "[depth]" there, as the broker would, never read whole.
+    let deep = ((await call("deep")) as { ok: true; result: { nested: unknown } }).result.nested;
+    for (let i = 0; i < 12; i++) deep = (deep as unknown[])[0];
+    expect(deep).toBe("[depth]");
+    // 3.6 MB of either, a run of 256 backslashes all through it so every level is read, is cut before it is
+    // scrubbed: what the server sent does not set the work. Scrubbing all of it reads 14 million characters.
+    // So is one string of 3.6 MB as a value, as a key, or as an error, the tool's or one the SDK words from a
+    // server's body.
+    for (const tool of [
+      "huge-text",
+      "huge-structured",
+      "huge-leaf",
+      "huge-key",
+      "huge-error",
+      "broken-huge",
+    ]) {
+      const before = scrubbedChars();
+      const huge = (await call(tool)) as { ok: boolean; result?: unknown };
+      expect(scrubbedChars() - before, tool).toBeLessThan(3_000_000);
+      expect(huge.ok, tool).toBe(!["huge-error", "broken-huge"].includes(tool));
+      expect(JSON.stringify(huge), tool).not.toMatch(/AbC|dEf|GhI/);
+    }
+    // A key the budget cannot hold leaves its entry out, rather than lose the name that marks it secret.
+    expect(((await call("huge-key")) as { result: unknown }).result).toEqual({
+      truncated: true,
+      value: { nested: {} },
+    });
+    // A tools page of 1,801, the first with fields of a megabyte: a thousand read, each field to 2,000.
+    const before = scrubbedChars();
+    const wide = await discoverTools({ ...target, url: "https://mcp.echo.test/mcp-wide" }, deps);
+    expect(scrubbedChars() - before).toBeLessThan(1_600_000);
+    expect(wide).toHaveLength(1000);
+    expect(wide[0]!.description.length).toBeLessThanOrEqual(2000);
+    expect(JSON.stringify(wide)).not.toMatch(/AbC|dEf|GhI/);
+    // JSON as text is read as a value first: a number holding the credential of digits, or equal to it with
+    // its leading zeros gone, goes; scrubbing the text first broke the JSON and kept the second.
+    const pin = await callMcpTool(
+      { ...target, authEnvName: "PIN_TOKEN" },
+      { ...deps, env: { PIN_TOKEN: "0012345678" } },
+      "digits",
+      {},
+    );
+    expect(pin).toEqual({ ok: true, result: '{"id":9[redacted],"pin":[redacted],"n":7}' });
+    // A credential holding escapes of its own, written into JSON as it is: JSON reads them away, so the text is
+    // scrubbed before it is parsed.
+    const interpolated = await callMcpTool(
+      { ...target, authEnvName: "ODD_TOKEN" },
+      { ...deps, env: { ODD_TOKEN: 'tok\\n\\"en-12345' } },
+      "interpolated",
+      {},
+    );
+    expect(interpolated).toEqual({ ok: true, result: { echo: "Bearer [redacted]", n: 1 } });
+    // JSON text past the budget is never parsed: nested millions deep, it took 645 MB to. It comes back cut,
+    // as text, and the board's peak memory barely moves.
+    const peak = process.resourceUsage().maxRSS;
+    const reads = scrubbedChars();
+    const nested = (await call("nested-text")) as { ok: true; result: unknown };
+    expect(typeof nested.result).toBe("string");
+    expect((nested.result as string).length).toBeLessThanOrEqual(200_000);
+    expect(scrubbedChars() - reads).toBeLessThan(3_000_000);
+    expect(process.resourceUsage().maxRSS - peak).toBeLessThan(300 * 1024);
+    expect(((await call("huge-text")) as { result: string }).result.length).toBeLessThanOrEqual(200_000);
+    const broken = await call("broken");
+    expect(broken.ok).toBe(false);
+    expect(JSON.stringify(broken)).toContain("[redacted]");
+    expect(JSON.stringify(broken)).not.toMatch(/AbC|dEf|GhI/);
   });
 
   it("reaches what the operator lists, a name or a range, and nothing beside it; a tool call is held to the same", async () => {
@@ -378,12 +653,54 @@ describe("OAuth for a company's connection", () => {
       "one.example.test names an authorization server that is a javascript URL, not https",
     );
     await expect(discoverResource("https://two.example.test/mcp", deps())).rejects.toThrow(
-      "two.example.test declares itself a resource on another server",
+      "two.example.test declares itself a resource that is not this server",
     );
     expect(await discoverResource("https://three.example.test/mcp", deps())).toMatchObject({
       authorizationServer: "https://auth.example.test",
       resource: "https://three.example.test",
     });
+    // On a shared origin, a server speaks for its own path and what is above it, never for a sibling.
+    resourceAt("https://gw.example.test/servers/a/mcp", {
+      authorization_servers: ["https://auth.example.test"],
+      resource: "https://gw.example.test/servers/b",
+    });
+    resourceAt("https://gw.example.test/servers/c/mcp", {
+      authorization_servers: ["https://auth.example.test"],
+      resource: "https://gw.example.test/servers/c",
+    });
+    await expect(discoverResource("https://gw.example.test/servers/a/mcp", deps())).rejects.toThrow(
+      "gw.example.test declares itself a resource that is not this server",
+    );
+    expect(await discoverResource("https://gw.example.test/servers/c/mcp", deps())).toMatchObject({
+      resource: "https://gw.example.test/servers/c",
+    });
+    for (const [declared, ok] of [
+      ["https://gw.example.test/servers/c/mcp", true],
+      ["https://gw.example.test/servers/c/", true],
+      ["https://gw.example.test/", true],
+      ["https://gw.example.test/servers/cc", false],
+      ["https://gw.example.test/servers/c/mcp/more", false],
+      ["https://gw.example.test/servers/c/mcp/", false],
+      ["https://gw.example.test:8443/servers/c", false],
+      ["not a url", false],
+    ] as const)
+      expect(resourceAllowed(declared, "https://gw.example.test/servers/c/mcp"), declared).toBe(ok);
+    // The issuer a row keeps is the one asked for and checked, whatever the document calls itself; and a
+    // document past its cap is said to be one, not a server out of reach.
+    metadata["https://keyed.example.test/.well-known/oauth-authorization-server"] = {
+      issuer: "http://keycloak.internal:8080/realms/x",
+      authorization_endpoint: "https://keyed.example.test/authorize",
+      token_endpoint: "https://keyed.example.test/token",
+    };
+    expect((await discoverAuthorizationServer("https://keyed.example.test", deps())).issuer).toBe(
+      "https://keyed.example.test",
+    );
+    metadata["https://big.example.test/.well-known/oauth-authorization-server"] = {
+      padding: "x".repeat(300_000),
+    };
+    await expect(discoverAuthorizationServer("https://big.example.test", deps())).rejects.toThrow(
+      "big.example.test answered with a document larger than 256 KB",
+    );
     // Plain http to a name whose every address is in a listed range is taken, as for a connection.
     names["keycloak.ranged.test"] = ["10.40.0.5"];
     server("http://keycloak.ranged.test", {});
@@ -394,6 +711,26 @@ describe("OAuth for a company's connection", () => {
     await expect(
       discoverAuthorizationServer("http://keycloak.ranged.test", deps("10.41.0.0/16")),
     ).rejects.toThrow(
+      "the authorization server's address is plain http to a server this board's operator does not list",
+    );
+    // Refused, but not unusable: a name that does not resolve now may later, so Authorise moves nothing.
+    names["keycloak.ranged.test"] = [];
+    const unresolved = await discoverAuthorizationServer(
+      "http://keycloak.ranged.test",
+      deps("10.40.0.0/16"),
+    ).catch((err: unknown) => err);
+    expect(unresolved).toBeInstanceOf(OAuthError);
+    expect(unresolved).not.toBeInstanceOf(IssuerUnusable);
+    expect((unresolved as Error).message).toBe(
+      "the authorization server's address is plain http to a name that does not resolve",
+    );
+    // With no range listed it could resolve into, it is refused outright, and Authorise may move on.
+    const unlisted = await discoverAuthorizationServer(
+      "http://keycloak.ranged.test",
+      deps("auth.other.test"),
+    ).catch((err: unknown) => err);
+    expect(unlisted).toBeInstanceOf(IssuerUnusable);
+    expect((unlisted as Error).message).toBe(
       "the authorization server's address is plain http to a server this board's operator does not list",
     );
     delete names["keycloak.ranged.test"];
@@ -437,19 +774,152 @@ describe("OAuth for a company's connection", () => {
       oauth: {},
     });
     expect((await api.post(`${base}/connections/${created.body.id}/oauth/start`, {})).status).toBe(200);
-    // What a row kept before: another service's resource.
-    await board.db.query(
-      `UPDATE connections SET oauth = jsonb_set(oauth, '{resource}', '"https://api.other.test/mcp"') WHERE id = $1 AND company_id = $2`,
-      [created.body.id, companyId],
-    );
+    const store = fileSecretStore(dir);
+    const name = connectionSecretName(created.body.id);
+    const registeredSecret = (await store.get(name))?.client_secret;
+    const row = async () =>
+      (
+        await board.db.query<{ oauth: Record<string, unknown> }>(
+          "SELECT oauth FROM connections WHERE id = $1",
+          [created.body.id],
+        )
+      ).rows[0]!.oauth;
+    // What a row kept before: tokens, minted for another service's resource.
+    const authorised = async (patch: Record<string, unknown>) => {
+      await store.put(name, {
+        ...(registeredSecret ? { client_secret: registeredSecret } : {}),
+        access_token: "old-access-000000",
+        refresh_token: "old-refresh-000000",
+      });
+      await board.db.query(
+        "UPDATE connections SET oauth = oauth || $3::jsonb WHERE id = $1 AND company_id = $2",
+        [created.body.id, companyId, JSON.stringify({ authorizedAt: "2026-10-01T00:00:00.000Z", ...patch })],
+      );
+    };
+    await authorised({ resource: "https://api.other.test/mcp" });
     const again = await api.post(`${base}/connections/${created.body.id}/oauth/start`, {});
     expect(again.status).toBe(200);
     expect(new URL(again.body.url).searchParams.get("resource")).toBe("https://mcp.reauth.test/mcp");
-    const kept = await board.db.query<{ resource: string | null }>(
-      "SELECT oauth->>'resource' AS resource FROM connections WHERE id = $1",
-      [created.body.id],
+    expect((await row()).resource).toBe("https://mcp.reauth.test/mcp");
+    // Before anyone consents, the old tokens are gone and the row is not authorised: nothing old is sent if the
+    // person never comes back. The client the board registered there stays.
+    expect((await row()).authorizedAt).toBeNull();
+    expect(await store.get(name)).toEqual({
+      issuer: "https://auth.reauth.test",
+      ...(registeredSecret ? { client_secret: registeredSecret } : {}),
+    });
+    // A row that kept an issuer that is refused now (the document's own word, from before the board kept the one
+    // it asked for): found again from the server's document, its tokens gone, its client registered there anew.
+    const clientBefore = (await row()).clientId;
+    await authorised({ authorizationServer: "http://keycloak.internal:8080/realms/x", registered: true });
+    const healed = await api.post(`${base}/connections/${created.body.id}/oauth/start`, {});
+    expect(healed.status).toBe(200);
+    expect((await row()).authorizationServer).toBe("https://auth.reauth.test");
+    expect((await row()).authorizedAt).toBeNull();
+    expect((await row()).clientId).not.toBe(clientBefore);
+    expect((await store.get(name))?.access_token).toBeUndefined();
+  });
+
+  it("moves a connection to another issuer only when its own is refused or publishes nothing, the row first, never a person's client", async () => {
+    resetOAuthCaches();
+    const { owner, api, base, companyId } = await seedCompany(board, "egress-oauth-moved@example.com");
+    const created = await api.post(`${base}/connections`, {
+      name: "moved",
+      url: "https://mcp.reauth.test/mcp",
+      oauth: {},
+    });
+    const start = () => api.post(`${base}/connections/${created.body.id}/oauth/start`, {});
+    expect((await start()).status).toBe(200);
+    const store = fileSecretStore(dir);
+    const name = connectionSecretName(created.body.id);
+    const row = async () =>
+      (
+        await board.db.query<{ oauth: Record<string, unknown> }>(
+          "SELECT oauth FROM connections WHERE id = $1",
+          [created.body.id],
+        )
+      ).rows[0]!.oauth;
+    // What a row kept from another issuer: its client, its secret and its tokens.
+    const old = {
+      client_secret: "old-client-secret-0000",
+      access_token: "old-access-000000",
+      refresh_token: "old-refresh-000000",
+    };
+    const kept = async (patch: Record<string, unknown>) => {
+      await store.put(name, old);
+      await board.db.query(
+        "UPDATE connections SET oauth = oauth || $3::jsonb WHERE id = $1 AND company_id = $2",
+        [
+          created.body.id,
+          companyId,
+          JSON.stringify({ authorizedAt: "2026-10-01T00:00:00.000Z", clientId: "old-client", ...patch }),
+        ],
+      );
+    };
+    // An issuer that is down is the answer for now: nothing moves and nothing goes.
+    await kept({ authorizationServer: "https://auth.down.test", registered: true });
+    const down = await start();
+    expect(down.status).toBe(502);
+    expect(down.body.error).toBe("auth.down.test answered HTTP 503 for its authorization server metadata");
+    expect(await row()).toMatchObject({
+      authorizationServer: "https://auth.down.test",
+      clientId: "old-client",
+    });
+    expect(await store.get(name)).toEqual(old);
+    // A refused issuer moves to the one the server names. The row and its event come first, so when
+    // registering there fails the connection is left with no client and no authorisation, not stranded,
+    // and the store with neither the old secret nor a token.
+    const refused = "http://keycloak.internal:8080/realms/x";
+    await kept({ authorizationServer: refused, registered: true });
+    failing.add("https://auth.reauth.test/register");
+    const half = await start();
+    failing.clear();
+    expect(half.status).toBe(502);
+    expect(await row()).toMatchObject({
+      authorizationServer: "https://auth.reauth.test",
+      clientId: null,
+      registered: false,
+      authorizedAt: null,
+    });
+    expect(await store.get(name)).toEqual({ issuer: "https://auth.reauth.test" });
+    const moved = (await api.get(`${base}/events`)).body as EventRecord[];
+    expect(
+      moved.some(
+        (e) =>
+          e.type === "connection.updated" &&
+          e.subject?.id === created.body.id &&
+          e.payload.authorizationServer === "https://auth.reauth.test" &&
+          e.payload.authorized === false,
+      ),
+    ).toBe(true);
+    // The next Authorise registers there and goes on.
+    const begun = await start();
+    expect(begun.status).toBe(200);
+    expect(await row()).toMatchObject({ authorizationServer: "https://auth.reauth.test", registered: true });
+    expect((await row()).clientId).not.toBeNull();
+    expect((await store.get(name))?.issuer).toBe("https://auth.reauth.test");
+    // Begun there and finished after the connection moved on: the code and its verifier stay where they began.
+    await board.db.query(
+      "UPDATE connections SET oauth = oauth || $3::jsonb WHERE id = $1 AND company_id = $2",
+      [created.body.id, companyId, JSON.stringify({ authorizationServer: "https://auth.elsewhere.test" })],
     );
-    expect(kept.rows[0]!.resource).toBe("https://mcp.reauth.test/mcp");
+    sent.length = 0;
+    const late = await board.app.inject({
+      method: "GET",
+      url: `/api/oauth/callback?code=c-1&state=${new URL(begun.body.url).searchParams.get("state")}`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(late.headers.location).toBe("http://rosterdock.test/?oauth_error=moved");
+    expect(sent).toEqual([]);
+    // A client a person gave was registered at the issuer it was given for: neither it nor its secret moves.
+    await kept({ authorizationServer: refused, registered: false });
+    const given = await start();
+    expect(given.status).toBe(409);
+    expect(given.body.error).toBe(
+      "moved's server now names auth.reauth.test as its authorization server, and the client id it was given is for another; remove the connection and add it again with a client id registered at auth.reauth.test",
+    );
+    expect(await row()).toMatchObject({ authorizationServer: refused, clientId: "old-client" });
+    expect(await store.get(name)).toEqual(old);
   });
 
   it("follows discovery's redirects with every hop checked, follows none for registration or a token, and reaches a listed server", async () => {
@@ -572,9 +1042,10 @@ describe("a private destination the operator gives one company", () => {
   it("is that company's alone: its connections, OAuth and webhook reach it, another company's are refused", async () => {
     const a = await seedCompany(board, "egress-company-a@example.com");
     const b = await seedCompany(board, "egress-company-b@example.com");
-    // 10.9.0.0/16 is every company's already: listed for A too, it is not shown as A's own.
+    // 10.9.0.0/16 is every company's already, and covers 10.9.4.0/24: listed for A too, neither is shown as
+    // A's own.
     allow.companies = parsePrivateDestinations(
-      `${a.companyId}=mcp.only-a.test,${a.companyId}=hooks.only-a.test,${a.companyId}=10.9.0.0/16`,
+      `${a.companyId}=mcp.only-a.test,${a.companyId}=hooks.only-a.test,${a.companyId}=10.9.0.0/16,${a.companyId}=10.9.4.0/24`,
     ).companies;
     try {
       const refused = (host: string) => `refused: ${host} resolves to a private address, ${NOT_ALLOWED}`;
