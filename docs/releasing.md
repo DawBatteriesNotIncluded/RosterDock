@@ -97,6 +97,3 @@ their parsers' fixtures were recorded with; moving one means recording the fixtu
   are named by the matrix's Node versions, so a change to the matrix changes the ruleset with it, or every
   pull request waits on a check that never runs. The `release tags` ruleset forbids moving or deleting a `v*`
   tag. Anyone who can push a `v*` tag publishes.
-- **The pre-release sentences.** When 0.1.0 ships, delete the sentence in `README.md`'s Status that says
-  nothing is published, and the two sentences directly under "Where the images and the chart come from" in
-  `docs/install.md`.

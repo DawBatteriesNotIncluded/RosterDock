@@ -6,7 +6,7 @@ Every release of RosterDock, newest first. A release is one version shared by th
 [Semantic Versioning](https://semver.org/): before 1.0 a minor version may break something, and its entry
 says what. How to upgrade is in `docs/operator.md`; how a release is cut, in `docs/releasing.md`.
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-23)
 
 The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `docs/m0.md` to
 `docs/m6.md`) and the backlog worked after them.
@@ -15,8 +15,8 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
 
 - Departments of AI teammates, each a brain (Claude Code, Codex or the stub engine), a persona and a governed
   toolbox of MCP and OpenAPI connections.
-- Peter, the project-manager teammate, who plans goals into tasks by role, watches them and re-plans; department
-  leads plan inside their departments.
+- Peter, the project-manager teammate, who plans goals into tasks by role, watches them and re-plans;
+  department leads plan inside their departments.
 - A shared kanban, messages and an inbox between teammates, and hunk-level reviews with checks. An approved
   review, never a teammate, marks work done, and may open a pull request (GitHub) or a merge request (GitLab).
 - Writes to live systems as propose, approve, execute, bound to the exact payload by its sha256.
@@ -84,28 +84,29 @@ Against the images built from the pre-release tree (then called Pharo, not publi
   page loaded them from Google Fonts: an install without internet access shows them, and no page load sends
   a visitor's address to Google.
 - What a company chooses the board should reach (an MCP server or OpenAPI service, the OAuth endpoints its
-  server names, the company's own webhook and SMTP server) must be at a public address, by the address
-  ranges the web connection refuses, unless the operator lists it in `board.privateDestinations`
+  server names, the company's own webhook and SMTP server) must be at a public address, by the address ranges
+  the web connection refuses, unless the operator lists it in `board.privateDestinations`
   (`ROSTERDOCK_PRIVATE_DESTINATIONS`; empty by default). A connection at a private address (loopback, the
   private ranges, link-local and cloud metadata) fails its check and its calls with "refused: … which this
   board's operator has not allowed" until it is listed. The check goes by address range: cluster addresses
   outside the private ranges, and public addresses that lead inside, pass it, so the network policy still
   matters (`docs/security.md`). An MCP server that redirects to another server, and an OpenAPI operation or a
-  webhook that answers with any redirect, fails and names the server it pointed to. An MCP server's
-  redirect within its own server is followed when the call arrives as sent (307, 308); a 301 or 302, as an
+  webhook that answers with any redirect, fails and names the server it pointed to. An MCP server's redirect
+  within its own server is followed when the call arrives as sent (307, 308); a 301 or 302, as an
   http-to-https rule sends, would turn the call into a GET, so it fails and says what to change (over https,
-  or with or without the trailing slash). An answer is read only up to its call site's cap,
-  decoded. What an OpenAPI or MCP server says back, its errors and tool descriptions included, loses the
-  credential however JSON escapes it, eight levels deep at most. OAuth endpoints must be https (http only to a listed destination), and the resource an MCP server
-  declares must be on its own origin, at or above its MCP URL's path; a connection that kept one that is not,
-  or an issuer now refused or without metadata, is discovered again at its next Authorise, its old tokens
-  dropped and nothing of one issuer sent to another (a person's client id is refused there). The board's own destinations (git hosts, OIDC, OTLP, the bucket, the
-  API server, the model API, its webhook and SMTP server) are not checked. An entry may be one company's
-  alone (`<company id>=<entry>`, or `{ company, destination }` in the chart), which no other company's
-  connections reach, unless an entry for every company covers it too, and no other company sees (a stdio
-  command is outside the check, as before). Settings shows owners and admins the entries that apply to their company, and flags a URL whose
-  address the board refuses or whose name looks private and is not listed. `docs/operator.md` (Private
-  destinations) says what to list.
+  or with or without the trailing slash). An answer is read only up to its call site's cap, decoded. What an
+  OpenAPI or MCP server says back, its errors and tool descriptions included, loses the credential however
+  JSON escapes it, eight levels deep at most. OAuth endpoints must be https (http only to a listed
+  destination), and the resource an MCP server declares must be on its own origin, at or above its MCP URL's
+  path; a connection that kept one that is not, or an issuer now refused or without metadata, is discovered
+  again at its next Authorise, its old tokens dropped and nothing of one issuer sent to another (a person's
+  client id is refused there). The board's own destinations (git hosts, OIDC, OTLP, the bucket, the API
+  server, the model API, its webhook and SMTP server) are not checked. An entry may be one company's alone
+  (`<company id>=<entry>`, or `{ company, destination }` in the chart), which no other company's connections
+  reach, unless an entry for every company covers it too, and no other company sees (a stdio command is
+  outside the check, as before). Settings shows owners and admins the entries that apply to their company, and
+  flags a URL whose address the board refuses or whose name looks private and is not listed.
+  `docs/operator.md` (Private destinations) says what to list.
 
 ### Renamed
 
@@ -164,16 +165,17 @@ install built from that tree changes each of these:
   The secrets check now scans every binary file's bytes (UTF-8, UTF-16 and UTF-32) and binds their sha256,
   before the transaction that opens the review and up to 64 MB a run; a pull request writes only those bytes,
   and a binary file goes into a pull request only where a person approved: a teammate's approval hands the
-  review to people, who are told (a needs-you sentence). A teammate still approves binary deliverables where no
-  pull request opens, unless the scan could not read one (past 64 MB or 100 files, or under another spelling of its name). The worker takes out the
-  `.git/info` the run could write and reads no system attributes file. A pull request now starts opening only
-  for a review still approved. Upgrading: a review open before the upgrade with a binary file fails its pull
-  request on approval, saying so; a person vetoes the approval and requests changes.
-- A pull request was built on whatever commit the run's clone was left at, so a run that checked out another ref
-  (an unmerged branch, a fork's pull request) carried its commits into the change, unreviewed. The worker now
-  reports the commit it cloned before the engine starts, with a key its claim gave it that the engine never
-  sees, a run that moved off it fails, and a pull request is built on that commit only. Upgrading: a review
-  whose run an older worker did fails its pull request, saying so.
+  review to people, who are told (a needs-you sentence). A teammate still approves binary deliverables where
+  no pull request opens, unless the scan could not read one (past 64 MB or 100 files, or under another
+  spelling of its name). The worker takes out the `.git/info` the run could write and reads no system
+  attributes file. A pull request now starts opening only for a review still approved. Upgrading: a review
+  open before the upgrade with a binary file fails its pull request on approval, saying so; a person vetoes
+  the approval and requests changes.
+- A pull request was built on whatever commit the run's clone was left at, so a run that checked out another
+  ref (an unmerged branch, a fork's pull request) carried its commits into the change, unreviewed. The worker
+  now reports the commit it cloned before the engine starts, with a key its claim gave it that the engine
+  never sees, a run that moved off it fails, and a pull request is built on that commit only. Upgrading: a
+  review whose run an older worker did fails its pull request, saying so.
 - A run delivered a declared output that git left out of the diff (ignored, or under `.git`), unshown and
   unscanned, and completed with an empty review where git read a file with a late NUL byte as text (the board
   refused the diff). Both now fail the run, naming the file. A declared output the run hid behind a
@@ -187,7 +189,6 @@ install built from that tree changes each of these:
 - Handing Peter a goal could fail with an internal error, and leave it half planned, when Peter's loop started
   the plan's first task while the rest were still being filed: filing a task and starting the task it waits on
   took their locks in opposite orders, and Postgres broke the deadlock by cancelling the filing.
-
 - A teammate hired from the built-in 'Cody 3' template, or put on OpenCode in its editor, failed every run:
   no worker runs OpenCode yet. The template runs on Claude Code, and the pickers no longer offer OpenCode.
 - Activity and the Company page showed a teammate's logged decision by its raw event name, and a task a
@@ -198,3 +199,19 @@ install built from that tree changes each of these:
 - CI's token only reads the repository, every action is pinned to a commit with its tag beside it, and
   Dependabot proposes updates to the actions, the npm workspace and the images' base images a week after
   each is released (security updates at once).
+
+### Known issues
+
+- A change to a file with Windows line endings (CRLF) cannot become a pull request: the board reads the
+  review's diff with plain line endings, so the change no longer matches the file it patches and opening the
+  pull request fails. A new file with CRLF endings is committed with plain ones.
+- A text file that is not UTF-8 (Latin-1, Windows-1252) is read as UTF-8 on its way into a pull request, so
+  every byte in it that is not valid UTF-8 becomes U+FFFD, in lines the run did not touch too. Read the pull
+  request's own diff before merging such a file.
+- Pull requests write every file as an ordinary file (mode 100644): a script the run changed loses its
+  executable bit, a new symbolic link or submodule is committed as a plain file, and a change of mode the run
+  made is dropped.
+- What a connected service sends back loses a company's credentials only in the forms `docs/security.md`
+  lists (as written, and as JSON escapes up to eight levels deep). Other encodings are not read
+  (percent-encoding, HTML entities, base64, a body in UTF-16 or Latin-1), and a credential shorter than 6
+  characters is never scrubbed.

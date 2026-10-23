@@ -76,9 +76,6 @@ can reach, turn it off and configure OIDC first (below). `deploy/scripts/serve.s
 
 ## Where the images and the chart come from
 
-Nothing is published until 0.1.0 is released, so the images, tags and chart below do not exist yet. Until
-then, build the images from a checkout and install the chart from `deploy/helm/rosterdock`.
-
 Every release is one version, cut from a `v` tag by `.github/workflows/release.yml`; `CHANGELOG.md` says
 what each one changed.
 

@@ -26,8 +26,8 @@ review and done._
 
 ## Status
 
-Alpha, with breaking changes to come ([`CHANGELOG.md`](CHANGELOG.md)). Version 0.1.0 is being prepared and
-nothing is published (no tag, release, images or chart), so RosterDock runs from a checkout.
+Alpha, with breaking changes to come ([`CHANGELOG.md`](CHANGELOG.md)). Each release is published as three
+images and a Helm chart; [`docs/install.md`](docs/install.md) installs one.
 
 Good to know:
 
