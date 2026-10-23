@@ -35,6 +35,7 @@ export const ACTIONS = [
   "review.assign",
   "approval.decide",
   "connection.manage",
+  "model.manage",
 ] as const;
 export type Action = (typeof ACTIONS)[number];
 
@@ -73,6 +74,8 @@ const MATRIX: Record<Action, readonly Role[]> = {
   "approval.decide": OWNERS_ADMINS,
   // Add, discover, reclassify or remove a connection to an external system. Humans only.
   "connection.manage": OWNERS_ADMINS,
+  // Add, change, check or remove the company's model providers: whose account its teammates think with.
+  "model.manage": OWNERS_ADMINS,
 };
 
 export function can(role: Role, action: Action): boolean {

@@ -51,6 +51,11 @@ board:
   #  - "npx -y @modelcontextprotocol/server-memory@2026.8.31"
   #  - "npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /home/node/data/drive"
   stdioCommands: []
+  # The model provider kinds a company may add (ROSTERDOCK_MODEL_PROVIDERS): anthropic, openai, azure_openai,
+  # bedrock, openai_compatible, and board, which lends the board's own models to every company. A provider's
+  # credentials are names, resolved as connections' are (its own secrets, then sharedEnvNames). Empty: every
+  # kind and board. [board] alone: no company providers. The board does not start on an entry it does not know.
+  modelProviders: []
   # Needs-you notifications go to this webhook URL (may carry a token), by NAME from a Secret. Empty: none,
   # unless a company names its own (one of its secrets, or a name in sharedEnvNames) in Settings.
   notifySecret:

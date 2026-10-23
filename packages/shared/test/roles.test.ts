@@ -33,6 +33,10 @@ describe("permission matrix", () => {
     expect(can("reviewer", "approval.decide")).toBe(false);
     expect(can("admin", "approval.decide")).toBe(true);
     expect(can("admin", "connection.manage")).toBe(true);
+    // Whose model account a teammate thinks with is a person's choice.
+    expect(can("teammate", "model.manage")).toBe(false);
+    expect(can("reviewer", "model.manage")).toBe(false);
+    expect(can("admin", "model.manage")).toBe(true);
   });
 
   it("reviewers contribute to tasks and conversations but do not manage structure", () => {

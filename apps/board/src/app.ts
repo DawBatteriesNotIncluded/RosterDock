@@ -20,6 +20,7 @@ import type { SmtpOptions } from "./notify/smtp.js";
 import { registerNotifyRoutes } from "./routes/notify.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
 import { registerConnectionRoutes } from "./routes/connections.js";
+import { registerProviderRoutes } from "./routes/providers.js";
 import { registerSecretRoutes } from "./routes/secrets.js";
 import { registerBudgetRoutes } from "./routes/budgets.js";
 import { registerCompanyRoutes } from "./routes/companies.js";
@@ -351,6 +352,7 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
     operator,
   });
   registerSecretRoutes(app, db, secrets);
+  registerProviderRoutes(app, { db, operator, policy: config.modelProviders, egress });
   // What this board can do beyond the basics, for the web to show the right controls. Names only; what the
   // operator lets connections reach goes to the people who manage connections somewhere. The private
   // destinations the operator gave one company alone go to that company's owners and admins only, when the

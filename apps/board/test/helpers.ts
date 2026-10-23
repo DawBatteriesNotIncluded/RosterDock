@@ -3,6 +3,7 @@
 // localhost Postgres; global.fetch is never real.
 
 import { randomBytes } from "node:crypto";
+import { parseModelProviders } from "@rosterdock/shared";
 import pg from "pg";
 import type { FastifyInstance } from "fastify";
 import { buildApp, type BoardApp } from "../src/app.js";
@@ -128,6 +129,7 @@ export function testConfig(databaseUrl: string, overrides: Partial<BoardConfig> 
     sharedEnvNames: [],
     stdioCommands: [],
     companyCreators: null,
+    modelProviders: parseModelProviders(undefined),
     ...overrides,
   };
 }

@@ -272,6 +272,35 @@ networkPolicy:
   it judges an address by its range, so cluster addresses outside the private ranges look public to it
   (`docs/security.md`), and only the network policy keeps companies from those.
 
+## Company model providers
+
+A company can keep its own model accounts as providers (`/api/companies/:companyId/model-providers`):
+Anthropic, OpenAI, Azure OpenAI, Amazon Bedrock, or a server that speaks OpenAI's API (vLLM, Ollama,
+LiteLLM). A provider holds its endpoint or region, the models it serves, and the env var names of its
+credentials, never a value: a company sets a value once, write-only, under Settings > Connections > Secrets,
+or names one you share (`board.sharedEnvNames`). Owners and admins add, change and remove providers; everyone
+in the company sees them by name.
+
+- `board.modelProviders` (`ROSTERDOCK_MODEL_PROVIDERS`) lists the kinds a company may add: `anthropic`,
+  `openai`, `azure_openai`, `bedrock`, `openai_compatible`, and `board`, which lends the board's own models to
+  every company. Empty: all of them. `[board]` alone: no company providers. The board does not start on an
+  entry it does not know.
+
+  ```yaml
+  board:
+    modelProviders: [anthropic, bedrock, board] # Anthropic and Bedrock accounts, and the board's own models
+  ```
+
+- Taking a kind off the list deletes no provider. The company keeps it, marked as no longer offered, and can
+  switch it off, archive it or remove it.
+- An endpoint a company gives (an Azure resource, a compatible server) is checked as a connection's URL is:
+  public, or private where `board.privateDestinations` lists it (Private destinations, above), and plain http
+  only to a listed destination. An Azure private endpoint is a name that resolves to a private address, so it
+  needs an entry too. Anthropic, OpenAI and Bedrock have fixed hosts, or hosts taken from the region.
+- Teammates do not think with a company's provider yet: every run and every plan uses the board's own models.
+  Until they do, leaving `board` out of the list changes nothing for runs and plans; it only shows companies
+  that the board's own models are not lent.
+
 ## Upgrades and backups
 
 - Upgrade by naming the next chart version (`docs/install.md`, Upgrading). The chart's version is its
@@ -320,6 +349,7 @@ setting with no value of its own from `board.extraEnv`. The ones an operator cha
 | `ROSTERDOCK_SHARED_ENV_NAMES`                | Env var names on the board every company may name besides its own secrets (chart `board.sharedEnvNames`), comma-separated; nothing else on the board reaches a company. Any company's admins can send a shared value anywhere, so share only what every company may hold; the board will not start with one of its own names (`docs/security.md`). Empty: none.        |
 | `ROSTERDOCK_PRIVATE_DESTINATIONS`            | The private destinations a company may make the board reach (chart `board.privateDestinations`), comma-separated: host names (`*.` for the names under one), addresses and ranges, each for every company or, as `<company id>=<entry>`, for one. Unset: public addresses only. The board does not start on an entry it cannot read (Private destinations, above).     |
 | `ROSTERDOCK_STDIO_COMMANDS`                  | The command lines a stdio connection may run inside the board (chart `board.stdioCommands`), comma-separated: the command and its arguments, matched exactly; a final `*` lets a company add arguments. The server runs as the board and reads what it can, so list only what every company's admins may run (`docs/security.md`). Empty: none runs.                   |
+| `ROSTERDOCK_MODEL_PROVIDERS`                 | The model provider kinds a company may add (chart `board.modelProviders`), comma-separated: `anthropic`, `openai`, `azure_openai`, `bedrock`, `openai_compatible`, and `board`, which lends the board's own models to every company. Unset: all of them. The board does not start on an entry it does not know (Company model providers, above).                       |
 | `ROSTERDOCK_COMPANY_CREATORS`                | Who may create a company (chart `board.companyCreators`): emails and `@domain`s, comma-separated, or `*` for anyone who signs in. Unset: the first person to create one on an empty board owns it and nobody creates another (with the dev login on, anyone may). Everyone else joins a company when an owner invites their email.                                     |
 | `ROSTERDOCK_OIDC_*`, `ROSTERDOCK_PUBLIC_URL` | Sign-in (`docs/install.md`).                                                                                                                                                                                                                                                                                                                                           |
 | `ROSTERDOCK_SESSION_TTL_SECONDS`             | How long a sign-in lasts (default 30 days).                                                                                                                                                                                                                                                                                                                            |

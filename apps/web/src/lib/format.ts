@@ -613,6 +613,21 @@ export function describeEvent(
       return { text: `${who} ${p(ev).replaced ? "replaced" : "set"} the value of ${p(ev).name}` };
     case "secret.deleted":
       return { text: `${who} removed the value of ${p(ev).name}` };
+    case "model_provider.created":
+      return { text: `${who} added the model provider ${p(ev).label ?? p(ev).name}` };
+    case "model_provider.updated": {
+      const changes = (p(ev).changes as string[] | undefined) ?? [];
+      const what = p(ev).label ?? p(ev).name;
+      if (changes.includes("archived") && p(ev).archived === false)
+        return { text: `${who} brought back the model provider ${what}` };
+      if (changes.length === 1 && changes[0] === "enabled")
+        return { text: `${who} switched the model provider ${what} ${p(ev).enabled ? "on" : "off"}` };
+      return { text: `${who} changed the model provider ${what}` };
+    }
+    case "model_provider.archived":
+      return { text: `${who} archived the model provider ${p(ev).label ?? p(ev).name}` };
+    case "model_provider.deleted":
+      return { text: `${who} removed the model provider ${p(ev).label ?? p(ev).name}` };
     case "connection.checked": {
       const extra = ((p(ev).extra as string[] | undefined) ?? []).length;
       const missing = ((p(ev).missing as string[] | undefined) ?? []).length;

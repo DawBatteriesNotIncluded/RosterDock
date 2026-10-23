@@ -76,6 +76,11 @@ spec:
             - name: ROSTERDOCK_COMPANY_CREATORS
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- with .Values.board.modelProviders }}
+            # The model provider kinds a company may add, and board when this board lends its own models.
+            - name: ROSTERDOCK_MODEL_PROVIDERS
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- if .Values.board.corsOrigin }}
             - name: CORS_ORIGIN
               value: {{ .Values.board.corsOrigin | quote }}
