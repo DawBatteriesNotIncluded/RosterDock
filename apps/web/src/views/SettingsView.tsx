@@ -25,7 +25,7 @@ import type {
 } from "../api/types.ts";
 import { Button, Field, Pill, Tip, Topbar } from "../components/ui.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
-import { DEFAULT_MODEL } from "../lib/format.ts";
+import { DEFAULT_MODEL, toMinor } from "../lib/format.ts";
 import type { SettingsTab } from "../state/store.tsx";
 import { ClientPoliciesPanel } from "./ClientPoliciesPanel.tsx";
 import { ConnectionsPanel, type ConnectionsPanelProps } from "./ConnectionsPanel.tsx";
@@ -634,14 +634,7 @@ function NotificationsCard(p: {
   );
 }
 
-/** "3.00" → 300 minor units; blank → null. */
-export function toMinor(major: string): number | null {
-  const t = major.trim();
-  if (!t) return null;
-  const n = Number(t);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.round(n * 100);
-}
+export { toMinor } from "../lib/format.ts";
 
 const SCOPE_LABEL: Record<BudgetScopeKind, string> = {
   company: "Company",
@@ -915,6 +908,8 @@ function PricesTab(p: SettingsViewProps) {
     void reload();
   }, [p.data.company.id, latestSeq]);
   const currency = prices[0]?.currency ?? "GBP";
+  // A provider's prices are on its card under Models.
+  const ownPrices = prices.filter((pr) => !pr.providerId);
   /** Run a write and reload; true when it went through. */
   const wrap = (fn: () => Promise<unknown>) => async () => {
     try {
@@ -937,7 +932,8 @@ function PricesTab(p: SettingsViewProps) {
           <span className="hint">
             Per million tokens for API billing, or per seat per month for subscription engines. A seat row is
             keyed by the model, or by the engine (claude_code, codex) for every teammate on it. Costs on the
-            Costs page use these; nothing here touches how teammates run.
+            Costs page use these; nothing here touches how teammates run. These are the board's own models'; a
+            provider's prices are on its card under Models.
           </span>
         </div>
         {p.canEdit ? (
@@ -947,7 +943,8 @@ function PricesTab(p: SettingsViewProps) {
                 Add list prices
               </Button>
               <span className="hint">
-                Prices every Claude model the company uses and has not priced, in USD. Prices you set stay.
+                Prices every Claude model the company uses and has not priced, in USD, unless the company
+                prices in another currency. Prices you set stay.
               </span>
             </div>
             <span className="hint">
@@ -971,7 +968,7 @@ function PricesTab(p: SettingsViewProps) {
               </tr>
             </thead>
             <tbody>
-              {prices.map((pr) => (
+              {ownPrices.map((pr) => (
                 <tr key={pr.id}>
                   <td className="font-semibold">{pr.model}</td>
                   <td className="mono text-right">{money(pr.inputPerMillion, pr.currency)}</td>
@@ -994,7 +991,7 @@ function PricesTab(p: SettingsViewProps) {
                   ) : null}
                 </tr>
               ))}
-              {prices.length === 0 ? (
+              {ownPrices.length === 0 ? (
                 <tr>
                   <td className="hint" colSpan={columns}>
                     No prices yet. Runs count tokens either way; money needs a price.

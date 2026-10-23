@@ -137,6 +137,7 @@ describe("costs export and the monthly report", () => {
       "currency",
       "kind",
       "goal",
+      "provider",
     ]);
     expect(rows).toHaveLength(3);
     const line1 = rows.find((r) => r[1] === r1)!;
@@ -153,6 +154,7 @@ describe("costs export and the monthly report", () => {
       "GBP",
       "run",
       "",
+      "This board's own models",
     ]);
     expect(line1[2]).toBe(`#${t1.number}`);
     expect(line1[4]).toBe("Cody");
@@ -218,9 +220,24 @@ describe("costs export and the monthly report", () => {
       "total_tokens",
       "cost",
       "currency",
+      "provider",
     ]);
-    expect(crow.find((r) => r[3] === "ACME-2026-Q3")?.slice(4)).toEqual(["1", "1001000", "2.41", "GBP"]);
-    expect(crow.find((r) => r[1] === "Gong digest")?.slice(3)).toEqual(["", "1", "500000", "1.20", "GBP"]);
+    // One line per project and provider: here every run was on the board's own models.
+    expect(crow.find((r) => r[3] === "ACME-2026-Q3")?.slice(4)).toEqual([
+      "1",
+      "1001000",
+      "2.41",
+      "GBP",
+      "This board's own models",
+    ]);
+    expect(crow.find((r) => r[1] === "Gong digest")?.slice(3)).toEqual([
+      "",
+      "1",
+      "500000",
+      "1.20",
+      "GBP",
+      "This board's own models",
+    ]);
 
     // A viewer reads all of it; nobody outside the company does.
     const viewer = await board.login("ce1-viewer@example.com");

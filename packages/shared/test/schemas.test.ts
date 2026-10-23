@@ -121,7 +121,14 @@ describe("mentions", () => {
     expect(
       CreateTeammateSchema.parse({ name: "Finn", role: "finance", model: " claude-sonnet-5.1 " }).model,
     ).toBe("claude-sonnet-5-1");
-    expect(ModelPriceInputSchema.shape.model.parse("claude-opus-5.5")).toBe("claude-opus-5-5");
+    expect(ModelPriceInputSchema.parse({ model: "claude-opus-5.5" }).model).toBe("claude-opus-5-5");
+    // A provider's price keeps the id as the provider takes it.
+    expect(
+      ModelPriceInputSchema.parse({
+        model: "claude-3.7-sonnet",
+        providerId: "00000000-0000-4000-8000-000000000001",
+      }).model,
+    ).toBe("claude-3.7-sonnet");
     expect(UpdateTeammateSchema.parse({ model: "claude-opus-5-5" }).model).toBe("claude-opus-5-5");
     expect(UpdateTeammateSchema.parse({ model: "gpt-6.1-astra" }).model).toBe("gpt-6.1-astra");
     expect(UpdateTeammateSchema.parse({ model: "anthropic.claude-opus-5-5-v1:0" }).model).toBe(

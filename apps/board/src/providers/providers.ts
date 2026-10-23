@@ -25,6 +25,7 @@ import {
 import type { z, ZodType } from "zod";
 import type { Db, Queryable } from "../db/pool.js";
 import { conflict, HttpError, notFound } from "../http-error.js";
+import { listPriceFor } from "../budgets/list-prices.js";
 import { mutate } from "../mutate.js";
 import { assertCompanyEnvNames, type OperatorPolicy } from "../operator.js";
 import {
@@ -95,7 +96,9 @@ export function providerToJson(
     authHeader: row.auth_header,
     credentials: row.credentials,
     credentialStates: states,
-    models: row.models,
+    // listPrice: tokens with no price of their own are priced at Anthropic's list (an Anthropic provider's
+    // models the list knows, while the company prices in USD).
+    models: row.models.map((m) => ({ ...m, listPrice: row.kind === "anthropic" && !!listPriceFor(m.id) })),
     enabled: row.enabled,
     /** Whether the operator still offers this kind; a provider of a kind no longer offered is kept, unused. */
     offered: policy.kinds.includes(row.kind),

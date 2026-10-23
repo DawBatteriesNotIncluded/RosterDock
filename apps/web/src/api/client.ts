@@ -183,7 +183,8 @@ export interface Client {
   savePrice(companyId: string, input: ModelPriceInput): Promise<ModelPrice>;
   deletePrice(companyId: string, priceId: string): Promise<void>;
   /** Price every model the company uses and has not priced at the API list price. */
-  fillListPrices(companyId: string): Promise<ListPricesResult>;
+  /** List prices for the models the company uses on the board's own models, or for one provider's models. */
+  fillListPrices(companyId: string, providerId?: string): Promise<ListPricesResult>;
   styles(companyId: string): Promise<StylePackInfo[]>;
   setStyle(
     companyId: string,
@@ -336,7 +337,8 @@ export const httpClient: Client = {
   prices: (id) => request("GET", `${c(id)}/prices`),
   savePrice: (id, input) => request("PUT", `${c(id)}/prices`, input),
   deletePrice: (id, p) => request("DELETE", `${c(id)}/prices/${p}`),
-  fillListPrices: (id) => request("POST", `${c(id)}/prices/list`, {}),
+  fillListPrices: (id, providerId) =>
+    request("POST", `${c(id)}/prices/list`, providerId ? { providerId } : {}),
   styles: (id) => request("GET", `${c(id)}/styles`),
   setStyle: (id, pack, input) => request("PUT", `${c(id)}/styles/${encodeURIComponent(pack)}`, input),
   budgets: (id) => request("GET", `${c(id)}/budgets`),

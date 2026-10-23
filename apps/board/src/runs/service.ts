@@ -31,7 +31,8 @@ import type { FetchedSource, SourceFetcher } from "../reviews/sources.js";
 import { queueNameForPool } from "@rosterdock/shared";
 import type { RunQueue } from "../queue.js";
 import { costFor, totalTokens, usageModel } from "../budgets/cost.js";
-import { alertOnBudgets, assertWithinBudgets, priceFor } from "../budgets/service.js";
+import { priceFor } from "../budgets/prices.js";
+import { alertOnBudgets, assertWithinBudgets } from "../budgets/service.js";
 import { effectiveToolbox, webNarrowingReason, webScope } from "../broker/policy.js";
 import { narrowingReason } from "../broker/policy.js";
 import { WEB_FETCH_TOOL } from "../web/read.js";
@@ -1365,7 +1366,8 @@ async function recordCompletion(
     );
     let row = updated.rows[0]!;
     const model = usageModel(run.engine, input.model ?? run.model);
-    const price = await priceFor(ctx.client, run.company_id, model);
+    // A run goes through the board's own models.
+    const price = await priceFor(ctx.client, run.company_id, null, model);
     const cost = costFor(usage, price);
     if (cost !== null) {
       row = (
