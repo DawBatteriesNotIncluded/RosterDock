@@ -47,10 +47,10 @@ function priceToJson(r: PriceRow) {
 }
 
 /**
- * The company's currencies, when a price in this one cannot join its prices, or null. A company keeps one
- * currency: Costs adds every price up, so a second would add pence to cents. The price being replaced does not
- * count; and a company that two currencies reached before this rule keeps writing in either: only a currency
- * new to it is refused.
+ * The currencies of the company's other prices, when a price in this one cannot join them, or null. A company
+ * keeps one currency: Costs adds every price up, so a second would add pence to cents. The price being replaced
+ * does not count; and a company that two currencies reached before this rule keeps writing in either: only a
+ * currency new to it is refused.
  */
 async function currenciesRefusing(
   db: Queryable,
@@ -65,9 +65,8 @@ async function currenciesRefusing(
        FROM model_prices WHERE company_id = $1 GROUP BY currency ORDER BY currency`,
     [companyId, replacing?.providerId ?? null, replacing?.model ?? ""],
   );
-  const all = res.rows.map((r) => r.currency);
-  const others = res.rows.filter((r) => !r.replaced);
-  return others.length && !all.includes(currency) ? all : null;
+  const others = res.rows.filter((r) => !r.replaced).map((r) => r.currency);
+  return others.length && !res.rows.some((r) => r.currency === currency) ? others : null;
 }
 
 /** What to do about a currency refused: give it in the company's, or bring two down to one. */

@@ -674,13 +674,16 @@ export function scopeName(data: CompanyData, b: Pick<Budget, "scopeKind" | "scop
 }
 
 function PriceForm({
-  currency,
+  currency: theirs,
   onSave,
 }: {
-  currency: string;
+  /** The company's one currency; null before its first price, which chooses it. */
+  currency: string | null;
   /** Resolves true when the price was saved; the form then clears. */
   onSave(input: ModelPriceInput): Promise<boolean>;
 }) {
+  const [typed, setTyped] = useState("GBP");
+  const currency = theirs ?? typed;
   const [model, setModel] = useState("");
   const [kind, setKind] = useState<"api" | "seat">("api");
   const [input, setInput] = useState("");
@@ -734,6 +737,21 @@ function PriceForm({
           <option value="seat">Seat · per month</option>
         </select>
       </Field>
+      {theirs === null ? (
+        <Field
+          label="Currency"
+          hint="The first price sets the company's one currency. Anthropic's list prices are in USD."
+        >
+          <input
+            aria-label="Currency"
+            className="mono"
+            value={typed}
+            maxLength={3}
+            onChange={(e) => setTyped(e.target.value.toUpperCase())}
+            style={{ width: 60 }}
+          />
+        </Field>
+      ) : null}
       {kind === "api" ? (
         <>
           <Field label={`Input (${currency})`}>
@@ -779,7 +797,11 @@ function PriceForm({
           />
         </Field>
       )}
-      <Button type="submit" variant="primary" disabled={busy || !model.trim()}>
+      <Button
+        type="submit"
+        variant="primary"
+        disabled={busy || !model.trim() || !/^[A-Z]{3}$/.test(currency)}
+      >
         Save price
       </Button>
     </form>
@@ -907,7 +929,8 @@ function PricesTab(p: SettingsViewProps) {
   useEffect(() => {
     void reload();
   }, [p.data.company.id, latestSeq]);
-  const currency = prices[0]?.currency ?? "GBP";
+  // The company's one currency is its prices'; before it has any, its first price chooses it.
+  const currency = prices[0]?.currency ?? null;
   // A provider's prices are on its card under Models.
   const ownPrices = prices.filter((pr) => !pr.providerId);
   /** Run a write and reload; true when it went through. */

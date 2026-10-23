@@ -876,7 +876,10 @@ function PriceEditor(p: {
   return (
     <div className="flex flex-wrap items-end gap-2">
       {p.firstPrice ? (
-        <Field label="Currency">
+        <Field
+          label="Currency"
+          hint="The first price sets the company's one currency. Anthropic's list prices are in USD."
+        >
           <input
             aria-label="Currency"
             className="mono"
@@ -893,7 +896,9 @@ function PriceEditor(p: {
       {field("Cache write", cacheWrite, setCacheWrite)}
       <Button
         size="sm"
-        disabled={busy || currency.length !== 3 || (toMinor(input) === null && toMinor(output) === null)}
+        disabled={
+          busy || !/^[A-Z]{3}$/.test(currency) || (toMinor(input) === null && toMinor(output) === null)
+        }
         onClick={async () => {
           setBusy(true);
           setRefusal(
@@ -946,12 +951,15 @@ function ProviderCard(p: {
   onSetValue(name: string, value: string): Promise<string | null>;
   onSavePrice(input: ModelPriceInput): Promise<string | null>;
   onDeletePrice(priceId: string): Promise<string | null>;
-  onFillList(): Promise<ListPricesResult | null>;
+  /** What was priced, or why nothing was: said beside the button. */
+  onFillList(): Promise<ListPricesResult | string>;
 }) {
   const [pricing, setPricing] = useState<string | null>(null);
-  const [filled, setFilled] = useState<string | null>(null);
-  const currency = p.prices[0]?.currency ?? "GBP";
+  const [filled, setFilled] = useState<{ line: string; refused: boolean } | null>(null);
   const v = p.provider;
+  // The company's one currency; before its first price, the list's on a card the list prices (its first price
+  // in USD keeps the list applying), else the board's usual GBP.
+  const currency = p.prices[0]?.currency ?? (v.kind === "anthropic" || v.kind === "bedrock" ? "USD" : "GBP");
   const own = (model: string) => p.prices.find((x) => x.providerId === v.id && x.model === model);
   const role = credentialRole(v.kind);
   const keyName = v.credentials[role];
@@ -1136,17 +1144,27 @@ function ProviderCard(p: {
             size="sm"
             onClick={async () => {
               const r = await p.onFillList();
-              if (r) setFilled(listFillLine(v.kind, r));
+              setFilled(
+                typeof r === "string"
+                  ? { line: r, refused: true }
+                  : { line: listFillLine(v.kind, r), refused: false },
+              );
             }}
           >
             Fill list prices
           </Button>
-          <span className="hint">
-            {filled ??
-              (v.kind === "bedrock"
-                ? "Anthropic's list prices for the Claude models here, as estimates: AWS sets its own."
-                : "Anthropic's list prices, in USD, for the models here without one.")}
-          </span>
+          {filled?.refused ? (
+            <span role="alert" className="text-[13px]" style={{ color: "var(--bad)" }}>
+              {filled.line}
+            </span>
+          ) : (
+            <span className="hint">
+              {filled?.line ??
+                (v.kind === "bedrock"
+                  ? "Anthropic's list prices for the Claude models here, as estimates: AWS sets its own."
+                  : "Anthropic's list prices, in USD, for the models here without one.")}
+            </span>
+          )}
         </div>
       ) : null}
       {p.canEdit && !v.archivedAt ? (
@@ -1227,8 +1245,8 @@ export function ModelsPanel(p: ModelsPanelProps) {
       onDeletePrice={(id) => change(() => p.deletePrice(id))}
       onFillList={async () => {
         let r: ListPricesResult | null = null;
-        await change(async () => (r = await p.fillListPrices(v.id)));
-        return r;
+        const why = await change(async () => (r = await p.fillListPrices(v.id)));
+        return why ?? r!;
       }}
       onSetValue={async (name, value) => {
         const why = await change(() => p.replaceSecret(name, value));

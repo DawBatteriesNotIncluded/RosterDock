@@ -161,7 +161,7 @@ describe("prices by provider", () => {
   });
 
   it("lets a company two currencies reached before keep writing in either, and says how to get to one", async () => {
-    const { api, base, owner } = await seedCompany(board, "pp7@example.com");
+    const { api, base } = await seedCompany(board, "pp7@example.com");
     const companyId = companyOf(base);
     // Two currencies, as a board before this rule could leave a company.
     for (const [model, currency] of [
@@ -172,7 +172,6 @@ describe("prices by provider", () => {
         "INSERT INTO model_prices (company_id, model, currency, input_per_million) VALUES ($1, $2, $3, 100)",
         [companyId, model, currency],
       );
-    void owner;
     expect(
       (await api.put(`${base}/prices`, { model: "claude-opus-5-5", currency: "GBP", inputPerMillion: 110 }))
         .status,
@@ -185,6 +184,16 @@ describe("prices by provider", () => {
     expect(third.status).toBe(409);
     expect(third.body.error).toBe(
       "this company's prices are in GBP and USD already; a company keeps one currency: remove its prices in all but one of them (Settings > Prices and budgets, and each provider's under Settings > Models), then give this price in that one",
+    );
+    // A price that is its currency's last names only what stays once it is replaced.
+    const opus = await api.put(`${base}/prices`, {
+      model: "claude-opus-5-5",
+      currency: "EUR",
+      inputPerMillion: 1,
+    });
+    expect(opus.status).toBe(409);
+    expect(opus.body.error).toBe(
+      "this company's prices are in USD; a company keeps one currency, so give this price in USD",
     );
   });
 

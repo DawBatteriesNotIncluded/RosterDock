@@ -2109,6 +2109,11 @@ describe("pure helpers", () => {
     const prices = render(<SettingsView {...props} canEdit tab="prices" onTab={noop} />);
     expect(prices).toContain("Model prices");
     expect(prices).not.toContain("Webhook env var NAME");
+    // A company that prices already keeps its currency; its first price chooses one, and the form says so.
+    expect(prices).not.toContain("The first price sets the company&#x27;s one currency");
+    const first = render(<SettingsView {...props} initialPrices={[]} canEdit tab="prices" onTab={noop} />);
+    expect(first).toContain('aria-label="Currency"');
+    expect(first).toContain("The first price sets the company&#x27;s one currency");
     for (const t of SETTINGS_TABS) expect(prices).toContain(t.label);
     expect(SETTINGS_TABS.map((t) => t.value)).toEqual([
       "prices",
