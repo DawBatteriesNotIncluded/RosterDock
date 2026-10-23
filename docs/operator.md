@@ -45,10 +45,11 @@ board, Postgres and, by default, public HTTPS for the model API and the git host
   answered, and the project, department and goal they served when made; priced from the same table, a
   line each in the usage CSV (`kind` plan, re-plan or org proposal, beside run), and against budgets,
   which they also alert. A spent budget stops runs at dispatch, not his planning. On upgrade, what goals
-  and org proposals had already spent planning is carried over, dated when each goal was planned. A
-  company keeps its prices in one currency, the one its first price is in: a price in another is refused
-  (409, naming the currency to give), and so are list prices (in USD) for a company that prices in another. Both CSVs end with a `provider` column, and the chargeback CSV has
-  a line per project and provider (Company model providers, below).
+  and org proposals had already spent planning is carried over, dated when each goal was planned. A company
+  keeps its prices in one currency, the one its first price is in (the price forms ask for it then, USD by
+  default on an Anthropic or Bedrock card): a price in another is refused (409, naming the currency to give),
+  and so are list prices (in USD) for a company that prices in another. Both CSVs end with a `provider`
+  column, and the chargeback CSV has a line per project and provider (Company model providers, below).
 - **Drift.** A teammate whose runs suddenly cost or take far more than their own usual, or whose work is
   sent back far more often, raises one alert per day: in Activity, in the notifications, on their page.
   Nothing stops; open their recent runs and reviews and decide. What counts as "far more" is the

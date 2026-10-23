@@ -167,6 +167,10 @@ const KEY_SHAPES: readonly RegExp[] = [
   /\bcsk-[A-Za-z0-9]{20,}/, // Cerebras
   /\bnvapi-[A-Za-z0-9_-]{20,}/, // NVIDIA
   /\bfw_[A-Za-z0-9]{20,}/, // Fireworks
+  /\btgp_v1_[A-Za-z0-9_-]{20,}/, // Together
+  /\bbedrock-api-key-[A-Za-z0-9+/=]{20,}/, // an Amazon Bedrock API key, short-term
+  // A value given to a secret-named variable as a shell or an .env file writes it: OPENAI_API_KEY=… (secrets.ts).
+  /(?:^|\s)[A-Za-z0-9_]*(?:api[_-]?key|secret(?:[_-]?key)?|private[_-]?key|password|passwd|token)=[A-Za-z0-9._~+/:@%^*!#-]{8,}/i,
 ];
 
 /** A run of hex, dashes aside: an Azure key is 32 characters, and a key written as a UUID is one too. */
@@ -193,6 +197,28 @@ function randomRun(run: string): boolean {
   return inWords / run.length < 0.65;
 }
 
+/**
+ * A run of 32 characters or more in a base64url key's alphabet that reads as random. Such a key (Together's,
+ * Voyage's, many bare ones) has dashes and underscores in it, which break it into pieces too short to read
+ * alone, so the run is read whole, by randomRun's measure, with one more kind of word: a piece in capitals and
+ * digits, 8 long at most (API, KEY, FP8, 480B, A35B), as names and model ids are made of. A run a key's dashes
+ * break has few such pieces; one made of words joined by dashes or underscores reads as words.
+ */
+function longRandomRun(text: string): boolean {
+  for (const [run] of text.matchAll(/[A-Za-z0-9_-]{32,}/g)) {
+    if (!/[A-Z]/.test(run) || !/[a-z]/.test(run)) continue;
+    let length = 0;
+    let inWords = 0;
+    for (const piece of run.split(/[-_]+/)) {
+      length += piece.length;
+      if (/^[A-Z0-9]{1,8}$/.test(piece)) inWords += piece.length;
+      else for (const word of piece.matchAll(/[A-Z]?[a-z]{2,}/g)) inWords += word[0].length;
+    }
+    if (inWords / length < 0.65) return true;
+  }
+  return false;
+}
+
 /** Whether a word, between spaces or punctuation, looks like a key. */
 function wordLooksLikeKey(word: string): boolean {
   return hexRun(word) || word.split(/[^A-Za-z0-9]+/).some(randomRun);
@@ -200,10 +226,12 @@ function wordLooksLikeKey(word: string): boolean {
 
 /**
  * Whether what was given as an env var NAME looks like a key pasted in its place: a key's known shape, a run
- * too long for a name or of base64, or a word between its underscores that is a run of hex or random.
+ * too long for a name, of base64 or long and random, or a word between its underscores that is a run of hex or
+ * random.
  */
 export function nameLooksLikeKey(name: string): boolean {
-  if (name.length > 128 || base64Run(name) || KEY_SHAPES.some((re) => re.test(name))) return true;
+  if (name.length > 128 || base64Run(name) || longRandomRun(name) || KEY_SHAPES.some((re) => re.test(name)))
+    return true;
   return name.split("_").some(wordLooksLikeKey);
 }
 
@@ -218,12 +246,13 @@ export function providerNameRefusal(name: string): string | null {
 /** The most a provider's label holds. */
 export const MAX_PROVIDER_LABEL = 80;
 /**
- * Whether a label people read has a key in it: a key's known shape anywhere, or a word that is base64 (an AWS
- * secret access key), a run of hex (an Azure key, a key written as a UUID) or random (a Mistral key). Words
- * split on spaces and the punctuation labels use; a model's name in a label reads as words.
+ * Whether a label people read has a key in it: a key's known shape anywhere, a long random run dashes and all,
+ * or a word that is base64 (an AWS secret access key), a run of hex (an Azure key, a key written as a UUID) or
+ * random (a Mistral key). Words split on spaces and the punctuation labels use; a model's name in a label reads
+ * as words.
  */
 export function labelLooksLikeKey(label: string): boolean {
-  if (KEY_SHAPES.some((re) => re.test(label))) return true;
+  if (longRandomRun(label) || KEY_SHAPES.some((re) => re.test(label))) return true;
   return label
     .split(/\s+/)
     .filter(Boolean)

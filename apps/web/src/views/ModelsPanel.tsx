@@ -23,6 +23,7 @@ import {
   labelLooksLikeKey,
   modelIdProblem,
   MAX_PROVIDER_LABEL,
+  nameLooksLikeKey,
   PROVIDER_KIND_LABELS,
   PROVIDER_KINDS,
   providerNameRefusal,
@@ -229,6 +230,22 @@ export interface ProviderForm {
   picked: string;
 }
 
+/**
+ * Whether text holds twelve characters or more of a key in a row, letters and digits only, in either case. Only
+ * a stretch with a digit and a letter in it counts: a key's words (Bedrock's start bedrock-api-key-) are words
+ * a label may use too, and a random stretch of twelve almost always has both.
+ */
+export function holdsPartOf(text: string, key: string): boolean {
+  const flat = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const t = flat(text);
+  const k = flat(key);
+  for (let i = 0; i + 12 <= k.length; i++) {
+    const part = k.slice(i, i + 12);
+    if (/[0-9]/.test(part) && /[a-z]/.test(part) && t.includes(part)) return true;
+  }
+  return false;
+}
+
 /** The provider's name: as typed, or made from the label. */
 export function formName(f: Pick<ProviderForm, "name" | "label">): string {
   if (f.name !== null) return f.name.trim();
@@ -292,6 +309,12 @@ export function formProblem(
   const name = formName(f);
   if (label && labelLooksLikeKey(label))
     return "That label looks like a key. The key goes in its own field below.";
+  // As typed, before any rule on its case: a key keeps its case here, and its case is what gives it away.
+  const typed = f.name?.trim() ?? "";
+  if (typed && (labelLooksLikeKey(typed) || nameLooksLikeKey(typed.replace(/-/g, "_"))))
+    return "That name looks like a key. The key goes in its own field below.";
+  if (f.how === "paste" && (holdsPartOf(label, f.value) || holdsPartOf(name, f.value)))
+    return "The label or the name holds part of the key. The key goes in its own field below, and nowhere else.";
   if (label.length > MAX_PROVIDER_LABEL) return `A label is ${MAX_PROVIDER_LABEL} characters at most.`;
   const nameRefusal = name ? providerNameRefusal(name) : null;
   if (nameRefusal) return `The name: ${nameRefusal}.`;
@@ -449,9 +472,10 @@ function AddProviderForm(p: {
           <input
             aria-label="Name"
             className="mono"
-            value={formName(f)}
-            // Once typed, the name is the person's, cleared or not.
-            onChange={(e) => set({ name: e.target.value.toLowerCase() })}
+            value={f.name ?? formName(f)}
+            // Once typed, the name is the person's, cleared or not, and kept as typed: the form says what will
+            // not do, and a key pasted here keeps the case that gives it away.
+            onChange={(e) => set({ name: e.target.value })}
             style={{ width: 180 }}
           />
         </Field>
@@ -567,10 +591,9 @@ function AddProviderForm(p: {
       {!canPaste ? (
         <span className="hint">
           {noKey
-            ? "This board keeps no company secrets, and its operator shares no names, so there is no key to give a provider here yet. "
+            ? "This board keeps no company secrets, and its operator shares no key names, so there is no key to give a provider here yet. "
             : "This board keeps no company secrets, so a key cannot be pasted here: use a name your operator shares. "}
-          An operator turns a secret store on (board.oauth.enabled on the chart), or shares a name with every
-          company (board.sharedEnvNames).
+          Ask your operator to turn on a secret store for companies, or to share a key&apos;s name with them.
         </span>
       ) : null}
       {p.secretsFailed && f.how === "paste" ? (
@@ -666,11 +689,20 @@ function AddModelForm(p: {
 }
 
 /** What removing a provider takes and what it leaves, said before it goes. */
-export function removeLine(v: Pick<ModelProvider, "label" | "credentials" | "kind">): string {
-  const key = v.credentials[credentialRole(v.kind)];
-  return `Remove ${v.label}? Its settings, its list of models and its prices go, for good.${
-    key ? ` Its key stays in this company's secrets as ${key}.` : ""
-  } Archive it instead to keep it all, unused.`;
+export function removeLine(
+  v: Pick<ModelProvider, "label" | "credentials" | "credentialStates" | "kind">,
+): string {
+  const role = credentialRole(v.kind);
+  const key = v.credentials[role];
+  const state = v.credentialStates[role]?.state;
+  const kept = !key
+    ? ""
+    : state === "shared"
+      ? ` Its key, ${key}, is one your operator shares, and stays theirs.`
+      : state === "set"
+        ? ` Its key stays in this company's secrets as ${key}.`
+        : "";
+  return `Remove ${v.label}? Its settings, its list of models and its prices go, for good.${kept} Archive it instead to keep it all, unused.`;
 }
 
 /** A provider's settings, changed: its label, where it is reached, and its key's name or value. */
@@ -765,6 +797,10 @@ function EditProvider(p: {
               value={name}
               onChange={(e) => setName(e.target.value)}
             >
+              {/* A provider with no key yet shows that, never a name it does not have. */}
+              {!keyName ? (
+                <option value="">{v.kind === "openai_compatible" ? "No key" : "Pick one"}</option>
+              ) : null}
               {names.map((n) => (
                 <option key={n} value={n}>
                   {n}
@@ -847,7 +883,10 @@ function PriceEditor(p: {
   return (
     <div className="flex flex-wrap items-end gap-2">
       {p.firstPrice ? (
-        <Field label="Currency">
+        <Field
+          label="Currency"
+          hint="The first price sets the company's one currency. Anthropic's list prices are in USD."
+        >
           <input
             aria-label="Currency"
             className="mono"
@@ -864,7 +903,9 @@ function PriceEditor(p: {
       {field("Cache write", cacheWrite, setCacheWrite)}
       <Button
         size="sm"
-        disabled={busy || currency.length !== 3 || (toMinor(input) === null && toMinor(output) === null)}
+        disabled={
+          busy || !/^[A-Z]{3}$/.test(currency) || (toMinor(input) === null && toMinor(output) === null)
+        }
         onClick={async () => {
           setBusy(true);
           setRefusal(
@@ -917,12 +958,15 @@ function ProviderCard(p: {
   onSetValue(name: string, value: string): Promise<string | null>;
   onSavePrice(input: ModelPriceInput): Promise<string | null>;
   onDeletePrice(priceId: string): Promise<string | null>;
-  onFillList(): Promise<ListPricesResult | null>;
+  /** What was priced, or why nothing was: said beside the button. */
+  onFillList(): Promise<ListPricesResult | string>;
 }) {
   const [pricing, setPricing] = useState<string | null>(null);
-  const [filled, setFilled] = useState<string | null>(null);
-  const currency = p.prices[0]?.currency ?? "GBP";
+  const [filled, setFilled] = useState<{ line: string; refused: boolean } | null>(null);
   const v = p.provider;
+  // The company's one currency; before its first price, the list's on a card the list prices (its first price
+  // in USD keeps the list applying), else the board's usual GBP.
+  const currency = p.prices[0]?.currency ?? (v.kind === "anthropic" || v.kind === "bedrock" ? "USD" : "GBP");
   const own = (model: string) => p.prices.find((x) => x.providerId === v.id && x.model === model);
   const role = credentialRole(v.kind);
   const keyName = v.credentials[role];
@@ -1107,17 +1151,27 @@ function ProviderCard(p: {
             size="sm"
             onClick={async () => {
               const r = await p.onFillList();
-              if (r) setFilled(listFillLine(v.kind, r));
+              setFilled(
+                typeof r === "string"
+                  ? { line: r, refused: true }
+                  : { line: listFillLine(v.kind, r), refused: false },
+              );
             }}
           >
             Fill list prices
           </Button>
-          <span className="hint">
-            {filled ??
-              (v.kind === "bedrock"
-                ? "Anthropic's list prices for the Claude models here, as estimates: AWS sets its own."
-                : "Anthropic's list prices, in USD, for the models here without one.")}
-          </span>
+          {filled?.refused ? (
+            <span role="alert" className="text-[13px]" style={{ color: "var(--bad)" }}>
+              {filled.line}
+            </span>
+          ) : (
+            <span className="hint">
+              {filled?.line ??
+                (v.kind === "bedrock"
+                  ? "Anthropic's list prices for the Claude models here, as estimates: AWS sets its own."
+                  : "Anthropic's list prices, in USD, for the models here without one.")}
+            </span>
+          )}
         </div>
       ) : null}
       {p.canEdit && !v.archivedAt ? (
@@ -1155,7 +1209,11 @@ export function ModelsPanel(p: ModelsPanelProps) {
         e.type.startsWith("model_provider.") || e.type.startsWith("secret.") || e.type === "company.updated",
     )?.seq ?? 0;
   useEffect(() => {
-    void reload().catch((err: unknown) => setError((err as Error).message));
+    // What the top card says is about the last load: one that worked clears it.
+    void reload().then(
+      () => setError(null),
+      (err: unknown) => setError((err as Error).message),
+    );
     // A list that cannot be read keeps the one before, never an empty one that would hide what is taken.
     if (p.canEdit)
       void p.loadSecrets().then(
@@ -1194,8 +1252,8 @@ export function ModelsPanel(p: ModelsPanelProps) {
       onDeletePrice={(id) => change(() => p.deletePrice(id))}
       onFillList={async () => {
         let r: ListPricesResult | null = null;
-        await change(async () => (r = await p.fillListPrices(v.id)));
-        return r;
+        const why = await change(async () => (r = await p.fillListPrices(v.id)));
+        return why ?? r!;
       }}
       onSetValue={async (name, value) => {
         const why = await change(() => p.replaceSecret(name, value));

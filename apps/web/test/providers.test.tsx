@@ -16,6 +16,7 @@ import {
   ModelsPanel,
   formName,
   formProblem,
+  holdsPartOf,
   formRequest,
   listFillLine,
   modelPriceLine,
@@ -267,8 +268,27 @@ describe("Settings > Models", () => {
       /^That label looks like a key/,
     );
     expect(formProblem(form({ name: "a3f9c2e1b4d5f60718293a4b5c6d7e8f" }), nothingTaken)).toMatch(
-      /^The name: a short name; this looks like a key/,
+      /^That name looks like a key/,
     );
+    // A key pasted into Name keeps its case, which gives it away; a name in capitals is only not a name yet.
+    const mistral = ["mR7", "xQ2pL9", "vN4kT8", "wZ1sJ5", "bH3cY6", "dG0aF"].join("");
+    expect(formProblem(form({ name: mistral }), nothingTaken)).toMatch(/^That name looks like a key/);
+    expect(formProblem(form({ name: "Acme" }), nothingTaken)).toMatch(/^The name: a short name: lowercase/);
+    // Part of the pasted key in the label or the name: nothing is sent.
+    const pasted = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6";
+    expect(formProblem(form({ value: pasted, label: "Acme e5f6g7h8i9j0k1" }), nothingTaken)).toMatch(
+      /^The label or the name holds part of the key/,
+    );
+    expect(formProblem(form({ value: pasted, name: "acme-g7h8i9j0k1l2" }), nothingTaken)).toMatch(
+      /^The label or the name holds part of the key/,
+    );
+    expect(holdsPartOf("Acme prod", pasted)).toBe(false);
+    // A key's own words are a label's too: Bedrock's short-term keys start bedrock-api-key-.
+    const bedrock = ["bedrock", "api", "key", "YmVkcm9jay5hbWF6b25hd3MuY29tLz9B"].join("-");
+    expect(holdsPartOf("Acme Bedrock API key", bedrock)).toBe(false);
+    expect(holdsPartOf("acme-bedrock-api-key", bedrock)).toBe(false);
+    expect(holdsPartOf("Acme YmVkcm9jay5h", bedrock)).toBe(true);
+    expect(holdsPartOf("acme", "short-key")).toBe(false);
     expect(formProblem(form({ name: "acme prod" }), nothingTaken)).toMatch(/^The name: a short name/);
     expect(formProblem(form({ label: "Acme ".repeat(17) }), nothingTaken)).toBe(
       "A label is 80 characters at most.",
@@ -491,8 +511,10 @@ describe("Settings > Models", () => {
     expect(storeless).not.toContain("Paste a key");
     // And it says so, with what an operator can do, instead of a picker with nothing in it.
     expect(storeless).not.toContain("Use a saved secret");
-    expect(storeless).toContain("This board keeps no company secrets, and its operator shares no names");
-    expect(storeless).toContain("board.oauth.enabled");
+    expect(storeless).toContain("This board keeps no company secrets, and its operator shares no key names");
+    // In a company's words: the chart's settings are the operator's.
+    expect(storeless).toContain("Ask your operator to turn on a secret store for companies");
+    expect(storeless).not.toContain("board.oauth.enabled");
     const sharing = panel({
       features: { oauth: false, objectStore: false, sharedEnvNames: ["SHARED_MODELS_KEY"] },
     });
@@ -510,6 +532,17 @@ describe("Settings > Models", () => {
       "Remove Acme Anthropic? Its settings, its list of models and its prices go, for good. Its key stays in this company's secrets as MODELS_ACME_KEY. Archive it instead to keep it all, unused.",
     );
     expect(removeLine({ ...providers.providers[1]!, credentials: {} })).not.toContain("key stays");
+    // A name the operator shares is theirs, not the company's; a name with nothing set leaves nothing behind.
+    const shared = {
+      ...providers.providers[0]!,
+      credentialStates: { apiKey: { state: "shared" as const } },
+    };
+    expect(removeLine(shared)).toContain(
+      "Its key, MODELS_ACME_KEY, is one your operator shares, and stays theirs.",
+    );
+    expect(
+      removeLine({ ...providers.providers[0]!, credentialStates: { apiKey: { state: "missing" as const } } }),
+    ).not.toContain("MODELS_ACME_KEY");
     // A Mistral-style key pasted into Label: nothing is made from it, and nothing is sent.
     const key = ["mR7", "xQ2pL9", "vN4kT8", "wZ1sJ5", "bH3cY6", "dG0"].join("");
     expect(formName(form({ label: key }))).toBe("");
