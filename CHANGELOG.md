@@ -145,6 +145,28 @@ install built from that tree changes each of these:
   it does on two names that differ only by spaces or a U+FEFF at an end, and, without a repository, on a file
   named `.git`, which is not delivered. The board kept an artifact's name trimmed of those, so such a file
   replaced the one without them.
+- A file git showed as binary reached the pull request as the bytes the run sent, which neither the review nor
+  the secrets check read: a run could hide a credential in a text file by marking it `-diff` in
+  `.git/info/attributes` or `.gitattributes`, or by putting a NUL byte in it, and a teammate could approve it.
+  The secrets check now scans every binary file's bytes (UTF-8, UTF-16 and UTF-32) and binds their sha256,
+  before the transaction that opens the review and up to 64 MB a run; a pull request writes only those bytes,
+  and a binary file goes into a pull request only where a person approved: a teammate's approval hands the
+  review to people, who are told (a needs-you sentence). A teammate still approves binary deliverables where no
+  pull request opens, unless the scan could not read one (past 64 MB or 100 files, or under another spelling of its name). The worker takes out the
+  `.git/info` the run could write and reads no system attributes file. A pull request now starts opening only
+  for a review still approved. Upgrading: a review open before the upgrade with a binary file fails its pull
+  request on approval, saying so; a person vetoes the approval and requests changes.
+- A pull request was built on whatever commit the run's clone was left at, so a run that checked out another ref
+  (an unmerged branch, a fork's pull request) carried its commits into the change, unreviewed. The worker now
+  reports the commit it cloned before the engine starts, with a key its claim gave it that the engine never
+  sees, a run that moved off it fails, and a pull request is built on that commit only. Upgrading: a review
+  whose run an older worker did fails its pull request, saying so.
+- A run delivered a declared output that git left out of the diff (ignored, or under `.git`), unshown and
+  unscanned, and completed with an empty review where git read a file with a late NUL byte as text (the board
+  refused the diff). Both now fail the run, naming the file. A declared output the run hid behind a
+  skip-worktree or assume-unchanged flag in the index was delivered as it was on disk while the review showed
+  the index: the worker clears those flags first, so the review shows the file. A shutdown while the worker
+  claimed a run no longer lets it clone.
 - On Windows, 0.1.0-rc.1 and 0.1.0-rc.2 ran the repository's tests without the job object: Windows
   PowerShell never made it (kernel32's functions were declared without PreserveSig), so what the tests left
   running when they ended by themselves carried on, as without one. The worker now makes it, and its log

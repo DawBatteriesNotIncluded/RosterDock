@@ -368,6 +368,17 @@ export function describeEvent(
         go: { view: "reviews", reviewId: ev.subject?.id, taskId: p(ev).taskId },
       };
     }
+    case "review.needs_person": {
+      const files = (p(ev).files as string[] | undefined) ?? [];
+      return {
+        text:
+          p(ev).reason === "unscanned"
+            ? `${n}${title} has binary files the secrets check did not read (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}): it waits for a person's approval`
+            : `${n}${title} carries binary files a review cannot show (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}): its pull request waits for a person's approval`,
+        attention: true,
+        go: { view: "reviews", reviewId: ev.subject?.id, taskId: p(ev).taskId },
+      };
+    }
     case "review.commented":
       return {
         text:

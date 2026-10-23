@@ -56,16 +56,17 @@ board, Postgres and, by default, public HTTPS for the model API and the git host
 Everything that needs a person is one sentence in the webhook (`board.notifySecret`, or a per-company env
 var name in Settings) and a row in the Approvals or Company page:
 
-| Sentence                                   | What to do                                                                                               |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| A teammate asks approval to write …        | Approvals: read the exact payload and its hash; Approve and run, or Reject with a note (see below).      |
-| The approved write could not be sent       | The connection is off, gone or refusing: Settings, Connections; fix and let the teammate propose again.  |
-| Peter has questions before planning …      | The goal card: answer them; Peter plans.                                                                 |
-| Peter needs you on … (a goal turned amber) | The goal card: a task failed three times; read the runs, fix the brief or the toolbox, restart the task. |
-| Pull request opened for …                  | Merge it (or not) on the git host; merging is yours by design.                                           |
-| Budget alert                               | Settings: raise the budget, or leave it and let runs wait at the gate.                                   |
-| Peter proposes … / audited …               | The Company page: accept or decline the draft.                                                           |
-| … runs cost 3× their usual                 | The teammate's page and their last runs; a bigger model, a bigger task, or a loop. Nothing stopped.      |
+| Sentence                                    | What to do                                                                                               |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| A teammate asks approval to write …         | Approvals: read the exact payload and its hash; Approve and run, or Reject with a note (see below).      |
+| The approved write could not be sent        | The connection is off, gone or refusing: Settings, Connections; fix and let the teammate propose again.  |
+| Peter has questions before planning …       | The goal card: answer them; Peter plans.                                                                 |
+| Peter needs you on … (a goal turned amber)  | The goal card: a task failed three times; read the runs, fix the brief or the toolbox, restart the task. |
+| Pull request opened for …                   | Merge it (or not) on the git host; merging is yours by design.                                           |
+| … carries binary files a review cannot show | Reviews: the review is a person's now. Look at the files on the run, then approve or request changes.    |
+| Budget alert                                | Settings: raise the budget, or leave it and let runs wait at the gate.                                   |
+| Peter proposes … / audited …                | The Company page: accept or decline the draft.                                                           |
+| … runs cost 3× their usual                  | The teammate's page and their last runs; a bigger model, a bigger task, or a loop. Nothing stopped.      |
 
 A task waiting on a person is amber on the board, "Needs you", and turns its goal amber (a task outside any
 open goal gets Peter's "Needs a person" note on it instead). A teammate's blocker names who it waits on by

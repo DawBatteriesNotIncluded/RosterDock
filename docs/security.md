@@ -179,20 +179,22 @@ their own, each with its own database and workers.
   nothing of it, and only what the board stores (artifacts, checkpoints, usage) outlives the run. The
   pod's home and temp directories last as long as the pod, so runs the pod takes in turn share them.
 - git in the worker gets PATH, the temp directory and the locale (its messages in English), none of the
-  worker's credentials, and reads no system or global config (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`
-  empty), so a `~/.gitconfig` an earlier run left behind changes nothing. It runs no hook and no fsmonitor,
-  and the diff runs no textconv. Before the worker reads a run's changes back, it puts the clone's
-  `.git/config` back as the clone wrote it, so a filter the run added never runs; a run that replaced `.git`
-  gets no review of its changes.
+  worker's credentials, and reads no system or global config or attributes (`GIT_CONFIG_NOSYSTEM`,
+  `GIT_ATTR_NOSYSTEM`, `GIT_CONFIG_GLOBAL` empty), so a `~/.gitconfig` an earlier run left behind changes
+  nothing. It runs no hook and no fsmonitor, and the diff runs no textconv. Before the worker reads a run's
+  changes back, it puts the clone's `.git/config` back as the clone wrote it, so a filter the run added never
+  runs, and takes out `.git/info`, so neither an attribute the run gave the clone alone nor an exclude that
+  hides a file (a `.gitattributes` among them) shapes the diff; a run that replaced `.git` gets no review of
+  its changes. What the repository's own `.gitattributes` says still applies, and it is part of the change.
 - The git token (`worker.gitSecret`) goes into a clone's URL only over https and only to the hosts it is for
   (`worker.gitSecret.hosts`, `ROSTERDOCK_GIT_TOKEN_HOSTS`; github.com by default), and the clone's remote is
   set back without it. A clone that fails, or that Stop, the time limit or a shutdown ends part-way, is
-  removed at once, so no `.git/config` with the token in its URL stays on disk. On Windows, where a git ended
+  removed at once, so no `.git/config` with the token in its URL stays on disk; a shutdown that comes while
+  the worker is claiming a run stops it before it clones. On Windows, where a git ended
   by taskkill can hold its files a moment longer, it goes as soon as git lets go, tried for half a minute,
   which a worker shutting down waits out; a file held past that keeps the folder until a run is prepared in it
-  again. A project
-  whose repository is on any other host is cloned with no token, so whoever sets a project's repository cannot
-  send the fleet's token somewhere else.
+  again. A project whose repository is on any other host is cloned with no token, so whoever sets a project's
+  repository cannot send the fleet's token somewhere else.
 - An artifact over 512 KB goes to the object store as bytes the board has already scanned for raw
   secrets, under a key of the company, the run and its hash; the board signs each request itself with a
   key pair it reads by name, and the worker never holds that pair.
@@ -259,20 +261,56 @@ their own, each with its own database and workers.
   from the files the review showed, and only while the review's diff, read again with the sha256 it was opened
   with, still reads as them: one an older board read otherwise, or that cannot be read back from the object
   store, fails and says why.
+- A file the diff calls binary has no lines to show, whatever made git call it so (an attribute, a NUL byte,
+  real binary data), and the review shows none of its bytes. The secrets check scans the bytes the run sent for
+  it all the same, by the same rules, as UTF-8 and, where a NUL byte says it may be wider, as UTF-16 in both
+  byte orders from either of its first two bytes, as UTF-32 in both orders where most of its bytes are NUL, and
+  without its NUL bytes, and records their sha256; a pull request writes those bytes and no others. The scan
+  runs before the transaction that opens the review, a file and a reading at a time and one run's at a time on
+  the board, over 64 MB and 100 of a run's binary files at most: past that a file is bound by the sha256 the
+  board stored for it, unread, the check fails, and a teammate's approval hands the review to people, as below.
+  A file with no bytes from the run has nothing delivered, and a pull request refuses it; one whose bytes came
+  under another spelling of its name (a worker whose file system ignores case) is not read, and fails the check
+  the same way. The scan reads text only: a compressed or encoded file's content is not read, so for binary
+  files the person who approves is the control. A binary file goes into a pull request only where a person
+  approved: a teammate's approval that would open one with a binary file in it is refused, and the review goes
+  to people, who are told (a needs-you sentence; the reviewer's own brief says so first); a person's approval
+  records the files, and the pull request, which carries who approved it under its sha256, refuses a binary file
+  a teammate approved all the same. A repository whose `.gitattributes` marks files `-diff` or `binary` (a lock
+  file) therefore needs a person for each change to them. Where approving opens no pull request (research, a
+  project without a repository), a teammate approves as before, unless the scan could not read a binary file
+  (past what it reads, or under another spelling of its name): that is a person's too. A pull request starts
+  opening only for a review still approved, so a veto before then stops it; one that lands while the host is
+  opening it leaves the change open there, for the person who vetoed to close. A review an older board opened
+  recorded no bytes, so its pull request refuses its binary files.
+- A pull request is built on the commit the run's clone was at, and on no other. The worker reports that commit
+  to the board right after cloning, before the engine starts, with a key the claim gave the worker alone: the
+  engine holds the same run token, never the key, so it cannot report one. The board keeps the first report of
+  each attempt. A run whose changes stand on another commit (it checked out another ref, or committed) fails at
+  the read-back, and a pull request on any other base is refused, so it never carries commits its review did not
+  show. A run an older worker did reported none, and its pull request is refused.
 - A run delivers files, never links. The worker reads a declared output, a changed file, the handover and
   `blocked.md` only as a regular file inside the run's directory, reached without a symbolic link. A link
   (`report.md -> /proc/self/environ`, a linked directory on the way) or a path out of the directory is never
   opened, so the worker's own environment never becomes an artifact; a completed run's summary names what was
   refused. In a repository, the diff carries such a link as the path it points at, as git stores it. With no
-  outputs declared, the changed files are those git status lists, each by its name as it is (a moved one by
-  its new name), but never a path it calls deleted: a file the run took out of the index and kept there (a
-  local `.env` that `.gitignore` matches) is not delivered, whatever it holds. Where git cannot read the
-  changes back (a lock left by a git that something ended part-way, a folder it cannot open, a name that is
-  not UTF-8, which the review could not tell from another), a run that would complete fails rather than send
-  part of them for review; one that is blocked or failed says so as it would. It fails as well on two names
-  that differ only by spaces or a U+FEFF at an end, which a reviewer could not tell apart, and, without a
-  repository, on a file named `.git`, which no diff can show and which is not delivered. An artifact keeps
-  its name as the run gave it, never trimmed into another's.
+  outputs declared, the changed files are those git status lists, each by its name as it is (a moved one by its
+  new name), but never a path it calls deleted: a file the run took out of the index and kept there (a local
+  `.env` that `.gitignore` matches) is not delivered, whatever it holds. Where git cannot read the changes back
+  (a lock left by a git that something ended part-way, a folder it cannot open, a name that is not UTF-8, which
+  the review could not tell from another), a run that would complete fails rather than send part of them for
+  review; one that is blocked or failed says so as it would. It fails as well on two names that differ only by
+  spaces or a U+FEFF at an end, which a reviewer could not tell apart, and, without a repository, on a file
+  named `.git`, which no diff can show and which is not delivered. In a repository, a declared output git leaves
+  out of the diff (one `.gitignore` matches, or under `.git`) is not delivered and fails the run the same way;
+  one the repository holds unchanged is its own, and is delivered. A file git reads as text with a NUL byte in
+  it (it looks in the first 8000 bytes only), and a diff the board refuses, fail the run too: no review opens
+  without its diff. Before it reads the changes back, the worker clears the flags a run can set on the index
+  (skip-worktree, assume-unchanged), which would keep git showing an entry other than the file on disk; where
+  the file system ignores case, a declared `Report.md` is delivered under git's `report.md`, the name the review
+  and its scan use. A declared output whose bytes are not the blob git holds for it (an index entry the run
+  wrote by hand) is not delivered either, and fails the run. An artifact keeps its name as the run gave it,
+  never trimmed into another's.
 - A run sent back with changes requested starts from that round only as its diff, checked against the
   sha256 the review recorded and applied with `git apply`, which writes nothing outside the clone, into
   `.git` or through a link. A round that would leave a link in the clone is undone, and the run starts
