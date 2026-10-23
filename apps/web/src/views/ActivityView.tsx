@@ -38,9 +38,7 @@ export function ActivityView({
                   />
                   <div>
                     <div className="txt">{s.text}</div>
-                    <div className="meta">
-                      {relativeTime(ev.createdAt)} · <span className="mono">{ev.type}</span> · seq {ev.seq}
-                    </div>
+                    <div className="meta">{relativeTime(ev.createdAt)}</div>
                   </div>
                 </button>
               );
@@ -48,19 +46,6 @@ export function ActivityView({
             {data.events.length === 0 ? <Empty>No activity in this company yet.</Empty> : null}
           </div>
         </div>
-      </div>
-    </>
-  );
-}
-
-export function ComingSoon({ title, milestone, blurb }: { title: string; milestone: string; blurb: string }) {
-  return (
-    <>
-      <Topbar title={title} subtitle={`Arrives in ${milestone}`} />
-      <div className="content">
-        <Empty>
-          <div className="mx-auto max-w-[520px]">{blurb}</div>
-        </Empty>
       </div>
     </>
   );

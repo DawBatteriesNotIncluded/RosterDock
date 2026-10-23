@@ -53,6 +53,49 @@ jobs:
       - run: pnpm test
       - run: pnpm --filter @rosterdock/web build
 
+  windows:
+    # The worker on native Windows, where git, links and file identity differ from the Linux image: the
+    # worker's and the shared package's tests, and how the board starts Peter's CLIs. The rest of the board
+    # needs Postgres and is tested in the job above. On Node 22.16, the last 22 with libuv 1.49, and on the 22
+    # the runner has cached (setup-node takes it before a newer release).
+    name: worker tests on Windows (node ${{ matrix.node }})
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.16", "22"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: git --version
+      # libuv 1.49 and 1.50 (Node 22.12 to 22.16, 23.1 to 23.11, 24.0 to 24.1) read a stat's device by path
+      # from the wrong field where Windows has GetFileInformationByName; a stat by handle is right. The
+      # harvest compares by handle there.
+      - name: a file's device, by path and by handle
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const f = require("path").join(require("os").tmpdir(), "rosterdock-device-probe");
+            fs.writeFileSync(f, "x");
+            const h = fs.openSync(f, "r");
+            const byPath = fs.lstatSync(f, { bigint: true }).dev;
+            const byHandle = fs.fstatSync(h, { bigint: true }).dev;
+            console.log(`node ${process.version}, libuv ${process.versions.uv}: by path ${byPath}, by handle ${byHandle}`);
+            fs.closeSync(h);
+            fs.rmSync(f);
+          '
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --no-bail --filter @rosterdock/shared --filter @rosterdock/worker test
+      - run: pnpm --filter @rosterdock/board exec vitest run test/peter-cli-bin.test.ts
+
   images:
     name: build images
     runs-on: ubuntu-latest
@@ -127,3 +170,22 @@ jobs:
       - run: helm template rosterdock deploy/helm/rosterdock --set postgres.externalSecret.name=rosterdock-db > /dev/null
       - run: helm lint deploy/helm/rosterdock --strict -f deploy/helm/rosterdock/examples/production.yaml
       - run: helm template rosterdock deploy/helm/rosterdock -f deploy/helm/rosterdock/examples/production.yaml > /dev/null
+      # board.privateDestinations renders as one value, and an entry whose comma or = would hand a company's
+      # destination to every company, or to another company, is refused.
+      - name: helm template, private destinations
+        run: |
+          set -euo pipefail
+          id=4f1aee73-e65e-4c8d-83f7-aa1169379d7f
+          values="$RUNNER_TEMP/private.yaml"
+          render() { helm template rosterdock deploy/helm/rosterdock --set postgres.externalSecret.name=rosterdock-db -f "$values"; }
+          refused() {
+            printf '%s\n' "board:" "  privateDestinations:" "    - $1" > "$values"
+            if render > /dev/null 2> "$RUNNER_TEMP/err.txt"; then echo "rendered: $1"; exit 1; fi
+            grep -F "$2" "$RUNNER_TEMP/err.txt"
+          }
+          printf '%s\n' "board:" "  privateDestinations:" "    - 10.20.0.0/16" \
+            "    - { company: \"$id\", destination: [ollama.internal, 10.30.0.0/16] }" > "$values"
+          render | grep -F "value: \"10.20.0.0/16,$id=ollama.internal,$id=10.30.0.0/16\""
+          refused "\"$id=a.internal,b.internal\"" "holds a company's entry and more in one string"
+          refused "{ company: \"$id\", destination: \"a.internal,b.internal\" }" "holds a comma or ="
+          refused "{ company: \"$id,x\", destination: a.internal }" "holds a comma or ="

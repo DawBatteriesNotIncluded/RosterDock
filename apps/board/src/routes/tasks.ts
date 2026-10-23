@@ -1,13 +1,15 @@
 import { CancelTaskSchema, CreateTaskSchema, MoveTaskSchema, UpdateTaskSchema } from "@rosterdock/shared";
 import type { FastifyInstance } from "fastify";
 import { assertActorInCompany } from "../actors.js";
-import type { Db } from "../db/pool.js";
+import type { Principal } from "../auth/tokens.js";
+import type { Db, Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate } from "../mutate.js";
 import type { RunQueue } from "../queue.js";
-import { stopRun } from "../runs/service.js";
+import { loadRun, stopRun } from "../runs/service.js";
 import {
   assertDepartment,
+  assertTeammateDepartment,
   cancelTask,
   createTask,
   decisionToJson,
@@ -22,6 +24,12 @@ import {
 import { parseBody, uuidParam } from "../validate.js";
 
 export { taskToJson, type TaskRow };
+
+/** The task a run-scoped teammate token's run is on; null for a person, or a teammate outside a run. */
+async function principalRunTask(db: Queryable, principal: Principal): Promise<string | null> {
+  if (principal.kind !== "teammate" || !principal.runId) return null;
+  return (await loadRun(db, principal.runId)).task_id;
+}
 
 export function registerTaskRoutes(app: FastifyInstance, db: Db, queue: RunQueue): void {
   app.get("/api/companies/:companyId/tasks", { config: { action: "company.read" } }, async (req) => {
@@ -49,7 +57,15 @@ export function registerTaskRoutes(app: FastifyInstance, db: Db, queue: RunQueue
 
   app.post("/api/companies/:companyId/tasks", { config: { action: "task.create" } }, async (req, reply) => {
     const body = parseBody(CreateTaskSchema, req.body);
-    const task = await createTask(db, req.companyId, req.principal.actor, body);
+    // A teammate filing from its run files a follow-up of the run's task, as over MCP: same department.
+    const runTaskId = await principalRunTask(db, req.principal);
+    const task = await createTask(
+      db,
+      req.companyId,
+      req.principal.actor,
+      body,
+      runTaskId ? { parentTaskId: runTaskId } : {},
+    );
     reply.code(201);
     return taskToJson(task);
   });
@@ -77,6 +93,14 @@ export function registerTaskRoutes(app: FastifyInstance, db: Db, queue: RunQueue
       if (task.status === "done")
         throw new HttpError(409, `#${task.number} is done. Open Activity for the history.`);
       await assertDepartment(ctx.client, req.companyId, body.departmentId);
+      if (req.principal.kind === "teammate" && body.departmentId !== undefined)
+        await assertTeammateDepartment(
+          ctx.client,
+          req.companyId,
+          req.principal.teammate.id,
+          body.departmentId,
+          await principalRunTask(ctx.client, req.principal),
+        );
       const assignee = body.assignee
         ? await assertActorInCompany(ctx.client, req.companyId, body.assignee)
         : null;

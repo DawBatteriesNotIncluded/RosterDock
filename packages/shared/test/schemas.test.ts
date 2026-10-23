@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   CreateDepartmentSchema,
+  CreateGoalSchema,
+  CreateProjectSchema,
   CreateTaskSchema,
   extractMentions,
   handleFor,
   MoveTaskSchema,
   CreateTeammateSchema,
   ModelPriceInputSchema,
+  RunArtifactSchema,
+  UpdateProjectSchema,
   UpdateTeammateSchema,
 } from "../src/index.js";
 
@@ -33,6 +37,51 @@ describe("request schemas", () => {
     );
   });
 
+  it("a goal opens its project on a repository and a branch, and no repository URL carries a credential", () => {
+    const goal = CreateGoalSchema.parse({
+      text: "Fix the export",
+      repoUrl: "https://github.com/acme/app",
+      defaultBranch: "develop",
+    });
+    expect(goal).toMatchObject({
+      repoUrl: "https://github.com/acme/app",
+      defaultBranch: "develop",
+      caps: {},
+    });
+    expect(CreateGoalSchema.parse({ text: "Fix the export" }).repoUrl).toBeUndefined();
+    // A branch belongs to a repository.
+    expect(CreateGoalSchema.safeParse({ text: "Fix the export", defaultBranch: "develop" }).success).toBe(
+      false,
+    );
+    expect(CreateGoalSchema.safeParse({ text: "Fix the export", repoUrl: "not a url" }).success).toBe(false);
+    // A password, or a user on http(s), is a credential: the worker's token is named in its environment.
+    for (const repoUrl of [
+      "https://deploy:hunter2@github.com/acme/app",
+      "https://deploy@github.com/acme/app",
+      "ssh://git:hunter2@example.com/acme/app.git",
+    ]) {
+      expect(CreateGoalSchema.safeParse({ text: "Fix the export", repoUrl }).success).toBe(false);
+      expect(CreateProjectSchema.safeParse({ name: "App", repoUrl }).success).toBe(false);
+      expect(UpdateProjectSchema.safeParse({ repoUrl }).success).toBe(false);
+    }
+    // A goal goes into a project that exists, or opens one on a repository; not both.
+    expect(CreateGoalSchema.parse({ text: "Fix the export", projectId: id }).projectId).toBe(id);
+    expect(
+      CreateGoalSchema.safeParse({
+        text: "Fix the export",
+        projectId: id,
+        repoUrl: "https://github.com/acme/app",
+      }).success,
+    ).toBe(false);
+    expect(
+      CreateGoalSchema.safeParse({ text: "Fix the export", projectId: id, defaultBranch: "develop" }).success,
+    ).toBe(false);
+    // The user on an ssh URL is who git signs in as, not a secret.
+    expect(
+      CreateProjectSchema.safeParse({ name: "App", repoUrl: "ssh://git@example.com/acme/app.git" }).success,
+    ).toBe(true);
+  });
+
   it("accepts a user or a teammate as assignee", () => {
     expect(
       CreateTaskSchema.safeParse({ projectId: id, title: "T", assignee: { kind: "user", id } }).success,
@@ -43,6 +92,13 @@ describe("request schemas", () => {
     expect(
       CreateTaskSchema.safeParse({ projectId: id, title: "T", assignee: { kind: "bot", id } }).success,
     ).toBe(false);
+  });
+});
+
+describe("a run's artifact", () => {
+  it("keeps its path as the run named it: one with a space or a U+FEFF at an end is another file", () => {
+    for (const name of ["\ufeffreport.md", " report.md", "report.md "])
+      expect(RunArtifactSchema.parse({ path: name, content: "x" }).path).toBe(name);
   });
 });
 
@@ -65,7 +121,14 @@ describe("mentions", () => {
     expect(
       CreateTeammateSchema.parse({ name: "Finn", role: "finance", model: " claude-sonnet-5.1 " }).model,
     ).toBe("claude-sonnet-5-1");
-    expect(ModelPriceInputSchema.shape.model.parse("claude-opus-5.5")).toBe("claude-opus-5-5");
+    expect(ModelPriceInputSchema.parse({ model: "claude-opus-5.5" }).model).toBe("claude-opus-5-5");
+    // A provider's price keeps the id as the provider takes it.
+    expect(
+      ModelPriceInputSchema.parse({
+        model: "claude-3.7-sonnet",
+        providerId: "00000000-0000-4000-8000-000000000001",
+      }).model,
+    ).toBe("claude-3.7-sonnet");
     expect(UpdateTeammateSchema.parse({ model: "claude-opus-5-5" }).model).toBe("claude-opus-5-5");
     expect(UpdateTeammateSchema.parse({ model: "gpt-6.1-astra" }).model).toBe("gpt-6.1-astra");
     expect(UpdateTeammateSchema.parse({ model: "anthropic.claude-opus-5-5-v1:0" }).model).toBe(

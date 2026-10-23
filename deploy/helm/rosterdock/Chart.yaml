@@ -6,7 +6,8 @@ type: application
 # images' tag; keep both here on the version being prepared (docs/releasing.md).
 version: 0.1.0
 appVersion: "0.1.0"
-kubeVersion: ">=1.27.0"
+# The -0 lets the prerelease-suffixed versions managed clusters report (v1.30.4-eks-..., -gke...) match.
+kubeVersion: ">=1.27.0-0"
 keywords:
   - ai
   - agents

@@ -4,6 +4,7 @@
 // so he is present from the first minute. A department with a lead has that
 // lead as its Peter: a project-manager instance scoped to the department.
 
+import { DEFAULT_MANAGER_MODEL } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
 import type { MutationContext } from "../mutate.js";
 
@@ -105,7 +106,7 @@ export async function ensurePeter(ctx: MutationContext): Promise<Manager> {
     persona_md: "",
     playbooks: [],
     engine: "claude_code",
-    model: "claude-opus-5",
+    model: DEFAULT_MANAGER_MODEL,
     avatar: "P",
   };
   const inserted = await ctx.client.query<{

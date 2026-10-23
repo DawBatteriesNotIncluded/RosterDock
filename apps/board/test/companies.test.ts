@@ -65,6 +65,38 @@ describe("companies and memberships", () => {
   it("keeps at least one owner", async () => {
     const { api, owner, base } = await seedCompany(board, "c4@example.com");
     expect((await api.del(`${base}/members/${owner.userId}`)).status).toBe(409);
+    // Nor can the last owner demote themselves.
+    const demoted = await api.post(`${base}/members`, { email: "c4@example.com", role: "admin" });
+    expect(demoted.status).toBe(409);
+    expect(demoted.body.error).toMatch(/at least one owner/);
+    const members = await api.get(`${base}/members`);
+    expect(members.body.find((m: any) => m.userId === owner.userId).role).toBe("owner");
+  });
+
+  it("only an owner changes or removes an owner, and only while another owner stays", async () => {
+    const { api, owner, base } = await seedCompany(board, "c9@example.com");
+    const second = await api.post(`${base}/members`, { email: "c9-second@example.com", role: "owner" });
+    expect(second.status).toBe(201);
+    expect((await api.post(`${base}/members`, { email: "c9-admin@example.com", role: "admin" })).status).toBe(
+      201,
+    );
+    const roleOf = async (userId: string) =>
+      (await api.get(`${base}/members`)).body.find((m: any) => m.userId === userId).role;
+
+    // An admin can neither demote nor remove an owner.
+    const admin = board.api((await board.login("c9-admin@example.com")).token);
+    const refused = await admin.post(`${base}/members`, { email: "c9@example.com", role: "viewer" });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toMatch(/only an owner/);
+    expect((await admin.del(`${base}/members/${owner.userId}`)).status).toBe(403);
+    expect(await roleOf(owner.userId)).toBe("owner");
+
+    // An owner demotes another owner while a second one stays; then the one left is the last.
+    const demoted = await api.post(`${base}/members`, { email: "c9-second@example.com", role: "admin" });
+    expect(demoted.status).toBe(201);
+    expect(await roleOf(second.body.userId)).toBe("admin");
+    expect((await api.post(`${base}/members`, { email: "c9@example.com", role: "admin" })).status).toBe(409);
+    expect(await roleOf(owner.userId)).toBe("owner");
   });
 
   it("teammates act as themselves: same guard, teammate role, no company creation", async () => {
@@ -90,6 +122,55 @@ describe("companies and memberships", () => {
     // The token is scoped to its company: another company is invisible.
     const other = await seedCompany(board, "c6@example.com");
     expect((await asCody.get(other.base)).status).toBe(403);
+  });
+
+  it("a teammate opens and renames projects; where the code goes and what the client allows are a person's", async () => {
+    const { api, base } = await seedCompany(board, "c10@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const asCody = board.api((await api.post(`${base}/teammates/${cody.id}/tokens`, {})).body.token);
+    const policy = { default: "read", caps: { n8n: "off" } };
+    const project = (await api.post(`${base}/projects`, { name: "Globex", clientPolicy: policy })).body;
+    const url = `${base}/projects/${project.id}`;
+
+    for (const settings of [
+      { repoUrl: "https://github.com/globex/site.git" },
+      { repoUrl: null },
+      { defaultBranch: "release" },
+      { clientPolicy: { default: "ask", caps: {} } },
+    ]) {
+      const refused = await asCody.patch(url, { name: "Globex site", ...settings });
+      expect(refused.status, JSON.stringify(settings)).toBe(403);
+      expect(refused.body.error).toMatch(/may not project\.configure/);
+      const opened = await asCody.post(`${base}/projects`, { name: "Initech", ...settings });
+      expect(opened.status, JSON.stringify(settings)).toBe(403);
+    }
+    const unchanged = (await api.get(url)).body;
+    expect(unchanged).toMatchObject({
+      name: "Globex",
+      repoUrl: null,
+      defaultBranch: "main",
+      clientPolicy: policy,
+    });
+
+    expect((await asCody.patch(url, { name: "Globex site", goal: "Ship it" })).status).toBe(200);
+    expect((await asCody.post(`${base}/projects`, { name: "Initech", client: "Initech" })).status).toBe(201);
+    const set = await api.patch(url, {
+      repoUrl: "https://github.com/globex/site.git",
+      clientPolicy: { caps: {} },
+    });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({ name: "Globex site", repoUrl: "https://github.com/globex/site.git" });
+
+    // A goal opens a project too: a teammate hands one over, but not with a repository or a branch.
+    for (const settings of [
+      { repoUrl: "https://github.com/globex/site.git" },
+      { defaultBranch: "release" },
+    ]) {
+      const goal = await asCody.post(`${base}/goals`, { text: "Ship the Globex site", ...settings });
+      expect(goal.status, JSON.stringify(settings)).toBe(403);
+      expect(goal.body.error).toMatch(/may not project\.configure/);
+    }
+    expect((await asCody.post(`${base}/goals`, { text: "Ship the Globex site" })).status).toBe(201);
   });
 
   it("keeps the office layout in the company settings: slots, colours and desk cells, and nothing else", async () => {

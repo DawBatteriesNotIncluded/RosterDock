@@ -1,7 +1,7 @@
 // Authentication: resolves a Principal from the session cookie or a bearer
 // token for every non-public route, and exposes the dev login when enabled.
 
-import { DevLoginSchema } from "@rosterdock/shared";
+import { bearerToken, DevLoginSchema } from "@rosterdock/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { BoardConfig } from "../config.js";
 import type { Db } from "../db/pool.js";
@@ -20,12 +20,6 @@ import {
 } from "./oidc.js";
 import { createSession, deleteSession, resolveApiToken, resolveSession, SESSION_COOKIE } from "./tokens.js";
 
-function bearerFrom(header: string | undefined): string | null {
-  if (!header) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(header);
-  return m?.[1]?.trim() || null;
-}
-
 export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, oidc: OidcDeps): void {
   /** Where the browser is: ROSTERDOCK_PUBLIC_URL, else the request's own origin (behind a trusted proxy). */
   const publicBase = (req: FastifyRequest): string => config.publicUrl ?? `${req.protocol}://${req.host}`;
@@ -40,7 +34,7 @@ export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, 
 
   app.addHook("onRequest", async (req) => {
     if (req.routeOptions.config.public) return;
-    const bearer = bearerFrom(req.headers.authorization);
+    const bearer = bearerToken(req.headers.authorization);
     const cookie = req.cookies[SESSION_COOKIE];
     const principal = bearer
       ? ((await resolveSession(db, bearer)) ?? (await resolveApiToken(db, bearer)))
@@ -51,7 +45,16 @@ export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, 
     req.principal = principal;
   });
 
-  app.post("/api/auth/dev-login", { config: { public: true } }, async (req, reply) => {
+  // Signing in is what anyone may ask of the board before signing in, so each sign-in route takes
+  // ROSTERDOCK_SIGNIN_RATE_LIMIT requests a minute from one client address, counted per replica; 0: no limit.
+  const signIn = {
+    config: {
+      public: true,
+      rateLimit: config.signInRateLimit > 0 ? { max: config.signInRateLimit, timeWindow: 60_000 } : false,
+    },
+  };
+
+  app.post("/api/auth/dev-login", signIn, async (req, reply) => {
     if (!config.devLogin) throw new HttpError(404, "dev login is disabled");
     const body = parseBody(DevLoginSchema, req.body);
     const name = body.name ?? body.email.split("@")[0] ?? body.email;
@@ -78,7 +81,7 @@ export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, 
 
   // OpenID Connect: the browser goes to the provider with a state, a nonce and a PKCE challenge the
   // board recorded, and comes back to the callback with a code the board exchanges server to server.
-  app.get("/api/auth/oidc/start", { config: { public: true } }, async (req, reply) => {
+  app.get("/api/auth/oidc/start", signIn, async (req, reply) => {
     if (!config.oidc) throw new HttpError(404, "single sign-on is not configured");
     const base = publicBase(req);
     const returnTo = safeReturnTo((req.query as { returnTo?: unknown }).returnTo);
@@ -89,7 +92,7 @@ export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, 
     return reply.redirect(url, 302);
   });
 
-  app.get("/api/auth/oidc/callback", { config: { public: true } }, async (req, reply) => {
+  app.get("/api/auth/oidc/callback", signIn, async (req, reply) => {
     if (!config.oidc) throw new HttpError(404, "single sign-on is not configured");
     const base = publicBase(req);
     const q = req.query as { code?: string; state?: string; error?: string };
@@ -149,7 +152,7 @@ export function registerAuth(app: FastifyInstance, db: Db, config: BoardConfig, 
   // (RP-initiated logout: the provider's end_session_endpoint with this client and a way back).
   app.post("/api/auth/logout", { config: {} }, async (req, reply) => {
     const cookie = req.cookies[SESSION_COOKIE];
-    const bearer = bearerFrom(req.headers.authorization);
+    const bearer = bearerToken(req.headers.authorization);
     const token = cookie ?? bearer;
     const provider = token ? await deleteSession(db, token) : null;
     reply.clearCookie(SESSION_COOKIE, { path: "/" });

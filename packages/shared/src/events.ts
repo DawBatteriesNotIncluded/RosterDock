@@ -1,7 +1,7 @@
 // The one event stream. Types shared by the board (which appends to the
 // `events` table) and the web (which projects Activity, Office and Map from
-// it), plus the pure fan-out and replay-then-live helpers ported from
-// agent-board `src/audit.ts` and its SSE route.
+// it), plus the pure fan-out and replay-then-live helpers carried over from
+// the v1 prototype's audit log and its SSE route.
 
 import type { ActorRef } from "./roles.js";
 
@@ -51,6 +51,7 @@ export const EVENT_TYPES = [
   "review.approved",
   "review.vetoed",
   "review.reassigned",
+  "review.needs_person",
   "task.done",
   "pr.proposed",
   "pr.opened",
@@ -88,6 +89,11 @@ export const EVENT_TYPES = [
   "notify.sent",
   // Deployable (M6)
   "teammate.drift",
+  // Company model providers: the payload carries names only, never a value.
+  "model_provider.created",
+  "model_provider.updated",
+  "model_provider.archived",
+  "model_provider.deleted",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -109,7 +115,8 @@ export interface SubjectRef {
     | "goal"
     | "draft"
     | "approval"
-    | "connection";
+    | "connection"
+    | "model_provider";
   id: string;
 }
 

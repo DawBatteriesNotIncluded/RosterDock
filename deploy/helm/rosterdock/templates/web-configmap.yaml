@@ -23,7 +23,14 @@ data:
         proxy_read_timeout 1h;
         proxy_set_header Connection "";
       }
+      # As apps/web/nginx.conf: hashed assets are cached for good, the page is revalidated on every load, or
+      # an upgrade keeps serving the old bundle until the cache expires.
+      location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+      }
       location / {
+        add_header Cache-Control "no-cache";
         try_files $uri $uri/ /index.html;
       }
     }

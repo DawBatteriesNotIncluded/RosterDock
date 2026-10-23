@@ -11,6 +11,7 @@ import {
   type OtelSpan,
   type OtlpTarget,
 } from "@rosterdock/shared";
+import { clip } from "./text.js";
 
 export interface Phase {
   name: string;
@@ -57,7 +58,7 @@ export function workerSpans(runId: string, phases: Phase[]): OtelSpan[] {
     startMs: p.startMs,
     endMs: p.endMs,
     attributes: p.attributes ?? {},
-    status: p.error ? { code: 2, message: p.error.slice(0, 500) } : { code: 1 },
+    status: p.error ? { code: 2, message: clip(p.error, 500) } : { code: 1 },
   }));
 }
 

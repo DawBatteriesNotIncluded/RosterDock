@@ -166,6 +166,13 @@ export function ReviewsView(p: ReviewsViewProps) {
       setBusy(false);
     }
   };
+  // A decision carries the note; once it is recorded the note is spent, so the next decision starts empty.
+  // One that fails keeps it.
+  const decide = (send: (summary?: string) => Promise<void>) =>
+    act(async () => {
+      await send(note.trim() || undefined);
+      setNote("");
+    });
 
   const queue = useMemo(() => sortReviews(p.data.reviews), [p.data.reviews]);
   const canDecide = p.role === "owner" || p.role === "admin" || p.role === "reviewer";
@@ -238,6 +245,8 @@ export function ReviewsView(p: ReviewsViewProps) {
   const current = r.comments.filter((c) => c.round === r.round);
   const openComments = current.filter((c) => !c.resolved).length;
   const project = p.data.projects.find((x) => x.id === r.projectId);
+  // Build work on a project with a repository becomes a pull request; research documents stay on the board.
+  const opensChange = !!project?.repoUrl && r.workKind === "build";
   const pr = r.pullRequests[0] ?? null;
   const decided = r.decisions.filter((d) => d.round === r.round);
   const myDecision = decided.filter((d) => d.by.kind === "user" && d.by.id === p.meId).at(-1) ?? null;
@@ -384,31 +393,12 @@ export function ReviewsView(p: ReviewsViewProps) {
     <>
       <Topbar
         title={r.taskTitle ?? "Review"}
+        long
         left={
           <>
-            <span className="mono text-[13px] text-muted">#{r.taskNumber}</span>
+            <span className="mono shrink-0 text-[13px] text-muted">#{r.taskNumber}</span>
             <Pill tone={reviewTone(r.status)}>{REVIEW_LABEL[r.status]}</Pill>
-            <span className="text-[12px] text-muted">round {r.round}</span>
-          </>
-        }
-        right={
-          <>
-            <div className="flex items-center gap-2 text-[13px] text-ink-2">
-              {author ? (
-                <Avatar name={author.name} handle={author.handle} size="s" you={author.isYou} />
-              ) : null}
-              <span>{author?.name ?? "someone"}</span>
-              <span className="text-faint">→</span>
-              {reviewer ? (
-                <>
-                  <Avatar name={reviewer.name} handle={reviewer.handle} size="s" you={reviewer.isYou} />
-                  <span>{reviewer.name}</span>
-                </>
-              ) : null}
-              <span className="text-faint">+</span>
-              <Avatar name="You" size="s" you />
-              <span>You</span>
-            </div>
+            <span className="round shrink-0 text-[12px] whitespace-nowrap text-muted">round {r.round}</span>
             {others.length > 1 ? (
               <Segs
                 label="Review"
@@ -417,6 +407,29 @@ export function ReviewsView(p: ReviewsViewProps) {
                 options={others.map((x) => ({ value: x.id, label: `#${x.taskNumber}` }))}
               />
             ) : null}
+          </>
+        }
+        right={
+          <>
+            <div
+              className="rpeople flex items-center gap-2 text-[13px] text-ink-2"
+              title={`${author?.name ?? "someone"} → ${reviewer ? `${reviewer.name} + ` : ""}You`}
+            >
+              {author ? (
+                <Avatar name={author.name} handle={author.handle} size="s" you={author.isYou} />
+              ) : null}
+              <span className="name">{author?.name ?? "someone"}</span>
+              <span className="text-faint">→</span>
+              {reviewer ? (
+                <>
+                  <Avatar name={reviewer.name} handle={reviewer.handle} size="s" you={reviewer.isYou} />
+                  <span className="name">{reviewer.name}</span>
+                </>
+              ) : null}
+              <span className="text-faint">+</span>
+              <Avatar name="You" size="s" you />
+              <span className="name">You</span>
+            </div>
             <Button size="sm" onClick={() => p.onOpenTask(r.taskId)}>
               Open task
             </Button>
@@ -477,12 +490,14 @@ export function ReviewsView(p: ReviewsViewProps) {
           {file ? (
             <>
               <div className="diff-h">
-                <span className="mono text-[13px] font-medium">{file.path}</span>
-                <span className="text-[12px] text-muted">
+                <span className="mono min-w-0 truncate text-[13px] font-medium" title={file.path}>
+                  {file.path}
+                </span>
+                <span className="shrink-0 text-[12px] text-muted">
                   {file.status}
                   {file.binary ? " · binary, not shown" : ""}
                 </span>
-                <span className="seg ml-auto" role="group" aria-label="Diff layout">
+                <span className="seg ml-auto shrink-0" role="group" aria-label="Diff layout">
                   <button
                     className={cn("segb", layout === "unified" && "active")}
                     onClick={() => setLayout("unified")}
@@ -639,14 +654,14 @@ export function ReviewsView(p: ReviewsViewProps) {
                 variant="accent"
                 className="block"
                 disabled={busy || !canDecide || r.taskStatus === "doing"}
-                onClick={() => void act(() => p.onApprove(r.id, note.trim() || undefined))}
+                onClick={() => void decide((summary) => p.onApprove(r.id, summary))}
               >
                 Approve
               </Button>
               <Button
                 className="block"
                 disabled={busy || !canDecide || r.status === "changes_requested"}
-                onClick={() => void act(() => p.onRequestChanges(r.id, note.trim() || undefined))}
+                onClick={() => void decide((summary) => p.onRequestChanges(r.id, summary))}
               >
                 {r.status === "changes_requested" ? "Sent back to the author" : "Request changes"}
               </Button>
@@ -704,14 +719,16 @@ export function ReviewsView(p: ReviewsViewProps) {
             ) : done ? (
               <span>
                 #{r.taskNumber} is Done.{" "}
-                {project?.repoUrl
+                {opensChange
                   ? "No pull request was opened: the run recorded no base commit."
-                  : "This project has no repository, so there is no pull request."}
+                  : project?.repoUrl
+                    ? "Its documents stay on the board: research opens no pull request."
+                    : "This project has no repository, so there is no pull request."}
               </span>
             ) : (
               <span>
                 Approving marks #{r.taskNumber} Done
-                {project?.repoUrl ? (
+                {opensChange ? (
                   <>
                     {" "}
                     and opens a pull request to <span className="mono text-[12px]">{project.repoUrl}</span>
@@ -720,7 +737,7 @@ export function ReviewsView(p: ReviewsViewProps) {
                 . Request changes sends {author?.name ?? "the author"} back with every comment in their pack.
               </span>
             )}
-            {project?.repoUrl ? (
+            {opensChange ? (
               <span className="chip warn" style={{ width: "fit-content", padding: "6px 10px", fontSize: 12 }}>
                 <span className="dot warn" />
                 Merging needs you

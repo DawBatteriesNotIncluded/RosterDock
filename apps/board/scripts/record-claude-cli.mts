@@ -14,7 +14,7 @@ import { recordedRequest } from "./planner-recording.mts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const out = path.join(here, "..", "test", "fixtures", "claude-cli");
-const model = process.argv[2] ?? "claude-opus-5";
+const model = process.argv[2] ?? "claude-opus-5-5";
 
 const req = recordedRequest(model);
 

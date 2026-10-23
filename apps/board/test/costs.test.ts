@@ -140,7 +140,7 @@ describe("cost report", () => {
       cacheReadTokens: 2_000_000,
     });
     // A price a person set (the seated Peter's model) is theirs and stays.
-    await api.put(`${base}/prices`, { model: "claude-opus-5", currency: "USD", inputPerMillion: 1 });
+    await api.put(`${base}/prices`, { model: "claude-opus-5-5", currency: "USD", inputPerMillion: 1 });
 
     const filled = await api.post(`${base}/prices/list`, {});
     expect(filled.status).toBe(200);
@@ -154,11 +154,59 @@ describe("cost report", () => {
       cacheReadPerMillion: 20,
       cacheWritePerMillion: 250,
     });
-    expect(prices.find((x) => x.model === "claude-opus-5")).toMatchObject({ inputPerMillion: 1 });
+    expect(prices.find((x) => x.model === "claude-opus-5-5")).toMatchObject({ inputPerMillion: 1 });
     // The run done before there were prices is priced now: $2 in, $10 out, $0.20 a million cache reads.
     expect((await api.get(`${base}/costs?window=week`)).body.totals.costMinorUnits).toBe(200 + 100 + 40);
     // A second fill has nothing to add.
     expect((await api.post(`${base}/prices/list`, {})).body).toEqual({ added: [], unknown: ["gpt-6-astra"] });
+  });
+
+  it("a stub run counts under the stub, not the model its teammate names, and has no price", async () => {
+    // Seen on a live board: a stub teammate on claude-sonnet-5-5 had its runs listed and priced as that model.
+    const { api, base } = await seedCompany(board, "c-stub@example.com");
+    const stubby = await addTeammate(api, base, "Stubby");
+    await api.patch(`${base}/teammates/${stubby.id}`, { engine: "stub", model: "claude-sonnet-5-5" });
+    await api.put(`${base}/prices`, {
+      model: "claude-sonnet-5-5",
+      currency: "GBP",
+      inputPerMillion: 240,
+      outputPerMillion: 1200,
+    });
+    const project = await addProject(api, base);
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "a",
+        assignee: { kind: "teammate", id: stubby.id },
+      })
+    ).body;
+    await runToCompletion(api, base, task.id, { inputTokens: 1200, outputTokens: 300 });
+
+    const r = (await api.get(`${base}/costs?window=week`)).body;
+    expect(
+      r.byModel.map((m: any) => [m.model, m.teammates, m.runs, m.tokens.total, m.costMinorUnits]),
+    ).toEqual([["stub", 1, 1, 1500, null]]);
+    expect(r.byTeammate.find((m: any) => m.id === stubby.id)).toMatchObject({
+      model: "stub",
+      engine: "stub",
+      costMinorUnits: null,
+    });
+    expect(r.totals.costMinorUnits).toBeNull();
+    const [run] = (await api.get(`${base}/tasks/${task.id}/runs`)).body as any[];
+    expect(run.costMinorUnits).toBeNull();
+    const month = (await api.get(`${base}/costs/monthly`)).body;
+    expect(month.byModel.map((m: any) => m.model)).toEqual(["stub"]);
+    expect(month.byTeammate.find((m: any) => m.id === stubby.id).model).toBe("stub");
+    // Filling list prices asks nobody to price the stub. List prices are in USD, and this company's are in
+    // GBP: a company keeps one currency, so the fill is refused, and adds nothing.
+    const refused = await api.post(`${base}/prices/list`, {});
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe(
+      "list prices are in USD, and this company's prices are in GBP; a company keeps one currency, so give these prices in GBP",
+    );
+    expect((await api.get(`${base}/prices`)).body.map((p: any) => p.model)).toEqual(["claude-sonnet-5-5"]);
+    await api.del(`${base}/prices/${(await api.get(`${base}/prices`)).body[0].id}`);
+    expect((await api.post(`${base}/prices/list`, {})).body.unknown).not.toContain("stub");
   });
 
   it("an empty company reports zeros, no budget and no seats", async () => {

@@ -12,7 +12,8 @@ import {
   type UpdateGoalCapsInput,
 } from "@rosterdock/shared";
 import { costFor } from "../budgets/cost.js";
-import { priceFor } from "../budgets/service.js";
+import { priceTable } from "../budgets/prices.js";
+import { recordPlanningUsage } from "../budgets/usage.js";
 import type { Db, Queryable } from "../db/pool.js";
 import type { GitHubProvider } from "../git/github.js";
 import { HttpError, notFound } from "../http-error.js";
@@ -70,6 +71,8 @@ export interface GoalRow {
   planning_usage: Partial<ModelUsage> & { calls?: number };
   attention: string | null;
   planner: string | null;
+  /** The goal opened its project (and names it after its plan); false: it went into one that existed. */
+  opened_project: boolean;
   created_by_kind: "user" | "teammate";
   created_by_id: string;
   planned_at: Date | null;
@@ -97,6 +100,7 @@ export function goalToJson(row: GoalRow) {
     },
     attention: row.attention,
     planner: row.planner,
+    openedProject: row.opened_project,
     createdBy: { kind: row.created_by_kind, id: row.created_by_id },
     plannedAt: row.planned_at?.toISOString() ?? null,
     closedAt: row.closed_at?.toISOString() ?? null,
@@ -120,11 +124,6 @@ export async function loadGoal(
   return row;
 }
 
-export async function goalForProject(db: Queryable, projectId: string): Promise<GoalRow | null> {
-  const res = await db.query<GoalRow>("SELECT * FROM goals WHERE project_id = $1", [projectId]);
-  return res.rows[0] ?? null;
-}
-
 export async function listGoals(db: Queryable, companyId: string): Promise<GoalRow[]> {
   return (
     await db.query<GoalRow>("SELECT * FROM goals WHERE company_id = $1 ORDER BY created_at DESC", [companyId])
@@ -136,12 +135,22 @@ function shortTitle(text: string): string {
   return (first.length > 80 ? `${first.slice(0, 77)}…` : first) || "Goal";
 }
 
-/** Open a project for the goal and record it as planning. The caller plans it next. */
+/**
+ * Record the goal as planning, in the project it names or in a project opened for it on the repository and
+ * branch it names. The caller plans it next.
+ */
 export async function createGoal(
   deps: PeterDeps,
   companyId: string,
   actor: ActorRef,
-  input: { text: string; departmentId?: string | null; caps?: Partial<GoalCaps> },
+  input: {
+    text: string;
+    departmentId?: string | null;
+    projectId?: string | null;
+    repoUrl?: string | null;
+    defaultBranch?: string;
+    caps?: Partial<GoalCaps>;
+  },
 ): Promise<GoalRow> {
   const caps = GoalCapsSchema.parse(input.caps ?? {});
   const { result } = await mutate(deps.db, companyId, actor, async (ctx) => {
@@ -154,21 +163,34 @@ export async function createGoal(
       if (!d.rowCount) throw new HttpError(422, "department is not in this company");
     }
     const title = shortTitle(input.text);
-    const project = (
-      await ctx.client.query<{ id: string; name: string; client: string }>(
-        "INSERT INTO projects (company_id, name, client, goal) VALUES ($1, $2, 'Internal', $3) RETURNING id, name, client",
-        [companyId, title, input.text],
-      )
-    ).rows[0]!;
-    await ctx.emit(
-      "project.created",
-      { kind: "project", id: project.id },
-      { name: project.name, client: project.client, fromGoal: true },
-    );
+    let project: { id: string; name: string; client: string };
+    if (input.projectId) {
+      const existing = (
+        await ctx.client.query<{ id: string; name: string; client: string }>(
+          "SELECT id, name, client FROM projects WHERE id = $1 AND company_id = $2",
+          [input.projectId, companyId],
+        )
+      ).rows[0];
+      if (!existing) throw new HttpError(422, "project is not in this company");
+      project = existing;
+    } else {
+      project = (
+        await ctx.client.query<{ id: string; name: string; client: string }>(
+          `INSERT INTO projects (company_id, name, client, goal, repo_url, default_branch)
+           VALUES ($1, $2, 'Internal', $3, $4, $5) RETURNING id, name, client`,
+          [companyId, title, input.text, input.repoUrl ?? null, input.defaultBranch ?? "main"],
+        )
+      ).rows[0]!;
+      await ctx.emit(
+        "project.created",
+        { kind: "project", id: project.id },
+        { name: project.name, client: project.client, fromGoal: true },
+      );
+    }
     const goal = (
       await ctx.client.query<GoalRow>(
-        `INSERT INTO goals (company_id, project_id, department_id, text, title, caps, created_by_kind, created_by_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        `INSERT INTO goals (company_id, project_id, department_id, text, title, caps, created_by_kind, created_by_id, opened_project)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
         [
           companyId,
           project.id,
@@ -178,6 +200,7 @@ export async function createGoal(
           JSON.stringify(caps),
           actor.kind,
           actor.id,
+          !input.projectId,
         ],
       )
     ).rows[0]!;
@@ -187,6 +210,8 @@ export async function createGoal(
       {
         title: goal.title,
         projectId: project.id,
+        // Named when the goal went into a project that existed.
+        projectName: input.projectId ? project.name : null,
         departmentId: goal.department_id,
         preview: input.text.slice(0, 200),
       },
@@ -277,9 +302,10 @@ async function planClaimed(deps: PeterDeps, first: GoalRow): Promise<GoalRow> {
   if (!manager) throw new HttpError(409, "this company has no project manager teammate");
   const roster = await buildRoster(deps.db, first.company_id, manager);
   const project = (
-    await deps.db.query<{ repo_url: string | null }>("SELECT repo_url FROM projects WHERE id = $1", [
-      first.project_id,
-    ])
+    await deps.db.query<{ repo_url: string | null; default_branch: string }>(
+      "SELECT repo_url, default_branch FROM projects WHERE id = $1",
+      [first.project_id],
+    )
   ).rows[0];
   const answered = (first.questions ?? []).filter((q) => q.answer !== null) as {
     text: string;
@@ -292,7 +318,7 @@ async function planClaimed(deps: PeterDeps, first: GoalRow): Promise<GoalRow> {
     mayAsk: rounds < MAX_QUESTION_ROUNDS,
     maxTasks: first.caps.maxTasks,
     departmentId: first.department_id,
-    repoUrl: project?.repo_url ?? null,
+    repo: project?.repo_url ? { url: project.repo_url, branch: project.default_branch } : null,
   };
   let plan: Plan | null = null;
   let planner = "heuristic";
@@ -321,9 +347,22 @@ async function planClaimed(deps: PeterDeps, first: GoalRow): Promise<GoalRow> {
           schema: PlanSchema,
           trace: { purpose: "plan", companyId: first.company_id, goalId: first.id },
         });
+        // Costs and budgets count the call as it returns, whatever becomes of its plan.
+        await recordPlanningUsage(deps.db, {
+          companyId: first.company_id,
+          teammateId: manager.id,
+          purpose: "plan",
+          goalId: first.id,
+          projectId: first.project_id,
+          departmentId: first.department_id,
+          model: result.model || manager.model,
+          usage: result.usage,
+        });
         usage = result.usage;
         if (result.output) {
-          const problems = validatePlan(result.output, planRoster, first.caps.maxTasks);
+          const problems = validatePlan(result.output, planRoster, first.caps.maxTasks, {
+            repository: !!input.repo,
+          });
           if (!input.mayAsk && result.output.questions.length)
             problems.push("asked questions after its question round");
           if (problems.length === 0) {
@@ -477,21 +516,23 @@ async function handoff(
         criteria: t.criteria.map((c) => ({ text: c.text, weight: c.weight })),
         workKind: t.workKind,
       },
-      { fromGoal: true },
+      { fromGoal: goal.id },
     );
     created.push(row);
   }
   const { result } = await mutate(deps.db, goal.company_id, actor, async (ctx) => {
-    await ctx.client.query("UPDATE projects SET name = $2, goal = $3, updated_at = now() WHERE id = $1", [
-      goal.project_id,
-      plan.title,
-      `${goal.text}\n\nOutcome: ${plan.outcome}\nDone when: ${plan.doneDefinition}`,
-    ]);
+    // A project the goal opened takes the plan's title and done definition; one it went into stays as it is.
+    if (goal.opened_project)
+      await ctx.client.query("UPDATE projects SET name = $2, goal = $3, updated_at = now() WHERE id = $1", [
+        goal.project_id,
+        plan.title,
+        `${goal.text}\n\nOutcome: ${plan.outcome}\nDone when: ${plan.doneDefinition}`,
+      ]);
     if (goal.caps.tokens) {
       await ctx.client.query(
-        `INSERT INTO budgets (company_id, scope_kind, scope_id, tokens_limit, window_kind) VALUES ($1, 'project', $2, $3, 'goal')
-         ON CONFLICT (company_id, scope_kind, scope_id) DO UPDATE SET tokens_limit = EXCLUDED.tokens_limit, window_kind = 'goal', updated_at = now()`,
-        [goal.company_id, goal.project_id, goal.caps.tokens],
+        `INSERT INTO budgets (company_id, scope_kind, scope_id, tokens_limit, window_kind) VALUES ($1, 'goal', $2, $3, 'goal')
+         ON CONFLICT (company_id, scope_kind, scope_id) DO UPDATE SET tokens_limit = EXCLUDED.tokens_limit, updated_at = now()`,
+        [goal.company_id, goal.id, goal.caps.tokens],
       );
     }
     const row = (
@@ -536,7 +577,7 @@ async function handoff(
     );
     return row;
   });
-  await startReadyTasks(deps, goal.company_id, goal.project_id);
+  await startReadyTasks(deps, goal.company_id, goal.id);
   return result;
 }
 
@@ -548,16 +589,16 @@ async function handoff(
 export async function startReadyTasks(
   deps: PeterDeps,
   companyId: string,
-  projectId: string | null,
+  goalId: string | null,
 ): Promise<{ taskId: string; runId: string }[]> {
   const params: unknown[] = [companyId];
   let where = `t.company_id = $1 AND t.status = 'todo' AND t.assignee_kind = 'teammate' AND t.created_by_kind = 'teammate'
     AND NOT EXISTS (SELECT 1 FROM task_dependencies d JOIN tasks p ON p.id = d.depends_on_task_id WHERE d.task_id = t.id AND p.status <> 'done')
     AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.status IN ('queued', 'running', 'interrupted'))
-    AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.project_id = t.project_id AND g.status IN ('stopped', 'needs_you'))`;
-  if (projectId) {
-    params.push(projectId);
-    where += ` AND t.project_id = $${params.length}`;
+    AND NOT EXISTS (SELECT 1 FROM goals g WHERE g.id = t.goal_id AND g.status IN ('stopped', 'needs_you'))`;
+  if (goalId) {
+    params.push(goalId);
+    where += ` AND t.goal_id = $${params.length}`;
   }
   const ready = await deps.db.query<TaskRow>(`${TASK_SELECT} WHERE ${where} ORDER BY t.number`, params);
   const started: { taskId: string; runId: string }[] = [];
@@ -613,10 +654,10 @@ export async function answerGoal(
 }
 
 /**
- * A person drops the goal. Runs on its project that wait for a worker (or
- * sit interrupted) are stopped and their tasks go back to To do; a run that
- * is live on a worker is asked to stop. The goal is marked first, so the
- * pass those stops wake starts nothing again.
+ * A person drops the goal. Runs on its tasks that wait for a worker (or sit
+ * interrupted) are stopped and their tasks go back to To do; a run that is
+ * live on a worker is asked to stop. The goal is marked first, so the pass
+ * those stops wake starts nothing again.
  */
 export async function stopGoal(
   deps: PeterDeps,
@@ -631,8 +672,8 @@ export async function stopGoal(
     const live = (
       await ctx.client.query<{ id: string; status: string; number: number }>(
         `SELECT r.id, r.status, t.number FROM runs r JOIN tasks t ON t.id = r.task_id
-         WHERE t.project_id = $1 AND r.status IN ('queued', 'running', 'interrupted') ORDER BY r.created_at`,
-        [goal.project_id],
+         WHERE t.goal_id = $1 AND r.status IN ('queued', 'running', 'interrupted') ORDER BY r.created_at`,
+        [goal.id],
       )
     ).rows;
     const row = (
@@ -645,8 +686,8 @@ export async function stopGoal(
     // stays with its reviewer.
     const open = (
       await ctx.client.query<Pick<TaskRow, "id" | "number" | "title" | "status">>(
-        "SELECT id, number, title, status FROM tasks WHERE project_id = $1 AND status = ANY($2) ORDER BY number FOR UPDATE",
-        [goal.project_id, CANCELLABLE_STATUSES],
+        "SELECT id, number, title, status FROM tasks WHERE goal_id = $1 AND status = ANY($2) ORDER BY number FOR UPDATE",
+        [goal.id, CANCELLABLE_STATUSES],
       )
     ).rows;
     for (const t of open) await cancelInTx(ctx, t, `The goal "${goal.title}" was stopped.`);
@@ -675,9 +716,9 @@ export async function stopGoal(
 
 /**
  * A person raises or lowers a goal's caps. The task and depth caps apply to the
- * next task a teammate files; the token cap is the lifetime budget on the
- * goal's project, kept in step here (set, raised, lowered or removed) once the
- * goal has been handed off. A done or stopped goal keeps its caps.
+ * next task a teammate files; the token cap is the goal's lifetime budget, kept
+ * in step here (set, raised, lowered or removed) once the goal has been handed
+ * off. A done or stopped goal keeps its caps.
  */
 export async function updateGoalCaps(
   deps: PeterDeps,
@@ -707,14 +748,14 @@ export async function updateGoalCaps(
     if (changed.includes("tokens") && goal.planned_at) {
       if (after.tokens) {
         await ctx.client.query(
-          `INSERT INTO budgets (company_id, scope_kind, scope_id, tokens_limit, window_kind) VALUES ($1, 'project', $2, $3, 'goal')
-           ON CONFLICT (company_id, scope_kind, scope_id) DO UPDATE SET tokens_limit = EXCLUDED.tokens_limit, window_kind = 'goal', updated_at = now()`,
-          [companyId, goal.project_id, after.tokens],
+          `INSERT INTO budgets (company_id, scope_kind, scope_id, tokens_limit, window_kind) VALUES ($1, 'goal', $2, $3, 'goal')
+           ON CONFLICT (company_id, scope_kind, scope_id) DO UPDATE SET tokens_limit = EXCLUDED.tokens_limit, updated_at = now()`,
+          [companyId, goal.id, after.tokens],
         );
       } else {
         await ctx.client.query(
-          "DELETE FROM budgets WHERE company_id = $1 AND scope_kind = 'project' AND scope_id = $2 AND window_kind = 'goal'",
-          [companyId, goal.project_id],
+          "DELETE FROM budgets WHERE company_id = $1 AND scope_kind = 'goal' AND scope_id = $2",
+          [companyId, goal.id],
         );
       }
     }
@@ -729,13 +770,14 @@ export async function updateGoalCaps(
 }
 
 export interface GoalSpend {
-  /** Tokens the teammates' runs used on the goal's project. */
+  /** Tokens the teammates' runs used on the goal's tasks. */
   runTokens: number;
   runs: number;
   /** Tokens Peter spent planning. */
   planningTokens: number;
   planningCalls: number;
   totalTokens: number;
+  /** The runs and the planning, priced; null when nothing had a price. */
   costMinorUnits: number | null;
   currency: string | null;
   tokensCap: number | null;
@@ -743,22 +785,31 @@ export interface GoalSpend {
 
 export async function goalSpend(db: Queryable, goal: GoalRow): Promise<GoalSpend> {
   const usage = await db.query<{
+    provider_id: string | null;
     model: string;
     input_tokens: string;
     output_tokens: string;
     cache_read_tokens: string;
     cache_write_tokens: string;
     runs: string;
+    planning: boolean;
   }>(
-    `SELECT model, sum(input_tokens)::text AS input_tokens, sum(output_tokens)::text AS output_tokens,
-            sum(cache_read_tokens)::text AS cache_read_tokens, sum(cache_write_tokens)::text AS cache_write_tokens, count(*)::text AS runs
-     FROM run_usage WHERE company_id = $1 AND project_id = $2 GROUP BY model`,
-    [goal.company_id, goal.project_id],
+    `SELECT u.provider_id, u.model, sum(u.input_tokens)::text AS input_tokens,
+            sum(u.output_tokens)::text AS output_tokens, sum(u.cache_read_tokens)::text AS cache_read_tokens,
+            sum(u.cache_write_tokens)::text AS cache_write_tokens, count(*)::text AS runs, false AS planning
+     FROM run_usage u JOIN tasks t ON t.id = u.task_id WHERE u.company_id = $1 AND t.goal_id = $2
+     GROUP BY u.provider_id, u.model
+     UNION ALL
+     SELECT provider_id, model, sum(input_tokens)::text, sum(output_tokens)::text, sum(cache_read_tokens)::text,
+            sum(cache_write_tokens)::text, '0', true
+     FROM planning_usage WHERE company_id = $1 AND goal_id = $2 GROUP BY provider_id, model`,
+    [goal.company_id, goal.id],
   );
   let runTokens = 0;
   let runs = 0;
   let cost: number | null = null;
   let currency: string | null = null;
+  const prices = await priceTable(db, goal.company_id);
   for (const r of usage.rows) {
     const u = {
       inputTokens: Number(r.input_tokens),
@@ -766,9 +817,12 @@ export async function goalSpend(db: Queryable, goal: GoalRow): Promise<GoalSpend
       cacheReadTokens: Number(r.cache_read_tokens),
       cacheWriteTokens: Number(r.cache_write_tokens),
     };
-    runTokens += u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens;
-    runs += Number(r.runs);
-    const price = await priceFor(db, goal.company_id, r.model);
+    // The planning's tokens are the goal's own running total, below; its rows price it by model.
+    if (!r.planning) {
+      runTokens += u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+      runs += Number(r.runs);
+    }
+    const price = prices.priceOf(r.provider_id, r.model);
     const c = costFor(u, price);
     if (c !== null) {
       cost = (cost ?? 0) + c;
@@ -792,8 +846,6 @@ export async function goalSpend(db: Queryable, goal: GoalRow): Promise<GoalSpend
 
 export async function goalDetail(db: Queryable, companyId: string, goalId: string) {
   const goal = await loadGoal(db, companyId, goalId);
-  const tasks = await db.query<TaskRow>(`${TASK_SELECT} WHERE t.project_id = $1 ORDER BY t.number`, [
-    goal.project_id,
-  ]);
+  const tasks = await db.query<TaskRow>(`${TASK_SELECT} WHERE t.goal_id = $1 ORDER BY t.number`, [goal.id]);
   return { ...goalToJson(goal), tasks: tasks.rows.map(taskToJson), spend: await goalSpend(db, goal) };
 }

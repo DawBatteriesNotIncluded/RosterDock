@@ -49,6 +49,12 @@ deploy/scripts/local-cluster.sh
 kubectl --context kind-rosterdock -n rosterdock port-forward svc/rosterdock-web 8080:80
 ```
 
+A worker on a Windows machine runs best where it runs in production, in Linux: under Docker Desktop (the
+cluster above, or `docker compose --profile worker up -d worker`) or in WSL2. `pnpm dev:worker` also runs
+natively on Windows with Git for Windows on PATH (CI runs the worker's tests there), but then a run's engine,
+its shell and the repository's tests run as your Windows user, outside any container: keep that to
+repositories you would run yourself (`docs/security.md`, Workers run model output).
+
 ## A URL your other devices can open
 
 The compose stack on `localhost:8080` is enough to see everything, but some OAuth providers refuse a
@@ -69,6 +75,9 @@ tailnet. The dev login stays on and is safe there: the tailnet is the gate. On a
 can reach, turn it off and configure OIDC first (below). `deploy/scripts/serve.sh off` stops serving.
 
 ## Where the images and the chart come from
+
+Nothing is published until 0.1.0 is released, so the images, tags and chart below do not exist yet. Until
+then, build the images from a checkout and install the chart from `deploy/helm/rosterdock`.
 
 Every release is one version, cut from a `v` tag by `.github/workflows/release.yml`; `CHANGELOG.md` says
 what each one changed.
@@ -142,15 +151,16 @@ and which optional secrets exist. Everything in `values.yaml` is commented. The 
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `board.devLogin`                 | `false` in production. On, anyone reaching the board signs in with any email.                         |
 | `board.autoscaling`              | An HPA on CPU. Boards are interchangeable: sessions and the event stream are in Postgres.             |
-| `board.podDisruptionBudget`      | Keep one board up through node drains.                                                                |
+| `board.podDisruptionBudget`      | Keep one board up through node drains, when there is more than one board.                             |
 | `board.oauth.enabled`            | Connections may authorise by OAuth; the board keeps the tokens in Secrets of its own (a Role).        |
 | `board.sharedEnvNames`           | Keys of `rosterdock-connections` every company may name; no other key reaches a company. Empty: none. |
 | `board.stdioCommands`            | Command lines a stdio connection may run inside the board, exactly (a final `*`: more arguments).     |
+| `board.privateDestinations`      | Private names, addresses and ranges companies' connections may reach. Empty: public addresses only.   |
 | `board.companyCreators`          | Who may create a company: emails, `@domain`s or `*`. Empty: the first company only.                   |
 | `worker.autoscaling`             | A KEDA ScaledObject: one worker per waiting run between the bounds. Needs KEDA installed.             |
 | `worker.image`                   | The worker image with Claude Code that you build (Engines on the worker, below). Empty: the chart's.  |
 | `worker.engineEnvNames`          | Env var NAMES the worker hands to the engine, read from `worker.engineSecret`.                        |
-| `worker.gitSecret`               | A token for cloning private repositories, by name.                                                    |
+| `worker.gitSecret`               | A token for cloning private repositories, by name, and `hosts`, the git hosts it is sent to.          |
 | `worker.podMetrics.enabled`      | Pod CPU and memory from the metrics API (a worker account, a Role, the token) instead of the cgroup.  |
 | `postgres.cidr`, `postgres.port` | Where Postgres answers; the network policies let the board and workers reach only that.               |
 | `storage.*`                      | Endpoint, bucket, region, path style; credentials from `storage.externalSecret`.                      |
@@ -315,7 +325,8 @@ that dies with the pod.
 The board keeps artifacts up to 512 KB inline in Postgres. Larger ones, up to 8 MB, go to the S3-compatible
 bucket in `storage.*` (endpoint, bucket, region, path style; the key pair by Secret name), under
 `companies/<id>/runs/<id>/<sha256>`; the board signs each request itself (Signature Version 4). Without a
-bucket the board refuses an artifact over 512 KB and the worker cuts its diff there. Make the bucket in
+bucket the board refuses an artifact over 512 KB, and the worker keeps its diff within the limit in whole
+files: a file that does not fit is left out of the review and named in the run's summary. Make the bucket in
 advance on AWS (the board creates a missing bucket only where the key may, as on MinIO), give the key pair
 that bucket alone, and add a lifecycle rule if you delete companies: rows cascade, objects stay.
 

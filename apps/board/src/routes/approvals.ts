@@ -5,6 +5,7 @@ import { APPROVAL_STATUSES, ApprovalDecisionSchema, type ApprovalStatus } from "
 import type { FastifyInstance } from "fastify";
 import {
   approvalsForTask,
+  approvalsToJson,
   approvalToJson,
   approveApproval,
   listApprovals,
@@ -32,7 +33,7 @@ export function registerApprovalRoutes(
           return t;
         })
       : null;
-    return (await listApprovals(db, req.companyId, statuses)).map(approvalToJson);
+    return approvalsToJson(db, req.companyId, await listApprovals(db, req.companyId, statuses));
   });
 
   app.get(
@@ -40,7 +41,10 @@ export function registerApprovalRoutes(
     { config: { action: "company.read" } },
     async (req) => {
       const id = uuidParam((req.params as { approvalId: string }).approvalId, "approvalId");
-      return approvalToJson(await loadApproval(db, req.companyId, id));
+      const [approval] = await approvalsToJson(db, req.companyId, [
+        await loadApproval(db, req.companyId, id),
+      ]);
+      return approval;
     },
   );
 
@@ -49,7 +53,7 @@ export function registerApprovalRoutes(
     { config: { action: "company.read" } },
     async (req) => {
       const taskId = uuidParam((req.params as { taskId: string }).taskId, "taskId");
-      return (await approvalsForTask(db, req.companyId, taskId)).map(approvalToJson);
+      return approvalsToJson(db, req.companyId, await approvalsForTask(db, req.companyId, taskId));
     },
   );
 
@@ -76,14 +80,16 @@ export function registerApprovalRoutes(
     },
   );
 
-  // Reject: nothing is sent; the task stays blocked and Peter re-plans it.
+  // Reject: nothing is sent; the task stays blocked, and the answer says who takes it from there.
   app.post(
     "/api/companies/:companyId/approvals/:approvalId/reject",
     { config: { action: "approval.decide" } },
     async (req) => {
       const id = uuidParam((req.params as { approvalId: string }).approvalId, "approvalId");
       const body = parseBody(ApprovalDecisionSchema, req.body);
-      return approvalToJson(await rejectApproval(db, req.companyId, req.principal.actor, id, body.note));
+      const rejected = await rejectApproval(db, req.companyId, req.principal.actor, id, body.note);
+      const [approval] = await approvalsToJson(db, req.companyId, [rejected]);
+      return approval;
     },
   );
 }

@@ -2,6 +2,7 @@
 // stop. Every state change is a mutation with events, so Activity and the
 // task drawer are projections of the same stream.
 
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   ARTIFACT_MAX_BYTES,
   blockerFor,
@@ -18,6 +19,7 @@ import {
   type SandboxPreset,
 } from "@rosterdock/shared";
 import type pg from "pg";
+import { describeActor } from "../actors.js";
 import { mintApiToken } from "../auth/tokens.js";
 import type { Db, Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
@@ -28,16 +30,21 @@ import type { ObjectStore } from "../storage/s3.js";
 import type { FetchedSource, SourceFetcher } from "../reviews/sources.js";
 import { queueNameForPool } from "@rosterdock/shared";
 import type { RunQueue } from "../queue.js";
-import { costFor, totalTokens } from "../budgets/cost.js";
-import { alertOnBudgets, assertWithinBudgets, priceFor } from "../budgets/service.js";
-import { effectiveToolbox } from "../broker/policy.js";
+import { costFor, totalTokens, usageModel } from "../budgets/cost.js";
+import { priceFor } from "../budgets/prices.js";
+import { alertOnBudgets, assertWithinBudgets } from "../budgets/service.js";
+import { effectiveToolbox, webNarrowingReason, webScope } from "../broker/policy.js";
 import { narrowingReason } from "../broker/policy.js";
+import { WEB_FETCH_TOOL } from "../web/read.js";
+import { webCatalogEntry } from "../mcp/catalog.js";
 import {
   listChecks,
   listComments,
   listFiles,
   openReviewRound,
   reviewForTask,
+  scanRunBinaries,
+  unscannedOnly,
   type OpenedReview,
 } from "../reviews/service.js";
 import {
@@ -49,6 +56,7 @@ import {
   type RunSpec,
 } from "./pack.js";
 import { houseStyleFor } from "../styles/service.js";
+import { settleWaitingOn } from "../tasks/waiting.js";
 import { dependenciesForBrief } from "./outputs.js";
 
 export const RUN_TOKEN_TTL_SECONDS = 8 * 3600;
@@ -94,6 +102,8 @@ export interface RunRow {
   trigger_message_id: string | null;
   /** HEAD of the clone the diff was taken against. */
   base_sha: string | null;
+  /** The commit its clone was at, reported before the engine ran (saveClonedSha). */
+  cloned_sha: string | null;
   /** The worker pod's last sample: {cpuMillis, memoryBytes} (M6). */
   resources: { cpuMillis: number; memoryBytes: number } | null;
   /** The pg-boss queue the job is on: runs, or runs.<pool> for a department with a worker pool (M6). */
@@ -174,6 +184,7 @@ interface TaskForRun {
   status: string;
   project_id: string;
   department_id: string | null;
+  goal_id: string | null;
   assignee_kind: string | null;
   assignee_id: string | null;
   declared_outputs: string[];
@@ -261,6 +272,7 @@ export async function dispatchRun(
       departmentId: task.department_id,
       projectId: task.project_id,
       teammateId: teammate.id,
+      goalId: task.goal_id,
     });
     const inserted = await ctx.client.query<RunRow>(
       `INSERT INTO runs (company_id, task_id, teammate_id, engine, model, note, created_by_kind, created_by_id, trigger_message_id)
@@ -368,6 +380,7 @@ export async function dispatchTurn(
         departmentId: task.department_id,
         projectId: task.project_id,
         teammateId: teammate.id,
+        goalId: task.goal_id,
       });
       const inserted = await ctx.client.query<RunRow>(
         `INSERT INTO runs (company_id, task_id, teammate_id, engine, model, note, created_by_kind, created_by_id, kind, trigger_message_id)
@@ -458,6 +471,7 @@ export async function dispatchReviewRun(
         departmentId: task.department_id,
         projectId: task.project_id,
         teammateId: teammate.id,
+        goalId: task.goal_id,
       });
       const inserted = await ctx.client.query<RunRow>(
         `INSERT INTO runs (company_id, task_id, teammate_id, engine, model, note, created_by_kind, created_by_id, kind)
@@ -523,10 +537,23 @@ export async function enqueue(
   return jobId;
 }
 
+/** The diff a review round opened from: its run's `diff` artifact, whole, from the row or the store. */
+async function roundDiff(db: Queryable, store: ObjectStore | null, runId: string): Promise<string | null> {
+  const row = (
+    await db.query<{ content: string | null; object_key: string | null }>(
+      "SELECT content, object_key FROM artifacts WHERE run_id = $1 AND kind = 'diff' LIMIT 1",
+      [runId],
+    )
+  ).rows[0];
+  return artifactText(store, row ?? null);
+}
+
 export async function buildRunSpec(
   db: Queryable,
   run: RunRow,
   store: ObjectStore | null = null,
+  /** Whether the board reads the web (ROSTERDOCK_FETCH_SOURCES); off, the brief says the web connection reads nothing. */
+  opts: { web?: boolean } = {},
 ): Promise<RunSpec> {
   const task = (await db.query<TaskForRun>("SELECT * FROM tasks WHERE id = $1", [run.task_id])).rows[0];
   if (!task) throw notFound("task");
@@ -545,6 +572,22 @@ export async function buildRunSpec(
       task.project_id,
     ])
   ).rows[0];
+  // A goal that went into a project that existed is not in the project's own goal text: the pack says it.
+  const goal = task.goal_id
+    ? (
+        await db.query<{
+          title: string;
+          text: string;
+          opened_project: boolean;
+          outcome: string | null;
+          done_definition: string | null;
+        }>(
+          `SELECT title, text, opened_project, plan->>'outcome' AS outcome, plan->>'doneDefinition' AS done_definition
+           FROM goals WHERE id = $1`,
+          [task.goal_id],
+        )
+      ).rows[0]
+    : undefined;
   const teammate = (
     await db.query<{
       id: string;
@@ -653,18 +696,7 @@ export async function buildRunSpec(
       listComments(db, reviewRow.id),
       listChecks(db, reviewRow),
     ]);
-    const diffText =
-      run.kind === "review"
-        ? ((await artifactText(
-            store,
-            (
-              await db.query<{ content: string | null; object_key: string | null }>(
-                "SELECT content, object_key FROM artifacts WHERE run_id = $1 AND kind = 'diff' LIMIT 1",
-                [reviewRow.run_id],
-              )
-            ).rows[0] ?? null,
-          )) ?? "")
-        : null;
+    const diffText = run.kind === "review" ? ((await roundDiff(db, store, reviewRow.run_id)) ?? "") : null;
     review = {
       id: reviewRow.id,
       round: reviewRow.round,
@@ -689,6 +721,11 @@ export async function buildRunSpec(
         resolved: c.resolved,
       })),
       checks: checks.map((c) => ({ kind: c.kind, ok: c.ok, title: c.title })),
+      binaryFiles: (
+        (checks.find((c) => c.kind === "secrets")?.detail as { binaries?: { path: string }[] } | undefined)
+          ?.binaries ?? []
+      ).map((b) => b.path),
+      unscannedFiles: unscannedOnly(checks.find((c) => c.kind === "secrets")),
       sources:
         (checks.find((c) => c.kind === "sources")?.detail as { sources?: FetchedSource[] } | undefined)
           ?.sources ?? [],
@@ -696,6 +733,38 @@ export async function buildRunSpec(
       diffTruncated: diffText !== null && diffText.length > MAX_PACK_DIFF_CHARS,
     };
   }
+  // Rework on a repository: the round sent back travels whole, for the worker to apply to its clone.
+  let rework: RunSpec["rework"] = null;
+  if (run.kind === "task" && reviewRow?.status === "changes_requested" && project.repo_url) {
+    const diff = await roundDiff(db, store, reviewRow.run_id);
+    if (diff?.trim())
+      rework = {
+        round: reviewRow.round,
+        diffSha256: reviewRow.diff_sha256,
+        baseSha: reviewRow.base_sha,
+        diff,
+      };
+  }
+  const toolbox = await effectiveToolbox(db, {
+    companyId: run.company_id,
+    teammateId: run.teammate_id,
+    departmentId: task.department_id,
+    projectId: task.project_id,
+  });
+  // The web connection, when the teammate holds it on this task with its fetch on.
+  const webGrant = toolbox.find(
+    (e) =>
+      e.connection.kind === "web" &&
+      e.connection.enabled &&
+      e.mode !== "off" &&
+      e.tools.some((t) => t.name === WEB_FETCH_TOOL && !t.off),
+  );
+  const webSites = webGrant
+    ? await webScope(db, webGrant.connection, {
+        departmentId: task.department_id,
+        projectId: task.project_id,
+      })
+    : null;
   return {
     version: 1,
     runId: run.id,
@@ -719,6 +788,15 @@ export async function buildRunSpec(
       repoUrl: project.repo_url,
       defaultBranch: project.default_branch,
     },
+    goal:
+      goal && !goal.opened_project
+        ? {
+            title: goal.title,
+            text: goal.text,
+            outcome: goal.outcome,
+            doneDefinition: goal.done_definition,
+          }
+        : null,
     teammate: { ...teammate, personaMd: teammate.persona_md, playbooks: teammate.playbooks ?? [] },
     department: department ? { name: department.name, writePolicy: department.write_policy } : null,
     houseStyle: await houseStyleFor(db, run.company_id),
@@ -736,15 +814,9 @@ export async function buildRunSpec(
       : null,
     checkpoint: run.attempt > 1 ? run.checkpoint : null,
     review,
+    rework,
     approvals,
-    tools: (
-      await effectiveToolbox(db, {
-        companyId: run.company_id,
-        teammateId: run.teammate_id,
-        departmentId: task.department_id,
-        projectId: task.project_id,
-      })
-    ).map((e) => ({
+    tools: toolbox.map((e) => ({
       connection: e.connection.name,
       mode: e.mode,
       narrowed: narrowingReason(e, department?.name ?? null, project.client),
@@ -753,6 +825,31 @@ export async function buildRunSpec(
       writes: e.tools.filter((t) => t.write && !t.off).map((t) => t.name),
       off: e.tools.filter((t) => t.off).map((t) => t.name),
     })),
+    web: {
+      fetch:
+        webGrant && webSites
+          ? {
+              connection: webGrant.connection.name,
+              domains: webSites.domains,
+              narrowed: webNarrowingReason(webSites, department?.name ?? null, project.client),
+            }
+          : null,
+      offline: opts.web === false,
+      // Connections from the catalog's web tools, as the teammate holds them on this task.
+      tools: toolbox.flatMap((e) => {
+        const entry = webCatalogEntry(e.connection.catalog_id);
+        if (!entry || !e.connection.enabled || e.mode === "off") return [];
+        return [
+          {
+            connection: e.connection.name,
+            name: entry.name,
+            mode: e.mode,
+            reads: e.tools.filter((t) => !t.write && !t.off).map((t) => t.name),
+            writes: e.tools.filter((t) => t.write && !t.off).map((t) => t.name),
+          },
+        ];
+      }),
+    },
   };
 }
 
@@ -760,6 +857,8 @@ export interface ClaimResult {
   run: RunRow;
   token: string;
   tokenExpiresAt: string;
+  /** What the worker's report of its clone's commit carries; never in the run's spec or pack. */
+  cloneKey: string;
   pack: string;
   spec: RunSpec;
 }
@@ -770,7 +869,7 @@ export const TERMINAL_RUN_STATUSES: readonly RunStatus[] = ["completed", "failed
 export async function claimRun(
   db: Db,
   input: { runId: string; jobId: string; workerId: string },
-  opts: { staleAfterMs: number; store?: ObjectStore | null } = { staleAfterMs: 60_000 },
+  opts: { staleAfterMs: number; store?: ObjectStore | null; web?: boolean } = { staleAfterMs: 60_000 },
 ): Promise<ClaimResult> {
   const first = await loadRun(db, input.runId);
   const { result } = await mutate(
@@ -810,13 +909,16 @@ export async function claimRun(
         throw new HttpError(409, "job id does not match this run", { status: run.status, jobMismatch: true });
       }
       const attempt = run.status === "interrupted" ? run.attempt + 1 : run.attempt;
-      const spec = await buildRunSpec(ctx.client, { ...run, attempt }, opts.store ?? null);
+      const spec = await buildRunSpec(ctx.client, { ...run, attempt }, opts.store ?? null, { web: opts.web });
       const hash = runSpecHash(spec);
+      // For the worker alone: its report of the commit the clone is at carries it, which the engine cannot.
+      const cloneKey = randomBytes(32).toString("hex");
       const updated = await ctx.client.query<RunRow>(
         `UPDATE runs SET status = 'running', attempt = $2, job_id = COALESCE(job_id, $3), worker_id = $4, started_at = COALESCE(started_at, now()),
-         heartbeat_at = now(), run_spec_hash = $5, current_step = 'claimed', updated_at = now()
+         heartbeat_at = now(), run_spec_hash = $5, current_step = 'claimed', cloned_sha = NULL, clone_key_sha256 = $6,
+         updated_at = now()
        WHERE id = $1 RETURNING *`,
-        [run.id, attempt, input.jobId, input.workerId, hash],
+        [run.id, attempt, input.jobId, input.workerId, hash, sha256Hex(cloneKey)],
       );
       // Any earlier token for this run dies with the previous attempt.
       await ctx.client.query("DELETE FROM api_tokens WHERE run_id = $1", [run.id]);
@@ -853,6 +955,7 @@ export async function claimRun(
         run: updated.rows[0]!,
         token: minted.token,
         tokenExpiresAt: minted.expiresAt,
+        cloneKey,
         pack: renderRunPack(spec),
         spec,
       };
@@ -942,6 +1045,35 @@ export async function saveCheckpoint(
     [runId, JSON.stringify(checkpoint)],
   );
   if (!res.rowCount) throw new HttpError(409, "run is not running");
+}
+
+/**
+ * The commit the run's clone is at, as the worker reports it right after cloning, with the key its claim gave it
+ * (the engine holds the run's token, never the key): kept once per attempt, the same again is no change,
+ * another is refused.
+ */
+export async function saveClonedSha(db: Db, runId: string, sha: string, key: string): Promise<void> {
+  const run = (
+    await db.query<{ status: string; clone_key_sha256: string | null }>(
+      "SELECT status, clone_key_sha256 FROM runs WHERE id = $1",
+      [runId],
+    )
+  ).rows[0];
+  if (!run || run.status !== "running") throw new HttpError(409, "run is not running");
+  if (!run.clone_key_sha256 || !safeEqualHex(sha256Hex(key), run.clone_key_sha256))
+    throw new HttpError(403, "only the worker that claimed the run reports its clone");
+  const res = await db.query<{ cloned_sha: string | null }>(
+    `UPDATE runs SET cloned_sha = COALESCE(cloned_sha, $2), updated_at = now() WHERE id = $1 AND status = 'running'
+     RETURNING cloned_sha`,
+    [runId, sha],
+  );
+  if (!res.rowCount) throw new HttpError(409, "run is not running");
+  if (res.rows[0]!.cloned_sha !== sha)
+    throw new HttpError(409, "the run's clone is recorded at another commit");
+}
+
+function safeEqualHex(a: string, b: string): boolean {
+  return a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
 export interface ArtifactRow {
@@ -1082,6 +1214,43 @@ function blockerFromInput(input: BlockerInput | undefined, fallback: BlockerReco
 }
 
 /**
+ * A rework run whose round did not carry over (the base branch moved) says so on the task's
+ * conversation, as the run's teammate, so the reviewer reads the next round as the change made again.
+ */
+async function postReworkFallback(
+  ctx: MutationContext,
+  run: RunRow,
+  task: { number: number; title: string },
+  rework: NonNullable<RunCompleteInput["rework"]>,
+): Promise<void> {
+  const branch =
+    (
+      await ctx.client.query<{ default_branch: string }>(
+        "SELECT p.default_branch FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1",
+        [run.task_id],
+      )
+    ).rows[0]?.default_branch ?? "the base branch";
+  const body = `Round ${rework.round}'s changes did not carry over to this run${rework.reason ? `: ${rework.reason}` : ""}. It started from a fresh copy of ${branch} and makes the change again instead of editing round ${rework.round}.`;
+  const author: ActorRef = { kind: "teammate", id: run.teammate_id };
+  const inserted = await ctx.client.query<{ id: string }>(
+    "INSERT INTO messages (company_id, task_id, author_kind, author_id, body, mentions, run_id) VALUES ($1, $2, $3, $4, $5, '[]', $6) RETURNING id",
+    [run.company_id, run.task_id, author.kind, author.id, body, run.id],
+  );
+  await ctx.emit(
+    "message.posted",
+    { kind: "task", id: run.task_id },
+    {
+      messageId: inserted.rows[0]!.id,
+      number: task.number,
+      title: task.title,
+      authorName: (await describeActor(ctx.client, run.company_id, author))?.name ?? null,
+      preview: body.slice(0, 140),
+      mentions: [],
+    },
+  );
+}
+
+/**
  * Finish a run and move the task: completed goes to review, failed and
  * blocked go to Blocked with a reason, stopped goes back to To do.
  */
@@ -1098,7 +1267,40 @@ export async function completeRun(
   sources: SourceFetcher | null = null,
 ): Promise<RunRow> {
   const first = await loadRun(db, runId);
+  // Refused before any work: a run that has finished, or whose completion this board is recording now. The
+  // engine holds the run's token as well, and could send many; the worker's own retry comes back for the answer.
+  if (FINISHED_RUN.includes(first.status)) throw new HttpError(409, `run already ${first.status}`);
+  if (completing.has(runId)) throw new HttpError(503, "the run's completion is being recorded; try again");
+  completing.add(runId);
+  try {
+    return await recordCompletion(db, first, input, actorOverride, queue, store, sources);
+  } finally {
+    completing.delete(runId);
+  }
+}
+
+/** The statuses a run ends in: its completion is recorded once. */
+const FINISHED_RUN: readonly string[] = ["completed", "failed", "stopped", "blocked"];
+
+/** The runs whose completion this board is recording now. */
+const completing = new Set<string>();
+
+async function recordCompletion(
+  db: Db,
+  first: RunRow,
+  input: RunCompleteInput,
+  actorOverride: ActorRef | undefined,
+  queue: RunQueue | undefined,
+  store: ObjectStore | null,
+  sources: SourceFetcher | null,
+): Promise<RunRow> {
+  const runId = first.id;
   const actor = actorOverride ?? { kind: "teammate" as const, id: first.teammate_id };
+  // A completed task run's binary files are scanned for its review before the transaction, which stays short.
+  const scanned =
+    first.kind === "task" && input.status === "completed"
+      ? await scanRunBinaries(db, store, runId)
+      : undefined;
   let opened: OpenedReview | null = null;
   const { result } = await mutate(db, first.company_id, actor, async (ctx) => {
     const run = await loadRun(ctx.client, runId, true);
@@ -1130,7 +1332,7 @@ export async function completeRun(
       )
     ).rows[0]!;
     // A blocker the teammate already set on the board (who they wait on) wins over the generic one.
-    const blocker =
+    const reported =
       status === "failed"
         ? blockerFromInput(
             input.blocker,
@@ -1144,6 +1346,8 @@ export async function completeRun(
                 : blockerFor("unknown", { what: input.summary ?? "The teammate declared the task blocked." }),
             )
           : null;
+    // "@manager" in a blocked note is no teammate: the task waits on a person, not on nobody.
+    const blocker = reported ? await settleWaitingOn(ctx.client, run.company_id, reported) : null;
     const updated = await ctx.client.query<RunRow>(
       `UPDATE runs SET status = $2, finished_at = now(), summary = $3, error = $4, usage = $5, blocker = $6,
          duration_ms = COALESCE($7, EXTRACT(EPOCH FROM (now() - COALESCE(started_at, queued_at))) * 1000)::int,
@@ -1161,8 +1365,9 @@ export async function completeRun(
       ],
     );
     let row = updated.rows[0]!;
-    const model = input.model ?? run.model;
-    const price = await priceFor(ctx.client, run.company_id, model);
+    const model = usageModel(run.engine, input.model ?? run.model);
+    // A run goes through the board's own models.
+    const price = await priceFor(ctx.client, run.company_id, null, model);
     const cost = costFor(usage, price);
     if (cost !== null) {
       row = (
@@ -1173,8 +1378,8 @@ export async function completeRun(
       ).rows[0]!;
     }
     const scopes = (
-      await ctx.client.query<{ project_id: string; department_id: string | null }>(
-        "SELECT project_id, department_id FROM tasks WHERE id = $1",
+      await ctx.client.query<{ project_id: string; department_id: string | null; goal_id: string | null }>(
+        "SELECT project_id, department_id, goal_id FROM tasks WHERE id = $1",
         [run.task_id],
       )
     ).rows[0]!;
@@ -1203,6 +1408,7 @@ export async function completeRun(
         departmentId: scopes.department_id,
         projectId: scopes.project_id,
         teammateId: run.teammate_id,
+        goalId: scopes.goal_id,
       },
       totalTokens(usage),
     );
@@ -1259,7 +1465,7 @@ export async function completeRun(
         cacheWriteTokens: usage.cacheWriteTokens ?? 0,
       },
       durationMs: row.duration_ms,
-      model: input.model ?? run.model,
+      model,
       kind: run.kind,
     };
     await ctx.emit(
@@ -1271,6 +1477,8 @@ export async function completeRun(
       type: "run.finished",
       payload: { status, totalTokens: total },
     });
+    if (run.kind === "task" && input.rework && !input.rework.applied)
+      await postReworkFallback(ctx, run, task, input.rework);
     if (task.status !== nextTask) {
       await ctx.emit(
         "task.moved",
@@ -1293,7 +1501,15 @@ export async function completeRun(
     }
     // The diff is in: open (or advance) the task's review in the same transaction.
     if (run.kind === "task" && status === "completed" && !waitingOnApproval && !cancelled) {
-      opened = await openReviewRound(ctx, { ...row, base_sha: row.base_sha }, task, input, store, sources);
+      opened = await openReviewRound(
+        ctx,
+        { ...row, base_sha: row.base_sha },
+        task,
+        input,
+        store,
+        sources,
+        scanned,
+      );
     }
     return row;
   });

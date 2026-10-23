@@ -6,9 +6,12 @@
 //   [stub:tool <connection> <tool> {json}]  call board_tool_call through the run's
 //     board MCP server: a read runs and its answer lands in the handover; a write is
 //     proposed for approval, as any engine's would be. Demos the gate without a model.
+//     A write the pack's approvals list as executed or rejected is not proposed again:
+//     the run restarted after a decision hands over instead.
 
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { clip } from "../text.js";
 import type { EngineAdapter, EngineContext, EngineResult } from "./types.js";
 
 const HANDOVER = "handover-summary.md";
@@ -37,6 +40,29 @@ export function toolMarkerFromPack(
     }
   }
   return { connection: m[1]!, tool: m[2]!, arguments: args };
+}
+
+/**
+ * What became of this write, by the pack's "Approvals on this task": executed (or approved and on its way)
+ * or rejected means a person decided it. A send that failed, a proposal still waiting or one replaced by a
+ * newer one is proposed as usual: the board keeps one row for the same bytes while it waits.
+ */
+export function decidedInPack(
+  pack: string,
+  connection: string,
+  tool: string,
+): "executed" | "rejected" | null {
+  const section = pack.split("## Approvals on this task")[1]?.split("\n## ")[0] ?? "";
+  const key = `(${connection} · ${tool}): `;
+  let decided: "executed" | "rejected" | null = null;
+  for (const line of section.split("\n")) {
+    const at = line.indexOf(key);
+    if (!line.startsWith("- ") || at < 0) continue;
+    const outcome = line.slice(at + key.length);
+    if (/^(executed|approved)(;|$)/.test(outcome)) return "executed";
+    if (/^rejected(:|$)/.test(outcome)) decided = "rejected";
+  }
+  return decided;
 }
 
 interface RpcResult {
@@ -129,7 +155,15 @@ export const stubEngine: EngineAdapter = {
     // A tool marker: one governed call through the board, like any engine would make.
     let toolLine = "";
     const tool = toolMarkerFromPack(ctx.pack);
-    if (tool && ctx.mcp) {
+    const decided = tool ? decidedInPack(ctx.pack, tool.connection, tool.tool) : null;
+    if (tool && ctx.mcp && decided) {
+      // A person already decided this write: proposing it again would ask them twice.
+      toolLine =
+        decided === "executed"
+          ? `Already approved and executed: ${tool.connection} · ${tool.tool}; not proposed again.`
+          : `A person rejected ${tool.connection} · ${tool.tool}; not proposed again.`;
+      ctx.emit({ type: "step", payload: { text: toolLine } });
+    } else if (tool && ctx.mcp) {
       ctx.emit({
         type: "tool",
         payload: { name: "board_tool_call", input: { connection: tool.connection, tool: tool.tool } },
@@ -142,13 +176,13 @@ export const stubEngine: EngineAdapter = {
         });
         ctx.emit({
           type: "tool_result",
-          payload: { name: "board_tool_call", isError: outcome.isError, text: outcome.text.slice(0, 2000) },
+          payload: { name: "board_tool_call", isError: outcome.isError, text: clip(outcome.text, 2000) },
         });
         toolLine = outcome.isError
-          ? `The board refused ${tool.connection} · ${tool.tool}: ${outcome.text.slice(0, 300)}`
+          ? `The board refused ${tool.connection} · ${tool.tool}: ${clip(outcome.text, 300)}`
           : outcome.text.includes('"proposed"')
             ? `Proposed ${tool.connection} · ${tool.tool} for approval; waiting on a person.`
-            : `Called ${tool.connection} · ${tool.tool}; answer: ${outcome.text.slice(0, 300)}`;
+            : `Called ${tool.connection} · ${tool.tool}; answer: ${clip(outcome.text, 300)}`;
       } catch (err) {
         toolLine = `Could not reach the board for ${tool.connection} · ${tool.tool}: ${(err as Error).message}`;
         ctx.emit({ type: "stderr", payload: { text: toolLine } });

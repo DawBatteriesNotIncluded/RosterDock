@@ -63,7 +63,7 @@ export function registerPeterRoutes(app: FastifyInstance, deps: PeterDeps, plann
     return out;
   });
 
-  // A person raises or lowers a goal's caps; the token cap is the project's lifetime budget.
+  // A person raises or lowers a goal's caps; the token cap is the goal's lifetime budget.
   app.patch(
     "/api/companies/:companyId/goals/:goalId/caps",
     { config: { action: "goal.caps" } },
@@ -75,10 +75,16 @@ export function registerPeterRoutes(app: FastifyInstance, deps: PeterDeps, plann
     },
   );
 
-  // Hand Peter a goal: a project opens at once and Peter plans it before answering.
+  // Hand Peter a goal: a project opens at once and Peter plans it before answering. Where its work goes is a
+  // person's to say, as on a project: a teammate hands over a goal, never with a repository or a branch.
   app.post(
     "/api/companies/:companyId/goals",
-    { config: { action: "project.manage" } },
+    {
+      config: {
+        action: "project.manage",
+        fieldActions: { repoUrl: "project.configure", defaultBranch: "project.configure" },
+      },
+    },
     async (req, reply) => {
       const body = parseBody(CreateGoalSchema, req.body);
       const goal = await createGoal(deps, req.companyId, req.principal.actor, body);

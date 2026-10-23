@@ -20,21 +20,47 @@ The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `
 - A shared kanban, messages and an inbox between teammates, and hunk-level reviews with checks. An approved
   review, never a teammate, marks work done, and may open a pull request (GitHub) or a merge request (GitLab).
 - Writes to live systems as propose, approve, execute, bound to the exact payload by its sha256.
+- Connections to MCP servers over HTTP or stdio, and to OpenAPI services, with OAuth where the server offers
+  it; each company keeps its own credentials as write-only secrets under Settings.
+- Needs-you notifications to a webhook (Slack's works as is) or by email.
 - Costs, budgets and drift alerts per company; Prometheus metrics, OpenTelemetry traces and JSON logs.
+- Companies, departments and teammates exported and imported as files, and style packs: published rule
+  files every teammate's brief carries, pinned by commit and sha256.
 - Sign-in through OpenID Connect, and the roles owner, admin, reviewer, viewer and teammate.
 - The Helm chart: board, web and worker against your Postgres and S3-compatible bucket, every credential by
   Secret name, network policies, KEDA scaling and worker pools.
 - Published releases. A `v*` tag runs CI on the tagged commit, then pushes the three images for linux/amd64
-  and linux/arm64 to GHCR, tagged with the version (and `MAJOR.MINOR` and `latest` unless a prerelease),
-  and the chart to `oci://ghcr.io/dawbatteriesnotincluded/charts` at the same version, whose appVersion
-  names those images (`.github/workflows/release.yml`). Run by hand, it is a dry run that pushes nothing.
+  and linux/arm64 to GHCR, each architecture built on a runner of its own (no emulation) with its provenance
+  and SBOM, tagged with the version (and `MAJOR.MINOR` and `latest` unless a prerelease), and the chart to
+  `oci://ghcr.io/dawbatteriesnotincluded/charts` at the same version, whose appVersion names those images
+  (`.github/workflows/release.yml`). Run by hand, it is a dry run that pushes nothing.
 - The web image carries the licence of every package bundled into the UI, each with its text, in
   `third-party-licenses.txt`, which it also serves at `/third-party-licenses.txt`.
+- Web access for teammates, through the board. The web connection (Settings > Connections > Web) reads public
+  pages for the teammates granted it: every address a name resolves to is checked and the board connects to
+  no other, a company's list of sites narrowed by a department and a client, every page an event. The
+  catalog has search, browser and fetch servers a company may run instead (Brave Search, Tavily, Exa,
+  Playwright, the MCP reference fetch server), and the brief tells each teammate which web tools it has.
+- A worker that runs natively on Windows (`pnpm dev:worker` with Git for Windows), tested there in CI, with
+  the worker's git and file rules kept by Windows' own means; Docker or WSL2 stays the place for
+  repositories you would not run yourself (`docs/security.md`). A board there plans with Claude Code or Codex
+  as npm installs them.
+- Company model providers (Settings > Models): a company adds its own Anthropic, OpenAI, Azure OpenAI, Amazon
+  Bedrock or OpenAI-compatible account, with the models it serves and its key by name only; a key pasted
+  there goes once into the company's secrets, never over another. The operator lists the kinds companies may
+  add, and whether the board lends its own models, in `board.modelProviders` (`ROSTERDOCK_MODEL_PROVIDERS`;
+  all of them by default). A provider's models have prices of their own, Anthropic's list price on an
+  Anthropic provider and estimates from it for Bedrock's Claude models, and Costs says what went through each
+  provider. Teammates still think with the board's own models.
 
 ### Changed
 
-Against the images built from the tree before this release:
+Against the images built from the pre-release tree (then called Pharo, not public):
 
+- A company reaches only its own secrets and the names the operator shares, and four things are closed by
+  default: the board's environment (`board.sharedEnvNames` lists what companies may name), stdio commands
+  (`board.stdioCommands`), who creates companies (`board.companyCreators`), and a public sign-in provider
+  with no `board.oidc.allowedDomains`. `docs/operator.md` (Upgrades and backups) says what to set.
 - The worker image leaves Claude Code out: its licence (Anthropic's Commercial Terms) does not allow a public
   image to pass it on. The chart's `worker.image` points the workers at one you build with it on top of the
   published image (`docs/install.md`, Engines on the worker), and a run on Claude Code that reaches a worker
@@ -44,9 +70,42 @@ Against the images built from the tree before this release:
   Codex 0.157.1 in a board built with `WITH_MODEL_CLIS=1`.
 - The chart is installed from `oci://ghcr.io/dawbatteriesnotincluded/charts/rosterdock` with `--version`, and
   `examples/production.yaml` no longer pins `image.tag`: the chart's version picks the images.
+- The built-in teammate templates, and the model a hire or Peter falls back on, are the current ones: Opus 5.5
+  for Peter, Verifier, Archy and Finn, Sonnet 5.5 for the rest. Opus 5.5 also costs less than the Opus 5 they
+  named. The demo templates' Haiku teammates run on Haiku 5.5, and Settings fills its list price. A teammate
+  already hired keeps its model.
+- A company keeps its prices in one currency, the one its first price is in. A price in another is refused,
+  and so is Add list prices (in USD) for a company that prices in another, where it added USD prices beside
+  the company's and Costs added them up as one. The usage CSV and the chargeback CSV end with a `provider`
+  column, and the chargeback CSV has a line per project and provider. Upgrading: a company already priced in
+  two currencies keeps its prices and may go on setting them in either, and Costs adds them up as before; it
+  comes to one by removing its prices in all but one (`docs/operator.md`, Upgrades and backups).
 - The web image carries its fonts, Schibsted Grotesk and IBM Plex Mono (SIL Open Font License), where the
   page loaded them from Google Fonts: an install without internet access shows them, and no page load sends
   a visitor's address to Google.
+- What a company chooses the board should reach (an MCP server or OpenAPI service, the OAuth endpoints its
+  server names, the company's own webhook and SMTP server) must be at a public address, by the address
+  ranges the web connection refuses, unless the operator lists it in `board.privateDestinations`
+  (`ROSTERDOCK_PRIVATE_DESTINATIONS`; empty by default). A connection at a private address (loopback, the
+  private ranges, link-local and cloud metadata) fails its check and its calls with "refused: … which this
+  board's operator has not allowed" until it is listed. The check goes by address range: cluster addresses
+  outside the private ranges, and public addresses that lead inside, pass it, so the network policy still
+  matters (`docs/security.md`). An MCP server that redirects to another server, and an OpenAPI operation or a
+  webhook that answers with any redirect, fails and names the server it pointed to. An MCP server's
+  redirect within its own server is followed when the call arrives as sent (307, 308); a 301 or 302, as an
+  http-to-https rule sends, would turn the call into a GET, so it fails and says what to change (over https,
+  or with or without the trailing slash). An answer is read only up to its call site's cap,
+  decoded. What an OpenAPI or MCP server says back, its errors and tool descriptions included, loses the
+  credential however JSON escapes it, eight levels deep at most. OAuth endpoints must be https (http only to a listed destination), and the resource an MCP server
+  declares must be on its own origin, at or above its MCP URL's path; a connection that kept one that is not,
+  or an issuer now refused or without metadata, is discovered again at its next Authorise, its old tokens
+  dropped and nothing of one issuer sent to another (a person's client id is refused there). The board's own destinations (git hosts, OIDC, OTLP, the bucket, the
+  API server, the model API, its webhook and SMTP server) are not checked. An entry may be one company's
+  alone (`<company id>=<entry>`, or `{ company, destination }` in the chart), which no other company's
+  connections reach, unless an entry for every company covers it too, and no other company sees (a stdio
+  command is outside the check, as before). Settings shows owners and admins the entries that apply to their company, and flags a URL whose
+  address the board refuses or whose name looks private and is not listed. `docs/operator.md` (Private
+  destinations) says what to list.
 
 ### Renamed
 
@@ -72,9 +131,67 @@ install built from that tree changes each of these:
 
 ### Fixed
 
+- A process the repository's tests started (a server, a watcher) outlived the test step, and one that kept
+  the output open after a passing script held the step to its time limit, which it then reported as a
+  timeout. The script now leads a process group of its own (a job object on Windows), which the step ends
+  past its time limit, on Stop and when the script ends.
+- With no outputs declared, a file a run took out of the index and kept (a local `.env` that `.gitignore`
+  matches) was delivered as one of the run's files, with what it held. A path git calls deleted is no
+  longer delivered, and a file whose name has a space or a character git escapes, or one the run moved, is.
+  And where git could not read the changes back (a lock left by a git that something ended part-way), the
+  review showed part of them; a run that would complete now fails instead.
+- The review's diff, and so the pull request, named a file git quotes (a name past ASCII, or with a quote or
+  a control character) by git's escaped spelling, and dropped a trailing space from a name: a new
+  `résumé.md` was created under its escapes, a change to such a file failed the pull request, and a new
+  `README.md ` replaced `README.md`. Names are read back as they are.
+- A review read a deleted line that starts `-- ` (a SQL or Lua comment) or an added one that starts `++ ` as a
+  file's header, and a hunk whose heading held a line separator (U+2028, U+2029, a carriage return) not at
+  all: the review lost the lines, the secrets check never saw them, the file took another name, and the pull
+  request failed, or deleted another file. A file whose diff has no lines (an empty or binary one, added,
+  changed or deleted, or a mode change) in a folder whose name ends in ` b` took another file's name, and a
+  quoted name with an emoji in it another's spelling. The board now reads a diff by its hunks' counts, opens a
+  review of a diff git would not write with none of it and a failing secrets check, and builds a pull request
+  only while the review's diff, read again, reads as the files the review showed. Upgrading: a review open
+  before the upgrade whose diff an older board misread fails its pull request on approval, saying so; a person
+  vetoes the approval and requests changes, for a round the new board reads. Files whose names are not UTF-8
+  (Linux allows any bytes) shared one name in the review; a run that would complete now fails, saying so, as
+  it does on two names that differ only by spaces or a U+FEFF at an end, and, without a repository, on a file
+  named `.git`, which is not delivered. The board kept an artifact's name trimmed of those, so such a file
+  replaced the one without them.
+- A file git showed as binary reached the pull request as the bytes the run sent, which neither the review nor
+  the secrets check read: a run could hide a credential in a text file by marking it `-diff` in
+  `.git/info/attributes` or `.gitattributes`, or by putting a NUL byte in it, and a teammate could approve it.
+  The secrets check now scans every binary file's bytes (UTF-8, UTF-16 and UTF-32) and binds their sha256,
+  before the transaction that opens the review and up to 64 MB a run; a pull request writes only those bytes,
+  and a binary file goes into a pull request only where a person approved: a teammate's approval hands the
+  review to people, who are told (a needs-you sentence). A teammate still approves binary deliverables where no
+  pull request opens, unless the scan could not read one (past 64 MB or 100 files, or under another spelling of its name). The worker takes out the
+  `.git/info` the run could write and reads no system attributes file. A pull request now starts opening only
+  for a review still approved. Upgrading: a review open before the upgrade with a binary file fails its pull
+  request on approval, saying so; a person vetoes the approval and requests changes.
+- A pull request was built on whatever commit the run's clone was left at, so a run that checked out another ref
+  (an unmerged branch, a fork's pull request) carried its commits into the change, unreviewed. The worker now
+  reports the commit it cloned before the engine starts, with a key its claim gave it that the engine never
+  sees, a run that moved off it fails, and a pull request is built on that commit only. Upgrading: a review
+  whose run an older worker did fails its pull request, saying so.
+- A run delivered a declared output that git left out of the diff (ignored, or under `.git`), unshown and
+  unscanned, and completed with an empty review where git read a file with a late NUL byte as text (the board
+  refused the diff). Both now fail the run, naming the file. A declared output the run hid behind a
+  skip-worktree or assume-unchanged flag in the index was delivered as it was on disk while the review showed
+  the index: the worker clears those flags first, so the review shows the file. A shutdown while the worker
+  claimed a run no longer lets it clone.
+- On Windows, 0.1.0-rc.1 and 0.1.0-rc.2 ran the repository's tests without the job object: Windows
+  PowerShell never made it (kernel32's functions were declared without PreserveSig), so what the tests left
+  running when they ended by themselves carried on, as without one. The worker now makes it, and its log
+  says whether it did.
 - Handing Peter a goal could fail with an internal error, and leave it half planned, when Peter's loop started
   the plan's first task while the rest were still being filed: filing a task and starting the task it waits on
   took their locks in opposite orders, and Postgres broke the deadlock by cancelling the filing.
+
+- A teammate hired from the built-in 'Cody 3' template, or put on OpenCode in its editor, failed every run:
+  no worker runs OpenCode yet. The template runs on Claude Code, and the pickers no longer offer OpenCode.
+- Activity and the Company page showed a teammate's logged decision by its raw event name, and a task a
+  person marked blocked explained itself as waiting on a teammate's answer.
 
 ### Security
 

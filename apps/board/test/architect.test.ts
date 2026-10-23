@@ -65,7 +65,7 @@ describe("Peter as architect", () => {
     const finn = (await api.get(`${base}/teammates`)).body.find((t: any) => t.name === "Finn");
     expect(finn.personaMd).toMatch(/finance analyst/);
     expect(finn.engine).toBe("claude_code");
-    expect(finn.model).toBe("claude-opus-5");
+    expect(finn.model).toBe("claude-opus-5-5");
     // Toolboxes are recommendations on the draft, not grants: the teammate carries no tool.
     expect(JSON.stringify(finn)).not.toContain("xero");
     const events = (await api.get(`${base}/events`)).body.map((e: any) => e.type);
@@ -159,6 +159,40 @@ describe("Peter as architect", () => {
     void eng;
     void research;
     void finn;
+  });
+
+  it("audits a Codex teammate seated, from before, where Codex cannot keep to the department's tool list", async () => {
+    const { api, base, companyId } = await seedCompany(board, "a5@example.com");
+    const dex = (
+      await api.post(`${base}/teammates`, {
+        name: "Dex",
+        role: "automation engineer",
+        engine: "codex",
+        model: "gpt-6-astra",
+      })
+    ).body;
+    const research = (
+      await api.post(`${base}/departments`, {
+        name: "Research",
+        sandbox: { allowedTools: ["Read(./**)", "Write(./**)"] },
+      })
+    ).body;
+    // The board refuses this seat now; one made before it, or by hand, is what the audit finds.
+    await board.db.query(
+      "INSERT INTO department_members (company_id, department_id, teammate_id, is_lead) VALUES ($1, $2, $3, false)",
+      [companyId, research.id, dex.id],
+    );
+    const audit = (await api.post(`${base}/drafts/audit`, {})).body;
+    expect(audit.proposal.findings.filter((f: any) => f.kind === "engine_mismatch")).toEqual([
+      {
+        kind: "engine_mismatch",
+        subject: { kind: "teammate", id: dex.id, name: "Dex" },
+        text: "Dex runs on Codex, which cannot keep to Research's tool list (it reads files and runs commands only through its shell, and the list leaves out Bash), so Dex's runs there do not start.",
+        suggestion:
+          "Name Bash on its own in Research's tool list, pick another engine for Dex, or take them out of Research.",
+      },
+    ]);
+    expect(audit.proposal.summary).toContain("engine mismatch");
   });
 
   it("proposes with the model against a recorded response, and falls back when the proposal does not fit", async () => {

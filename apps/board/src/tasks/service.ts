@@ -17,6 +17,7 @@ import { assertActorInCompany, describeActor } from "../actors.js";
 import type { Db, Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate, type MutationContext } from "../mutate.js";
+import { settleWaitingOn } from "./waiting.js";
 
 export interface TaskRow {
   id: string;
@@ -38,6 +39,8 @@ export interface TaskRow {
   active_run_id: string | null;
   work_kind: WorkKind;
   parent_task_id: string | null;
+  /** The goal the task serves; null for work outside any goal. */
+  goal_id: string | null;
   replans: number;
   created_at: Date;
   updated_at: Date;
@@ -75,6 +78,7 @@ export function taskToJson(row: TaskRow) {
     activeRunId: row.active_run_id,
     workKind: row.work_kind ?? "build",
     parentTaskId: row.parent_task_id,
+    goalId: row.goal_id ?? null,
     replans: row.replans ?? 0,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
@@ -136,6 +140,43 @@ export async function assertDepartment(
   if (!res.rowCount) throw new HttpError(422, "department is not in this company");
 }
 
+/** The department a task is in; null when it has none. */
+async function taskDepartment(db: Queryable, companyId: string, taskId: string): Promise<string | null> {
+  const res = await db.query<{ department_id: string | null }>(
+    "SELECT department_id FROM tasks WHERE id = $1 AND company_id = $2",
+    [taskId, companyId],
+  );
+  return res.rows[0]?.department_id ?? null;
+}
+
+/**
+ * A teammate files and moves work only inside its own department, so a run never leaves its
+ * department's sandbox, worker pool and write policy by putting a task somewhere else. In a run that
+ * is the department of the run's task, whatever project the work goes into; outside a run, a
+ * department the teammate belongs to (or none). People, and Peter's plans, are not narrowed here.
+ */
+export async function assertTeammateDepartment(
+  db: Queryable,
+  companyId: string,
+  teammateId: string,
+  departmentId: string | null,
+  runTaskId: string | null,
+): Promise<void> {
+  if (runTaskId) {
+    if ((await taskDepartment(db, companyId, runTaskId)) !== departmentId)
+      throw new HttpError(403, "a teammate's work in a run stays in the department of the run's task");
+    return;
+  }
+  if (!departmentId) return;
+  const member = await db.query(
+    `SELECT 1 FROM department_members WHERE company_id = $1 AND department_id = $2 AND teammate_id = $3
+     UNION ALL SELECT 1 FROM departments WHERE company_id = $1 AND id = $2 AND lead_teammate_id = $3`,
+    [companyId, departmentId, teammateId],
+  );
+  if (!member.rowCount)
+    throw new HttpError(403, "a teammate files work only into a department it belongs to");
+}
+
 /** Teammates may not flood a project: at most this many tasks per project per day from teammates. */
 export const TEAMMATE_TASKS_PER_PROJECT_PER_DAY = 25;
 
@@ -155,34 +196,63 @@ export async function taskDepth(db: Queryable, taskId: string | null): Promise<n
 }
 
 export interface CreateTaskOptions {
-  /** The task the creating teammate was working; sets the depth for the goal's caps. */
+  /**
+   * The task the creating teammate was working in its run; sets the depth for the goal's caps, and
+   * the new task's department when the body names none.
+   */
   parentTaskId?: string | null;
-  /** Peter's own tasks at handoff: counted against the goal's task cap, depth 0. */
-  fromGoal?: boolean;
+  /** Peter's own tasks at handoff, for this goal: counted against its task cap, depth 0. */
+  fromGoal?: string;
 }
 
 /**
- * A project that came from a goal has caps: teammates (Peter included) cannot
- * create tasks past them; a person must. Runaway delegation stops here.
+ * The goal a new task serves: the goal Peter planned it for, the goal of the task it was filed from, or
+ * the goal its project was opened for, while that goal is open. Null: work outside any goal, which is what
+ * a task filed after its goal closed is (Peter does not re-plan a closed goal's tasks).
+ */
+async function goalOfNewTask(
+  db: Queryable,
+  projectId: string,
+  opts: CreateTaskOptions,
+): Promise<string | null> {
+  if (opts.fromGoal) return opts.fromGoal;
+  if (opts.parentTaskId) {
+    const parent = await db.query<{ goal_id: string | null }>(
+      `SELECT t.goal_id FROM tasks t JOIN goals g ON g.id = t.goal_id
+       WHERE t.id = $1 AND g.status NOT IN ('done', 'stopped')`,
+      [opts.parentTaskId],
+    );
+    if (parent.rows[0]?.goal_id) return parent.rows[0].goal_id;
+  }
+  const opened = await db.query<{ id: string }>(
+    "SELECT id FROM goals WHERE project_id = $1 AND opened_project AND status NOT IN ('done', 'stopped')",
+    [projectId],
+  );
+  return opened.rows[0]?.id ?? null;
+}
+
+/**
+ * A goal has caps: teammates (Peter included) cannot create tasks for it
+ * past them; a person must. Runaway delegation stops here.
  */
 async function assertWithinGoalCaps(
   db: Queryable,
-  projectId: string,
+  goalId: string | null,
   actor: ActorRef,
   opts: CreateTaskOptions,
 ): Promise<void> {
-  if (actor.kind !== "teammate") return;
+  if (actor.kind !== "teammate" || !goalId) return;
   const goal = (
     await db.query<{ id: string; title: string; caps: { maxTasks?: number; maxDepth?: number } }>(
-      "SELECT id, title, caps FROM goals WHERE project_id = $1",
-      [projectId],
+      "SELECT id, title, caps FROM goals WHERE id = $1",
+      [goalId],
     )
   ).rows[0];
   if (!goal) return;
   const maxTasks = goal.caps?.maxTasks ?? 12;
   const maxDepth = goal.caps?.maxDepth ?? 2;
   const count = (
-    await db.query<{ n: number }>("SELECT count(*)::int AS n FROM tasks WHERE project_id = $1", [projectId])
+    await db.query<{ n: number }>("SELECT count(*)::int AS n FROM tasks WHERE goal_id = $1", [goalId])
   ).rows[0]!.n;
   if (count >= maxTasks) {
     throw new HttpError(
@@ -215,6 +285,13 @@ export async function createTask(
     ]);
     if (!project.rowCount) throw new HttpError(422, "project is not in this company");
     await assertDepartment(ctx.client, companyId, body.departmentId);
+    let departmentId = body.departmentId ?? null;
+    if (actor.kind === "teammate" && !opts.fromGoal) {
+      const runTaskId = opts.parentTaskId ?? null;
+      if (runTaskId && body.departmentId === undefined)
+        departmentId = await taskDepartment(ctx.client, companyId, runTaskId);
+      await assertTeammateDepartment(ctx.client, companyId, actor.id, departmentId, runTaskId);
+    }
     if (actor.kind === "teammate") {
       const recent = await ctx.client.query<{ n: number }>(
         `SELECT count(*)::int AS n FROM tasks WHERE project_id = $1 AND created_by_kind = 'teammate' AND created_at > now() - interval '1 day'`,
@@ -227,12 +304,15 @@ export async function createTask(
         );
       }
     }
-    await assertWithinGoalCaps(ctx.client, body.projectId, actor, opts);
+    const goalId = await goalOfNewTask(ctx.client, body.projectId, opts);
+    await assertWithinGoalCaps(ctx.client, goalId, actor, opts);
     const assignee = body.assignee ? await assertActorInCompany(ctx.client, companyId, body.assignee) : null;
-    // What the task points at (the tasks it waits on, the one it was filed from) is locked before it takes a
-    // number. Every other mutation locks its rows first and the company counter last, with its first event;
-    // numbering first and locking a dependency after deadlocked with a task being started (Peter filing a
-    // plan's second task while the loop started the first).
+    // What the task points at (its goal, the tasks it waits on, the one it was filed from) is locked before it
+    // takes a number. Every other mutation locks its rows first and the company counter last, with its first
+    // event; numbering first and locking a dependency after deadlocked with a task being started (Peter filing
+    // a plan's second task while the loop started the first). The goal goes first, as it does where a person
+    // stops it or changes its caps.
+    if (goalId) await ctx.client.query("SELECT 1 FROM goals WHERE id = $1 FOR KEY SHARE", [goalId]);
     const references = opts.parentTaskId ? [...body.dependsOn, opts.parentTaskId] : body.dependsOn;
     if (references.length) {
       const found = new Set(
@@ -252,12 +332,12 @@ export async function createTask(
     );
     const number = num.rows[0]!.n;
     const inserted = await ctx.client.query<{ id: string }>(
-      `INSERT INTO tasks (company_id, project_id, department_id, number, title, description, assignee_kind, assignee_id, created_by_kind, created_by_id, declared_outputs, criteria, work_kind, parent_task_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
+      `INSERT INTO tasks (company_id, project_id, department_id, number, title, description, assignee_kind, assignee_id, created_by_kind, created_by_id, declared_outputs, criteria, work_kind, parent_task_id, goal_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
       [
         companyId,
         body.projectId,
-        body.departmentId ?? null,
+        departmentId,
         number,
         body.title,
         body.description,
@@ -269,6 +349,7 @@ export async function createTask(
         JSON.stringify(body.criteria),
         body.workKind ?? "build",
         opts.parentTaskId ?? null,
+        goalId,
       ],
     );
     const id = inserted.rows[0]!.id;
@@ -286,7 +367,7 @@ export async function createTask(
         number,
         title: body.title,
         projectId: body.projectId,
-        departmentId: body.departmentId ?? null,
+        departmentId,
         assignee: assignee ? { kind: assignee.kind, id: assignee.id, name: assignee.name } : null,
         createdByName: creator?.name ?? null,
         dependsOn: body.dependsOn,
@@ -414,7 +495,7 @@ export async function moveTask(
     if (body.status === "blocked") {
       const actorName = (await describeActor(ctx.client, companyId, actor))?.name ?? "a teammate";
       const blocker = body.blocker
-        ? blockerFromInput(body.blocker)
+        ? await settleWaitingOn(ctx.client, companyId, blockerFromInput(body.blocker))
         : blockerFor("unknown", { what: `Blocked by ${actorName}. Tell the team why in the conversation.` });
       await setBlocked(ctx, task, blocker);
     } else {

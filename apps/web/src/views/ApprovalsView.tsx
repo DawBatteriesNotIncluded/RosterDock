@@ -1,9 +1,12 @@
 // Approvals: every proposed write to a live system, per company, as the
 // prototype draws it. Each card is the exact action a teammate wants to take,
 // bound to a sha256 so the approved bytes are the executed bytes. Approve sends
-// them and the teammate continues; reject leaves a note and Peter re-plans.
-// Pending cards first; decided ones fade with their outcome.
+// them and the teammate continues; reject leaves a note, and the card says who
+// takes the task from there (Peter re-plans a teammate's). Pending cards first;
+// decided ones fade with their outcome.
 import { useState } from "react";
+// The text helpers alone, not the package's index: that carries zod and node:crypto into the bundle.
+import { asSentence } from "@rosterdock/shared/text";
 import type { Approval, CompanyData } from "../api/types.ts";
 import { Avatar, Button, Empty, Pill, Topbar } from "../components/ui.tsx";
 import { cn } from "../lib/cn.ts";
@@ -36,6 +39,23 @@ export function approvalTone(status: Approval["status"]): "warn" | "ok" | "bad" 
       : status === "approved"
         ? "info"
         : "bad";
+}
+
+/** What a rejection left the task to, as the card and the toast say it: who takes it from there. */
+export function afterRejectionText(after: Approval["afterRejection"]): string {
+  if (!after) return "Nothing was sent.";
+  switch (after.kind) {
+    case "replanned":
+      return `Nothing was sent; ${after.by} re-planned the task.`;
+    case "replan":
+      return `Nothing was sent; ${after.by} re-plans the task.`;
+    case "proposal":
+      return "Nothing was sent; the task still waits on another proposal.";
+    case "person":
+      return after.name
+        ? `Nothing was sent; the task waits with the rejection for ${after.name}.`
+        : "Nothing was sent; the task waits with the rejection for a person to start it again with a note, reassign it or cancel it.";
+  }
 }
 
 /** Pending first, then newest first. */
@@ -117,7 +137,7 @@ export function ApprovalCard({
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="Why not, in a sentence. The teammate reads this and re-plans."
+              placeholder="Why not, in a sentence. Whoever takes the task next reads it."
               style={{ minHeight: 60 }}
             />
           ) : null}
@@ -157,9 +177,11 @@ export function ApprovalCard({
           {a.status === "superseded"
             ? `Replaced by a newer proposal of the same write${a.target ? ` (${a.target})` : ""} before anyone decided it. Nothing was sent; decide the newer one.`
             : a.status === "rejected"
-              ? `Rejected${a.decidedAt ? ` ${relativeTime(a.decidedAt)}` : ""}${a.note ? `: ${a.note}` : ""}. Nothing was sent; Peter re-plans the task.`
+              ? `${asSentence(`Rejected${a.decidedAt ? ` ${relativeTime(a.decidedAt)}` : ""}${a.note ? `: ${a.note}` : ""}`)} ${afterRejectionText(a.afterRejection)}`
               : a.status === "failed"
-                ? `Approved${a.note ? ` (${a.note})` : ""}, but the send failed: ${a.error ?? "no reason recorded"}.`
+                ? asSentence(
+                    `Approved${a.note ? ` (${a.note})` : ""}, but the send failed: ${a.error ?? "no reason recorded"}`,
+                  )
                 : a.status === "executed"
                   ? `Approved${a.note ? ` (${a.note})` : ""} and executed${a.executedAt ? ` ${relativeTime(a.executedAt)}` : ""}; ${name} continues with the answer in their pack.`
                   : "Approved; sending."}
@@ -182,8 +204,8 @@ export function ApprovalsView(p: ApprovalsViewProps) {
         <div className="approvals scroll">
           <p className="m-0 max-w-[64ch] text-[13px] leading-relaxed text-muted">
             Each card is the exact action a teammate wants to take, bound to a hash so the approved bytes are
-            the executed bytes. Credentials are named, never shown. Reject sends the teammate back with your
-            note; nothing reaches the live system.
+            the executed bytes. Credentials are named, never shown. Reject keeps your note and sends nothing
+            to the live system; the card then says who takes the task from there.
           </p>
           {list.map((a) => (
             <ApprovalCard

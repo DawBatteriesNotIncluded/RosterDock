@@ -1,6 +1,7 @@
 // Binds the store to the views. Views are pure; everything that talks to the
 // board lives here.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import type { Client } from "./api/client.ts";
 import type { AuthProviders, Features, TeammateTemplate } from "./api/types.ts";
 import { Shell } from "./components/Shell.tsx";
 import { Empty } from "./components/ui.tsx";
@@ -15,7 +16,7 @@ import {
 } from "./modals/index.tsx";
 import { useApp } from "./state/store.tsx";
 import { ActivityView } from "./views/ActivityView.tsx";
-import { ApprovalsView } from "./views/ApprovalsView.tsx";
+import { afterRejectionText, ApprovalsView } from "./views/ApprovalsView.tsx";
 import { BoardView } from "./views/BoardView.tsx";
 import { CompanyView } from "./views/CompanyView.tsx";
 import { CostsView } from "./views/CostsView.tsx";
@@ -23,7 +24,7 @@ import { OfficeView } from "./views/OfficeView.tsx";
 import { ReviewsView } from "./views/ReviewsView.tsx";
 import { SettingsView } from "./views/SettingsView.tsx";
 import { useLiveRuns } from "./views/WorkingNow.tsx";
-import { DepartmentsView, type CellState } from "./views/DepartmentsView.tsx";
+import { DepartmentsView, nextCellState, type CellState } from "./views/DepartmentsView.tsx";
 import { LoginView } from "./views/Login.tsx";
 import { TeammatesView } from "./views/TeammatesView.tsx";
 
@@ -47,11 +48,33 @@ export function oauthErrorText(code: string, detail: string | null = null): stri
       return "That authorisation took too long or was started elsewhere; press Authorise again.";
     case "forbidden":
       return "You may not manage this company's connections.";
+    case "moved":
+      return "The connection's server moved to another authorization server while you were authorising; press Authorise again.";
     case "token":
       return `The authorization server did not issue a token; press Authorise again.${said}`;
     default:
       return `The authorization server refused; the board's log says why.${said}`;
   }
+}
+
+/**
+ * Asks the board what it offers this company, and returns what stops a late answer landing. The private
+ * destinations given to the last company are not this one's, so they go first, even if the board cannot be asked.
+ */
+export function loadFeatures(
+  client: Pick<Client, "features">,
+  companyId: string | null,
+  set: Dispatch<SetStateAction<Features>>,
+): () => void {
+  let alive = true;
+  set((f) => ({ ...f, privateDestinations: undefined, companyPrivateDestinations: undefined }));
+  client
+    .features(companyId ?? undefined)
+    .then((f) => alive && set(f))
+    .catch(() => undefined);
+  return () => {
+    alive = false;
+  };
 }
 
 export function App() {
@@ -66,15 +89,8 @@ export function App() {
   const [features, setFeatures] = useState<Features>({ oauth: false, objectStore: false });
   useEffect(() => {
     if (!me) return;
-    let alive = true;
-    client
-      .features()
-      .then((f) => alive && setFeatures(f))
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [client, me]);
+    return loadFeatures(client, companyId, setFeatures);
+  }, [client, me, companyId]);
   // An OAuth authorisation comes back to the root with ?oauth=<connection> or ?oauth_error=<code>.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
@@ -113,10 +129,8 @@ export function App() {
     await refresh();
   };
   const rejectApproval = async (id: string, note?: string) => {
-    await run(
-      () => client.rejectApproval(cid, id, note),
-      "Rejected. Nothing was sent; Peter re-plans the task.",
-    );
+    const r = await run(() => client.rejectApproval(cid, id, note));
+    app.toast(`Rejected. ${afterRejectionText(r.afterRejection)}`);
     await refresh();
   };
   const loadMessages = useCallback(
@@ -359,6 +373,25 @@ export function App() {
       onDesign={() => setModal({ kind: "design" })}
       onHire={async () => setModal({ kind: "hire", templates: await run(() => client.templates(cid)) })}
       onOpenBoard={(id) => setUi({ view: "board", departmentId: id, selectedTaskId: null })}
+      {...(data.company.role === "owner" || data.company.role === "admin"
+        ? {
+            onSaveWebDomains: async (id: string, webDomains: string[]) => {
+              const d = data.departments.find((x) => x.id === id);
+              if (!d) return;
+              const { webDomains: _, ...sandbox } = d.sandbox ?? {};
+              await run(
+                () =>
+                  client.updateDepartment(cid, id, {
+                    sandbox: webDomains.length ? { ...sandbox, webDomains } : sandbox,
+                  }),
+                webDomains.length
+                  ? `${d.name}'s runs read the web only within ${webDomains.join(", ")}.`
+                  : `${d.name}'s runs read the company's web sites.`,
+              );
+              await refresh();
+            },
+          }
+        : {})}
       onDissolve={async (id) => {
         const d = data.departments.find((x) => x.id === id);
         if (!d || !window.confirm(`Dissolve ${d.name}? Teammates keep their toolboxes.`)) return;
@@ -369,12 +402,13 @@ export function App() {
         const d = data.departments.find((x) => x.id === departmentId);
         const t = data.teammates.find((x) => x.id === teammateId);
         if (!d || !t) return;
-        if (from === "none")
+        const to = nextCellState(from);
+        if (to === "member")
           await run(
             () => client.setDepartmentMember(cid, departmentId, teammateId, false),
             `${t.name} added to ${d.name}`,
           );
-        else if (from === "member")
+        else if (to === "lead")
           await run(
             () => client.setDepartmentMember(cid, departmentId, teammateId, true),
             `${t.name} now leads ${d.name}`,
@@ -525,6 +559,21 @@ export function App() {
       loadBudgets={() => client.budgets(cid)}
       saveBudget={(input) => run(() => client.saveBudget(cid, input), "Budget set.")}
       deleteBudget={(id) => run(() => client.deleteBudget(cid, id), "Budget removed.")}
+      models={{
+        features,
+        load: () => client.modelProviders(cid),
+        loadSecrets: () => client.secrets(cid),
+        setSecret: (name, value) => run(() => client.setNewSecret(cid, name, value), `${name} set.`),
+        replaceSecret: (name, value) => run(() => client.setSecret(cid, name, value), `${name} set.`),
+        checkNew: (input) => run(() => client.checkNewModelProvider(cid, input)),
+        create: (input) => run(() => client.createModelProvider(cid, input), `${input.label} added.`),
+        update: (id, input) => run(() => client.updateModelProvider(cid, id, input)),
+        remove: (id) => run(() => client.deleteModelProvider(cid, id), "Provider removed."),
+        loadPrices: () => client.prices(cid),
+        savePrice: (input) => run(() => client.savePrice(cid, input), "Price saved."),
+        deletePrice: (id) => run(() => client.deletePrice(cid, id), "Price removed."),
+        fillListPrices: (providerId) => run(() => client.fillListPrices(cid, providerId)),
+      }}
       connections={{
         loadCatalog: () => client.catalog(),
         features,
@@ -535,7 +584,9 @@ export function App() {
         createConnection: async (input) => {
           const c = await run(
             () => client.createConnection(cid, input),
-            `${input.name} added. Discover its tools.`,
+            input.kind === "web"
+              ? `${input.name} added. Grant it in a teammate's toolbox.`
+              : `${input.name} added. Discover its tools.`,
           );
           await refresh();
           return c;

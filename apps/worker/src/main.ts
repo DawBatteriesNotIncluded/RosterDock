@@ -6,7 +6,8 @@ import { PgBoss } from "pg-boss";
 import { RUN_QUEUE_SETTINGS } from "@rosterdock/shared";
 import { createBoardClient } from "./board-client.js";
 import { loadConfig } from "./config.js";
-import { createLog, logFormatFrom } from "./log.js";
+import { jobsWork, onJobAnswer } from "./kill.js";
+import { createLog, dropLinesWhenGone, logFormatFrom } from "./log.js";
 import { createClaudeCodeEngine } from "./engines/claude-code.js";
 import { createCodexEngine } from "./engines/codex.js";
 import { stubEngine } from "./engines/stub.js";
@@ -14,13 +15,27 @@ import type { EngineAdapter } from "./engines/types.js";
 import { createWorkerMetrics, startMetricsServer } from "./metrics.js";
 import { createPodMetricsSampler, podMetricsConfig } from "./pod-metrics.js";
 import { createResourceSampler } from "./resources.js";
-import { engineEnvironment, executeRun } from "./run.js";
+import { engineEnvironment, executeRun, RunInterrupted } from "./run.js";
+import { removalsDone } from "./workspace.js";
 
 const config = loadConfig();
+for (const stream of [process.stdout, process.stderr]) dropLinesWhenGone(stream);
 const log = createLog(logFormatFrom(process.env, process.stdout.isTTY === true), {
   service: "rosterdock-worker",
   worker: config.workerId,
 });
+
+// Windows: whether the repository's tests run in a job object, asked now so no run's tests wait for it, and said.
+if (process.platform === "win32" && config.runRepoTests) {
+  onJobAnswer((answer) =>
+    answer.works
+      ? log.info("the repository's tests run in a job object: what they start ends with them")
+      : log.warn(
+          `the repository's tests run without a job object, under cmd.exe: ${answer.why}. What they leave running when they end by themselves carries on`,
+        ),
+  );
+  void jobsWork();
+}
 
 const engines: Record<string, EngineAdapter> = {
   stub: stubEngine,
@@ -89,7 +104,7 @@ await boss.work<{ runId: string; companyId: string }>(
             heartbeatMs: config.heartbeatMs,
             engineEnv: engineEnvironment(config.passEnvNames),
             boardUrl: config.boardUrl,
-            gitToken: config.gitToken,
+            gitCredential: config.gitCredential,
             repoTests: config.runRepoTests ? { timeoutMs: config.testTimeoutMs } : null,
             otlp: config.otlp ? { target: config.otlp, fetch: (i, init) => fetch(i, init) } : null,
             resources,
@@ -98,6 +113,10 @@ await boss.work<{ runId: string; companyId: string }>(
           },
         );
         status = outcome.status;
+      } catch (err) {
+        // Thrown on to pg-boss, which retries the job; the retry resumes the run.
+        if (err instanceof RunInterrupted) status = "interrupted";
+        throw err;
       } finally {
         metrics.runFinished(status, Date.now() - startedAt);
       }
@@ -111,13 +130,22 @@ log.info(
     pool: config.pool,
   },
 );
+if (config.gitCredential)
+  log.info(
+    `the git token goes to ${config.gitCredential.hosts.join(", ")} only; a repository elsewhere clones without it`,
+  );
 
 const stop = async () => {
   log.info("shutting down");
   shutdown.abort();
   await boss.stop({ graceful: true, timeout: 20_000, close: true });
+  // A clone a stop ended part-way, still being removed (Windows): its .git/config holds the token.
+  await removalsDone();
   await metricsServer?.close();
   process.exit(0);
 };
 process.on("SIGINT", () => void stop());
 process.on("SIGTERM", () => void stop());
+// The terminal `pnpm dev:worker` runs in, closed: the repository's tests lead a session of their own, which its
+// hangup no longer reaches, so the stop ends them.
+process.on("SIGHUP", () => void stop());

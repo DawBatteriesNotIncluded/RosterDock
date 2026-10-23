@@ -1,11 +1,12 @@
 // The stub engine's [stub:tool] marker: one governed call through the run's
 // board MCP server, with the run token as the bearer; a proposal or an answer
-// ends up in the handover. The board is a fake fetch answering JSON-RPC.
+// ends up in the handover, and a write a person already decided is not
+// proposed again. The board is a fake fetch answering JSON-RPC.
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { callBoardTool, stubEngine, toolMarkerFromPack } from "../src/engines/stub.js";
+import { callBoardTool, decidedInPack, stubEngine, toolMarkerFromPack } from "../src/engines/stub.js";
 
 const calls: { url: string; headers: Record<string, string>; body: any }[] = [];
 function fakeBoard(reply: { text: string; isError?: boolean }) {
@@ -37,6 +38,26 @@ afterEach(() => {
   vi.unstubAllGlobals();
   calls.length = 0;
 });
+
+/** The pack of a run restarted after a person decided a write, as the board renders its approvals. */
+function withApprovals(outcome: string): string {
+  return [
+    "# Task",
+    "",
+    'Create the list. [stub:tool hubspot manage_crm_objects {"action":"create","objectType":"company"}]',
+    "",
+    "## Approvals on this task",
+    "Writes to live systems you (or an earlier run) proposed. An approved write was executed by the board exactly as proposed: do not repeat it.",
+    "- Search companies (hubspot · search_crm_objects): executed",
+    `- Stub write: manage_crm_objects on hubspot (hubspot · manage_crm_objects): ${outcome}`,
+    "",
+    "## Expected outputs",
+    "- notes.md",
+    "",
+    "## Sandbox",
+    "",
+  ].join("\n");
+}
 
 async function run(pack: string, mcp: { url: string; token: string } | null) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "rosterdock-stub-"));
@@ -148,5 +169,49 @@ describe("the stub engine's tool marker", () => {
     );
     expect(none.handover).not.toContain("hubspot");
     expect(calls).toHaveLength(0);
+  });
+
+  it("the run restarted after a person decided does not propose the same write again", async () => {
+    const mcp = { url: "http://board.test/api/mcp", token: "run-token-2" };
+    vi.stubGlobal("fetch", fakeBoard({ text: JSON.stringify({ kind: "proposed", approvalId: "a2" }) }));
+    const executed = await run(withApprovals('executed; answer: {"id":"list-212"}'), mcp);
+    expect(executed.result.ok).toBe(true);
+    expect(calls).toHaveLength(0);
+    expect(executed.handover).toContain(
+      "Already approved and executed: hubspot · manage_crm_objects; not proposed again.",
+    );
+    expect(executed.events.some((e) => e.type === "tool" && e.payload.name === "board_tool_call")).toBe(
+      false,
+    );
+    // A rejected write is not proposed again as it was either: the pack says so.
+    const rejected = await run(withApprovals("rejected: use the active list"), mcp);
+    expect(calls).toHaveLength(0);
+    expect(rejected.handover).toContain(
+      "A person rejected hubspot · manage_crm_objects; not proposed again.",
+    );
+    // A send that failed is proposed again once fixed; a proposal still waiting is the same row on the board.
+    const failed = await run(withApprovals("approved but the send failed: 503"), mcp);
+    expect(calls.map((c) => c.body.method)).toEqual(["initialize", "tools/call"]);
+    expect(failed.handover).toContain("Proposed hubspot · manage_crm_objects for approval");
+    calls.length = 0;
+    await run(withApprovals("waiting for a person"), mcp);
+    expect(calls.map((c) => c.body.method)).toEqual(["initialize", "tools/call"]);
+  });
+
+  it("reads what became of the write from the pack's approvals, by connection and tool", () => {
+    const decided = (outcome: string, tool = "manage_crm_objects") =>
+      decidedInPack(withApprovals(outcome), "hubspot", tool);
+    expect(decided('executed; answer: {"id":"list-212"}')).toBe("executed");
+    expect(decided("approved")).toBe("executed");
+    expect(decided("rejected: use the active list")).toBe("rejected");
+    expect(decided("rejected")).toBe("rejected");
+    expect(decided("approved but the send failed: 503")).toBeNull();
+    expect(decided("waiting for a person")).toBeNull();
+    expect(decided("superseded")).toBeNull();
+    // Another tool's outcome on the same connection is not this write's.
+    expect(decided("rejected", "create_list")).toBeNull();
+    expect(
+      decidedInPack("# Task\n[stub:tool hubspot manage_crm_objects]\n", "hubspot", "manage_crm_objects"),
+    ).toBeNull();
   });
 });

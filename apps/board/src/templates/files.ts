@@ -8,11 +8,14 @@
 // mutation, so a file that fails half way changes nothing. The raw-secret
 // guard already ran on the body; connections carry env var NAMES only, and a
 // connection the board would not let a person add (a name that is the
-// board's own, a command the operator does not list) is skipped with a note.
+// board's own, a command the operator does not list) is skipped with a note,
+// as is a Codex teammate's seat in a department whose tool list Codex cannot
+// keep to.
 
 import {
   type Effort,
   handleFor,
+  normalizeDomain,
   type ClientPolicy,
   type ConnectionToolInput,
   type TemplatesFile,
@@ -21,7 +24,10 @@ import {
 } from "@rosterdock/shared";
 import type { Queryable } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
+import { webManifest } from "../mcp/connections.js";
 import type { MutationContext } from "../mutate.js";
+import { codexMisfit, codexNewcomers } from "../teammates/codex.js";
+import { WEB_TOOLS } from "../web/read.js";
 
 export interface TemplateRow {
   id: string;
@@ -82,7 +88,7 @@ export async function exportTemplates(db: Queryable, companyId: string): Promise
   const connections = await db.query<{
     name: string;
     catalog_id: string | null;
-    kind: "mcp" | "openapi";
+    kind: "mcp" | "openapi" | "web";
     transport: "http" | "stdio";
     url: string | null;
     command: string | null;
@@ -150,11 +156,19 @@ export async function exportTemplates(db: Queryable, companyId: string): Promise
     // Only projects whose client narrows something; an empty policy says nothing worth carrying.
     clientPolicies: projects.rows
       .filter(
-        (p) => p.client_policy && (p.client_policy.default || Object.keys(p.client_policy.caps ?? {}).length),
+        (p) =>
+          p.client_policy &&
+          (p.client_policy.default ||
+            Object.keys(p.client_policy.caps ?? {}).length ||
+            p.client_policy.webDomains?.length),
       )
       .map((p) => ({
         project: p.name,
-        policy: { default: p.client_policy!.default ?? null, caps: p.client_policy!.caps ?? {} },
+        policy: {
+          default: p.client_policy!.default ?? null,
+          caps: p.client_policy!.caps ?? {},
+          ...(p.client_policy!.webDomains?.length ? { webDomains: p.client_policy!.webDomains } : {}),
+        },
       })),
   };
 }
@@ -204,6 +218,61 @@ export async function importTemplates(
     ]);
     if (dup.rowCount) {
       report.skipped.push(`connection ${c.name}`);
+      continue;
+    }
+    if (c.kind === "web") {
+      // The board's own fetch, one per company: its tools are the board's; the file brings its domains.
+      const web = await db.query<{ name: string }>(
+        "SELECT name FROM connections WHERE company_id = $1 AND kind = 'web'",
+        [companyId],
+      );
+      if (web.rowCount) {
+        report.notes.push(
+          `connection ${c.name}: this company has its web connection already, ${web.rows[0]!.name}; skipped`,
+        );
+        continue;
+      }
+      // A list the file names is kept as it is or not at all: dropping what is not a domain, or reading a
+      // list that is not one as none, would widen it.
+      const listed = (c.manifest as { domains?: unknown } | null)?.domains;
+      if (listed !== undefined && listed !== null && !Array.isArray(listed)) {
+        report.notes.push(`connection ${c.name}: its web domains are not a list; skipped`);
+        continue;
+      }
+      const bad = Array.isArray(listed)
+        ? listed.findIndex((d) => typeof d !== "string" || !normalizeDomain(d))
+        : -1;
+      if (bad >= 0) {
+        report.notes.push(
+          `connection ${c.name}: ${String((listed as unknown[])[bad])} is not a web domain; skipped`,
+        );
+        continue;
+      }
+      const res = await db.query<{ id: string }>(
+        `INSERT INTO connections (company_id, name, catalog_id, kind, transport, enabled, tools, manifest)
+         VALUES ($1, $2, $3, 'web', 'http', $4, $5, $6) RETURNING id`,
+        [
+          companyId,
+          c.name,
+          c.catalogId ?? null,
+          c.enabled,
+          JSON.stringify(WEB_TOOLS),
+          JSON.stringify(webManifest(Array.isArray(listed) ? (listed as string[]) : null)),
+        ],
+      );
+      await ctx.emit(
+        "connection.created",
+        { kind: "connection", id: res.rows[0]!.id },
+        {
+          name: c.name,
+          kind: "web",
+          transport: "http",
+          catalogId: c.catalogId ?? null,
+          tools: 1,
+          fromFile: true,
+        },
+      );
+      report.created.connections.push(c.name);
       continue;
     }
     if (c.kind === "openapi" ? !c.url : c.transport === "http" ? !c.url : !c.command) {
@@ -397,6 +466,16 @@ export async function importTemplates(
       memberIds.push(id);
       if (d.lead && handleFor(d.lead) === handleFor(name)) leadId = id;
     }
+    // A Codex teammate's runs would not start under a tool list Codex cannot keep to, so it is not seated there.
+    const misfit = codexMisfit(d.sandbox);
+    if (misfit)
+      for (const t of await codexNewcomers(db, companyId, memberIds, null)) {
+        memberIds.splice(memberIds.indexOf(t.id), 1);
+        if (leadId === t.id) leadId = null;
+        report.notes.push(
+          `department ${d.name}: ${t.name} runs on Codex, which cannot keep to its tool list (${misfit}); not added`,
+        );
+      }
     const res = await db.query<{ id: string }>(
       "INSERT INTO departments (company_id, slug, name, write_policy, sandbox, lead_teammate_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
       [companyId, slug, d.name, d.writePolicy, JSON.stringify(d.sandbox ?? {}), leadId],

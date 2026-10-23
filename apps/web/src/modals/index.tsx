@@ -8,7 +8,7 @@ import type {
 import { useEffect, useState, type FormEvent } from "react";
 import type { CompanyData, GoalDetail, TeammateTemplate } from "../api/types.ts";
 import { Avatar, Button, Field, Modal, Thinking } from "../components/ui.tsx";
-import { ENGINE_LABEL, POLICY_LABEL } from "../lib/format.ts";
+import { DEFAULT_MODEL, engineChoices, PICKABLE_ENGINES, POLICY_LABEL } from "../lib/format.ts";
 
 export const DEPT_TEMPLATES: Record<
   string,
@@ -30,13 +30,6 @@ export const DEPT_TEMPLATES: Record<
   finance: { name: "Finance", roles: ["finance analyst", "reviewer"], policy: "ask" },
   blank: { name: "Blank", roles: [], policy: "ask" },
 };
-
-export const COMPANY_TEMPLATES: { id: string; label: string; blurb: string }[] = [
-  { id: "GTM company", label: "GTM company", blurb: "Engineering, Research, Marketing Ops" },
-  { id: "Product studio", label: "Product studio", blurb: "Build cell, Docs shop, Audit office" },
-  { id: "Research agency", label: "Research agency", blurb: "Research only" },
-  { id: "Blank", label: "Blank", blurb: "Start from nothing" },
-];
 
 function Footer({
   onClose,
@@ -84,28 +77,18 @@ export function CreateCompanyModal({
   onCreate,
 }: {
   onClose(): void;
-  onCreate(input: { name: string; template: string }): Promise<void>;
+  onCreate(input: { name: string }): Promise<void>;
 }) {
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState(COMPANY_TEMPLATES[0]!.id);
   const { busy, submit } = useSubmit(onCreate);
   return (
     <Modal title="Create a company" onClose={onClose}>
-      <form className="flex flex-col gap-3" onSubmit={submit({ name: name.trim(), template })}>
-        <Field label="Name">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Studio" autoFocus />
-        </Field>
+      <form className="flex flex-col gap-3" onSubmit={submit({ name: name.trim() })}>
         <Field
-          label="Template"
-          hint="A label for now. Departments come from the Departments page; Peter proposes a whole org from M4."
+          label="Name"
+          hint="It starts with Peter. Import a company file in Settings, Templates, or describe the company you need with Design from a brief, and Peter drafts its departments."
         >
-          <select value={template} onChange={(e) => setTemplate(e.target.value)}>
-            {COMPANY_TEMPLATES.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label} · {t.blurb}
-              </option>
-            ))}
-          </select>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Studio" autoFocus />
         </Field>
         <Footer onClose={onClose} submitLabel="Create company" busy={busy} disabled={!name.trim()} />
       </form>
@@ -441,6 +424,11 @@ export function NewGoalModal({
   const [text, setText] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [tokens, setTokens] = useState("");
+  // Empty: a new project, on the repository named below if any.
+  const [projectId, setProjectId] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
+  const [branch, setBranch] = useState("");
+  const project = data.projects.find((p) => p.id === projectId) ?? null;
   const [phase, setPhase] = useState<"input" | "thinking" | "result">("input");
   const [goal, setGoal] = useState<GoalDetail | null>(null);
   const [answers, setAnswers] = useState<string[]>([]);
@@ -452,6 +440,11 @@ export function NewGoalModal({
       const g = await onCreate({
         text: text.trim(),
         departmentId: departmentId || null,
+        ...(project
+          ? { projectId: project.id }
+          : repoUrl.trim()
+            ? { repoUrl: repoUrl.trim(), ...(branch.trim() ? { defaultBranch: branch.trim() } : {}) }
+            : {}),
         caps: tokens.trim() ? { tokens: Number(tokens) } : {},
       });
       setGoal(g);
@@ -487,6 +480,16 @@ export function NewGoalModal({
             />
           </Field>
           <div className="grid2">
+            <Field label="Project" hint="Its tasks land on that project's board.">
+              <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                <option value="">A new project</option>
+                {data.projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="Department" hint="Its lead plans and watches the goal. Leave it to Peter to route.">
               <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
                 <option value="">Let Peter route it</option>
@@ -497,6 +500,44 @@ export function NewGoalModal({
                 ))}
               </select>
             </Field>
+          </div>
+          {project ? (
+            <span className="hint">
+              {project.repoUrl ? (
+                <>
+                  {project.name} works on <span className="mono">{project.repoUrl}</span> (
+                  <span className="mono">{project.defaultBranch}</span>): Peter plans changes to its code, and
+                  each approved change opens a pull request.
+                </>
+              ) : (
+                `${project.name} has no repository, so the goal delivers files.`
+              )}
+            </span>
+          ) : (
+            <div className="grid2">
+              <Field
+                label="Repository (optional)"
+                hint="Peter plans changes to its code, and each approved change opens a pull request. Without one, the goal delivers files."
+              >
+                <input
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  placeholder="https://github.com/acme/app"
+                  className="mono"
+                />
+              </Field>
+              <Field label="Branch" hint="Where its pull requests go.">
+                <input
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  placeholder="main"
+                  className="mono"
+                  disabled={!repoUrl.trim()}
+                />
+              </Field>
+            </div>
+          )}
+          <div className="grid2">
             <Field label="Token cap (optional)" hint="A lifetime budget for the goal; runs stop at the cap.">
               <input
                 value={tokens}
@@ -637,6 +678,9 @@ export function DesignCompanyModal({
   );
 }
 
+/** A template on an engine nobody can pick (OpenCode) hires onto Claude Code instead. */
+const engineOf = (t: TeammateTemplate) => (PICKABLE_ENGINES.includes(t.engine) ? t.engine : "claude_code");
+
 export function HireTeammateModal({
   templates,
   onClose,
@@ -650,14 +694,14 @@ export function HireTeammateModal({
   const tpl = templates.find((t) => t.id === templateId);
   const [name, setName] = useState(tpl?.name ?? "");
   const [role, setRole] = useState(tpl?.role ?? "");
-  const [engine, setEngine] = useState(tpl?.engine ?? "claude_code");
-  const [model, setModel] = useState(tpl?.model ?? "claude-sonnet-5");
+  const [engine, setEngine] = useState(tpl ? engineOf(tpl) : "claude_code");
+  const [model, setModel] = useState(tpl?.model ?? DEFAULT_MODEL);
   const { busy, submit } = useSubmit(onCreate);
   useEffect(() => {
     if (!tpl) return;
     setName(tpl.name);
     setRole(tpl.role);
-    setEngine(tpl.engine);
+    setEngine(engineOf(tpl));
     setModel(tpl.model);
   }, [tpl]);
   return (
@@ -695,7 +739,7 @@ export function HireTeammateModal({
         <div className="grid2">
           <Field label="Engine">
             <select value={engine} onChange={(e) => setEngine(e.target.value)}>
-              {Object.entries(ENGINE_LABEL).map(([k, l]) => (
+              {engineChoices(engine).map(([k, l]) => (
                 <option key={k} value={k}>
                   {l}
                 </option>

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   assertNoRawSecrets,
+  containsRawSecret,
   findRawSecrets,
   isEnvVarName,
   looksLikeRawSecret,
   RawSecretError,
+  redactRawSecrets,
+  secretLines,
 } from "../src/index.js";
 
 describe("looksLikeRawSecret", () => {
@@ -91,5 +94,156 @@ describe("findRawSecrets / assertNoRawSecrets", () => {
     expect(findRawSecrets(null)).toEqual([]);
     expect(findRawSecrets(42)).toEqual([]);
     expect(findRawSecrets("sk-abcdef0123456789")).toEqual([{ path: "", reason: "secret-shaped string" }]);
+  });
+});
+
+// Every key below is a made-up fake in the shape of the real thing.
+describe("containsRawSecret", () => {
+  it("finds a key anywhere in a line, not only at its start", () => {
+    for (const line of [
+      "OPENAI_API_KEY=sk-proj-FAKE0123456789abcdefghij",
+      "export ANTHROPIC_API_KEY=sk-ant-api03-FAKE0123456789abcdef",
+      'const key = "sk-ant-api03-FAKE0123456789abcdef";',
+      "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+      "  token: ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+      "  pat = github_pat_11FAKE0123456789abcdef",
+      "SLACK_BOT=xoxb-1234567890-FAKEfakeFAKE",
+      "aws_access_key_id = AKIAIOSFODNN7EXAMPLE",
+      "cookie: session=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2ln",
+      "key: |\n-----BEGIN OPENSSH PRIVATE KEY-----",
+    ])
+      expect(containsRawSecret(line), line).toBe(true);
+  });
+
+  it("finds an unquoted value given to a secret-named variable, as a shell or an .env file writes it", () => {
+    for (const line of [
+      "DB_PASSWORD=hunter2hunter2",
+      "export GITHUB_TOKEN=FAKEfake0123456789",
+      "S3_SECRET_KEY=fake-secret-value",
+      "RUN CLIENT_SECRET=fakefakefake npm test",
+    ])
+      expect(containsRawSecret(line), line).toBe(true);
+  });
+
+  it("leaves names, references, placeholders and prose alone", () => {
+    for (const line of [
+      "const apiKey = process.env.OPENAI_API_KEY;",
+      "OPENAI_API_KEY=${OPENAI_API_KEY}",
+      "GITHUB_TOKEN=$GITHUB_TOKEN",
+      "API_KEY=<your key>",
+      "TOKEN_URL=https://example.com/oauth/token",
+      "if (password === confirmPassword) {",
+      "const parts = raw.split(',').map((token)=>token.trim());",
+      "this.token=next;",
+      "Bearer tokens are sent in the Authorization header.",
+      'headers.authorization = "Bearer " + token;',
+      "pip install scikit-learn; the task-runner moved",
+      "integrity: sha512-Q2xhdWRlIGlzIGEgZ29vZCBhc3Npc3RhbnQgYW5kIHRoaXMgaXMgYSBrZXk+/w==",
+      "N8N_API_KEY",
+    ])
+      expect(containsRawSecret(line), line).toBe(false);
+  });
+});
+
+describe("redactRawSecrets", () => {
+  it("takes key material out of text and leaves prose that names it", () => {
+    // Made-up fakes in the shape of the real keys.
+    const page = [
+      "Set the key: sk-ant-api03-FAKE0123456789abcdefghij and go.",
+      "export OPENAI_API_KEY=sk-proj-FAKE0123456789abcdefghij",
+      "DB_PASSWORD=hunter2hunter2 in the example",
+      'curl -H "Authorization: Bearer abcdefghijklmnopqrstuvwxyz" https://api.example.com',
+      "A GitHub token looks like ghp_0123456789abcdefghijklmnopqrstuvwxyz.",
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY----- after",
+      "Bearer tokens and sk- prefixes are explained here; API_KEY=${API_KEY} is a reference.",
+    ].join("\n");
+    const out = redactRawSecrets(page);
+    for (const value of ["sk-ant-api03", "sk-proj", "hunter2", "abcdefghijklmnop", "ghp_", "MIIEow"])
+      expect(out).not.toContain(value);
+    expect(out).toContain("Set the key: [redacted] and go.");
+    expect(out).toContain("DB_PASSWORD=[redacted] in the example");
+    expect(out).toContain("Authorization: Bearer [redacted]");
+    expect(out).toContain("[redacted] after");
+    expect(out).toContain(
+      "Bearer tokens and sk- prefixes are explained here; API_KEY=${API_KEY} is a reference.",
+    );
+    expect(containsRawSecret(out)).toBe(false);
+  });
+
+  it("reads a hostile page in one pass: unclosed key headers, a run of token starts", () => {
+    for (const page of [
+      "-----BEGIN PRIVATE KEY-----".repeat(40_000),
+      "eyJ-".repeat(250_000),
+      "sk-".repeat(300_000),
+      "xoxb-".repeat(200_000),
+      ` ${"token".repeat(200_000)}`,
+    ]) {
+      const start = performance.now();
+      redactRawSecrets(page);
+      containsRawSecret(page);
+      expect(performance.now() - start, page.slice(0, 12)).toBeLessThan(500);
+    }
+    expect(redactRawSecrets("-----BEGIN PRIVATE KEY-----".repeat(3))).not.toContain("BEGIN");
+    // A token still counts after a quote, a space or an equals sign.
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig";
+    for (const text of [`"${jwt}"`, `token ${jwt}`, `id_token=${jwt}`, jwt]) {
+      expect(containsRawSecret(text), text).toBe(true);
+      expect(redactRawSecrets(text), text).not.toContain("eyJhbGci");
+    }
+  });
+});
+
+describe("secretLines", () => {
+  // Lines that hold a key and lines that do not, from the cases above.
+  const keyed = [
+    "OPENAI_API_KEY=sk-proj-FAKE0123456789abcdefghij",
+    'const key = "sk-ant-api03-FAKE0123456789abcdef";',
+    "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+    "  token: ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+    "aws_access_key_id = AKIAIOSFODNN7EXAMPLE",
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "DB_PASSWORD=hunter2hunter2",
+    "sk-ant",
+    'api_key = "not-a-real-value-123"',
+  ];
+  const plain = [
+    "",
+    "x",
+    "const apiKey = process.env.OPENAI_API_KEY;",
+    "GITHUB_TOKEN=$GITHUB_TOKEN",
+    "Bearer tokens are sent in the Authorization header.",
+    "pip install scikit-learn; the task-runner moved",
+    "if (password === confirmPassword) {",
+  ];
+  const assigned = /(?:api[_-]?key|password)["']?\s*[:=]\s*["'][^"'\s]{8,}["']/i;
+  const alone = (line: string) =>
+    findRawSecrets({ text: line }).length > 0 || containsRawSecret(line) || assigned.test(line);
+
+  it("finds the same lines as each line scanned alone, in one pass of each pattern over the text", () => {
+    let seed = 7;
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648);
+    for (let round = 0; round < 300; round++) {
+      const lines = Array.from({ length: 1 + (next() % 12) }, () => {
+        const pool = next() % 3 === 0 ? keyed : plain;
+        return pool[next() % pool.length]!;
+      });
+      const text = lines.join(next() % 4 === 0 ? "\r\n" : "\n");
+      const expected = text.split("\n").flatMap((line, i) => (alone(line) ? [i + 1] : []));
+      expect(secretLines(text, [assigned]), JSON.stringify(text)).toEqual(expected);
+    }
+  });
+
+  it("counts a key after any character as on its line, and stops at the most it reports", () => {
+    expect(secretLines("a\nb\n\u3000ghp_0123456789abcdefghijklmnopqrstuvwxyz\n")).toEqual([3]);
+    expect(secretLines("DB_PASSWORD=hunter2hunter2\n".repeat(50), [], 10)).toHaveLength(10);
+  });
+
+  it("reads megabytes of newlines or keys in one pass each", () => {
+    const started = Date.now();
+    expect(secretLines("\n".repeat(8 * 1024 * 1024))).toEqual([]);
+    expect(secretLines("sk-ant-api03-FAKE0123456789abcdef\n".repeat(200_000))).toHaveLength(1000);
+    // Keys all on one line: each is a match, and the line is walked once, not once a match.
+    expect(secretLines("sk-abcdefghijklmnopqrstuvwx ".repeat(300_000))).toEqual([1]);
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 });

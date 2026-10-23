@@ -9,6 +9,7 @@ import type {
   RunHeartbeatInput,
   RunStatus,
 } from "@rosterdock/shared";
+import type { Rework } from "./rework.js";
 
 export interface ClaimedRun {
   run: {
@@ -22,6 +23,8 @@ export interface ClaimedRun {
   };
   token: string;
   tokenExpiresAt: string;
+  /** For the report of the clone's commit alone; never the engine's. Older boards send none. */
+  cloneKey?: string;
   pack: string;
   spec: {
     runId: string;
@@ -29,10 +32,14 @@ export interface ClaimedRun {
     task: { id: string; number: number; title: string; description: string; declaredOutputs: string[] };
     project: { repoUrl: string | null; defaultBranch: string; name: string };
     teammate: { name: string; handle: string; model: string; engine: string; effort?: string | null };
+    /** The task's department, whose sandbox this is; null for none. */
+    department?: { name: string; writePolicy: string } | null;
     sandbox: { allowedTools: string[] | null; envNames: string[] | null; timeoutSeconds: number };
     /** The largest artifact the board takes back, in bytes; older boards do not say (the worker assumes the inline limit). */
     limits?: { artifactBytes: number };
     checkpoint: unknown | null;
+    /** Sent back with changes requested on a repository task: the round to start from. Older boards send none. */
+    rework?: Rework | null;
   };
 }
 
@@ -52,23 +59,34 @@ export interface BoardClient {
   heartbeat(token: string, runId: string, input: RunHeartbeatInput): Promise<{ stopRequested: boolean }>;
   events(token: string, runId: string, events: RunEventInput[]): Promise<void>;
   checkpoint(token: string, runId: string, checkpoint: Record<string, unknown>): Promise<void>;
+  /** The commit the run's clone is at, right after cloning, with the key the claim gave the worker alone. */
+  cloned(token: string, runId: string, sha: string, key: string): Promise<void>;
   artifact(token: string, runId: string, input: RunArtifactInput): Promise<void>;
   complete(token: string, runId: string, input: RunCompleteInput): Promise<void>;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * The completion is the run's result: it is retried for about five minutes (backoff to 30 s), long
+ * enough for a board restart or a rollout, before the worker gives up on it.
+ */
+export const COMPLETE_RETRIES = { retries: 15, maxDelayMs: 30_000 };
 
 export function createBoardClient(
   boardUrl: string,
   workerToken: string,
   fetchImpl: typeof fetch = fetch,
+  opts: { sleep?: (ms: number) => Promise<void> } = {},
 ): BoardClient {
+  const sleep = opts.sleep ?? wait;
   async function call<T>(
     method: string,
     path: string,
     body: unknown,
     headers: Record<string, string>,
     retries = 4,
+    maxDelayMs = 10_000,
   ): Promise<T> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -90,7 +108,7 @@ export function createBoardClient(
         if (err instanceof BoardError && err.status < 500) throw err;
         lastError = err;
       }
-      if (attempt < retries) await sleep(Math.min(10_000, 500 * 2 ** attempt));
+      if (attempt < retries) await sleep(Math.min(maxDelayMs, 500 * 2 ** attempt));
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
@@ -109,6 +127,9 @@ export function createBoardClient(
     events: async (token, runId, events) => {
       await call("POST", `/api/worker/runs/${runId}/events`, { events }, bearer(token), 2);
     },
+    cloned: async (token, runId, sha, key) => {
+      await call("POST", `/api/worker/runs/${runId}/cloned`, { sha, key }, bearer(token), 2);
+    },
     checkpoint: async (token, runId, checkpoint) => {
       await call("POST", `/api/worker/runs/${runId}/checkpoint`, { checkpoint }, bearer(token), 2);
     },
@@ -116,7 +137,14 @@ export function createBoardClient(
       await call("POST", `/api/worker/runs/${runId}/artifacts`, input, bearer(token), 3);
     },
     complete: async (token, runId, input) => {
-      await call("POST", `/api/worker/runs/${runId}/complete`, input, bearer(token), 5);
+      await call(
+        "POST",
+        `/api/worker/runs/${runId}/complete`,
+        input,
+        bearer(token),
+        COMPLETE_RETRIES.retries,
+        COMPLETE_RETRIES.maxDelayMs,
+      );
     },
   };
 }

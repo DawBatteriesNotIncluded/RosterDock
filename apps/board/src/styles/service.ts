@@ -2,7 +2,9 @@
 // teammate's brief carries. Switching a pack on takes its file from the build
 // (styles/vendor) when that copy hashes to the pin, and otherwise downloads it
 // once at the pinned commit and refuses it unless it hashes to the pin; the text
-// is kept for the company, so switching off and on again reads nothing.
+// is kept for the company, so switching off and on again reads nothing. The
+// download goes through the board's egress (web/egress.ts) like a company's
+// connections: a public address only, every redirect hop checked again.
 
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -10,6 +12,7 @@ import type { ActorRef } from "@rosterdock/shared";
 import type { Db, Queryable } from "../db/pool.js";
 import { HttpError, notFound } from "../http-error.js";
 import { mutate } from "../mutate.js";
+import { egressFetch, readCapped, type Egress } from "../web/egress.js";
 import { rawUrl, STYLE_PACKS, vendoredPath, type StyleLevel, type StylePack } from "./catalog.js";
 
 const MAX_BYTES = 256 * 1024;
@@ -25,8 +28,8 @@ interface StyleRow {
 
 export interface StyleDeps {
   db: Db;
-  /** How the file is downloaded; tests use a fake. */
-  fetch: typeof fetch;
+  /** How the file is downloaded; tests inject its transport and resolver. */
+  egress: Egress;
   catalog: readonly StylePack[];
   /** Where the build carries the packs' files (catalog.ts VENDOR_DIR); null for none. */
   vendorDir: string | null;
@@ -86,22 +89,34 @@ export async function listStyles(deps: Pick<StyleDeps, "db" | "catalog" | "vendo
   });
 }
 
-async function download(pack: StylePack, doFetch: typeof fetch): Promise<{ sha256: string; body: string }> {
+async function download(pack: StylePack, egress: Egress): Promise<{ sha256: string; body: string }> {
   const url = rawUrl(pack);
   let res: Response;
   try {
-    res = await doFetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    res = await egressFetch(egress, { redirect: "follow", timeoutMs: TIMEOUT_MS, maxBytes: MAX_BYTES + 1 })(
+      url,
+    );
   } catch (err) {
     throw new HttpError(
       502,
       `could not download ${pack.label} from ${pack.source.repo}: ${(err as Error).message}`,
     );
   }
-  if (!res.ok)
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
     throw new HttpError(502, `could not download ${pack.label} from ${pack.source.repo}: HTTP ${res.status}`);
-  const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length > MAX_BYTES)
-    throw new HttpError(502, `${pack.label} is larger than a style file should be`);
+  }
+  let read: Awaited<ReturnType<typeof readCapped>>;
+  try {
+    read = await readCapped(res, MAX_BYTES);
+  } catch (err) {
+    throw new HttpError(
+      502,
+      `could not download ${pack.label} from ${pack.source.repo}: ${(err as Error).message}`,
+    );
+  }
+  if (read.cut) throw new HttpError(502, `${pack.label} is larger than a style file should be`);
+  const bytes = Buffer.from(read.bytes);
   const sha256 = sha256Of(bytes);
   if (sha256 !== pack.sha256)
     throw new HttpError(
@@ -115,7 +130,7 @@ async function download(pack: StylePack, doFetch: typeof fetch): Promise<{ sha25
 async function packFile(pack: StylePack, deps: StyleDeps): Promise<{ sha256: string; body: string }> {
   const local = await vendored(pack, deps.vendorDir);
   if (local) return { sha256: pack.sha256, body: stripFrontMatter(local.toString("utf8")) };
-  return download(pack, deps.fetch);
+  return download(pack, deps.egress);
 }
 
 /** Switch a pack on or off, or change its level. The first switch on reads and checks the file. */

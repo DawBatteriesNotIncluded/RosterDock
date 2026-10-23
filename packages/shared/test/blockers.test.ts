@@ -29,17 +29,19 @@ describe("blocker taxonomy", () => {
     expect(b.retrySafe).toBe(true);
   });
 
-  it("maps codes onto the Blocked column's three reasons", () => {
+  it("maps codes onto the Blocked column's reasons", () => {
     expect(blockerKind("dependencies_unresolved")).toBe("dependency");
     expect(blockerKind("waiting_on_teammate")).toBe("teammate");
+    expect(blockerKind("waiting_on_person")).toBe("person");
     expect(blockerKind("approval_required")).toBe("approval");
+    expect(blockerKind("approval_rejected")).toBe("approval");
     expect(blockerKind("timeout")).toBe("run");
     expect(blockerKind("unknown")).toBe("run");
   });
 
   it("marks approval and evidence blockers as not retry-safe", () => {
     expect(blockerFor("approval_required").retrySafe).toBe(false);
-    expect(blockerFor("approval_required").resumeInstructions).toMatch(/do not re-dispatch/);
+    expect(blockerFor("approval_required").resumeInstructions).toMatch(/do not start the task again/);
     expect(blockerFor("evidence_failed").retrySafe).toBe(false);
   });
 });

@@ -5,7 +5,7 @@
   "description": "RosterDock: a self-hosted, Kubernetes-native platform for running an AI company.",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=22.12",
+    "node": "^22.13.0 || >=24",
     "pnpm": ">=10"
   },
   "packageManager": "pnpm@10.32.1",
@@ -29,10 +29,5 @@
     "prettier": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
   }
 }

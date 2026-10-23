@@ -11,19 +11,23 @@ part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Set up
 
-You need Node.js 22.12 or later, pnpm 10 (`corepack enable` picks the pinned version) and Docker.
+You need Node.js 22.13 or a later 22, or 24 or later (not 23: the lint and test tools refuse it), pnpm 10
+(`npm install -g pnpm@10`, or `corepack enable` on Node 22 or 24, which picks the pinned version) and Docker.
+Node 25 and later no longer ship corepack.
 
 ```bash
 pnpm install
 cp apps/board/.env.example apps/board/.env
 cp apps/worker/.env.example apps/worker/.env
-docker compose up -d postgres
+pnpm db:up          # Postgres, and MinIO for artifacts over 512 KB
 pnpm db:migrate
 pnpm dev            # the board on :3000, the web on http://localhost:5173
 pnpm dev:worker     # a worker, in a second terminal
 ```
 
 The README's quick start takes it from there with the stub engine, which needs no model and costs nothing.
+The web's dev server sends `/api` to the board at `http://127.0.0.1:3000`; `ROSTERDOCK_BOARD_URL` points it at
+another.
 
 ## Tests
 
@@ -34,7 +38,11 @@ pnpm typecheck && pnpm lint && pnpm format:check && pnpm test
 `pnpm test` runs offline, but the board's tests need Postgres: each test file creates a throwaway database, so
 start it with `docker compose up -d postgres` first. If your Postgres is elsewhere, point
 `ROSTERDOCK_TEST_ADMIN_URL` at a role that may `CREATE DATABASE`. `pnpm format` fixes what `format:check`
-finds. CI runs the same commands, then builds the web app and the images.
+finds. CI runs the same commands, then builds the web app and the images. On Windows, with Node 22.16 and the
+Node 22 the runner has cached, it runs the worker's and the shared package's tests and the board's
+`test/peter-cli-bin.test.ts`. There the worker's tests need Git for Windows on PATH, and the ones that make
+symbolic links run only with Developer Mode on or as an administrator: without, they are skipped and say
+why. In WSL2 or a Linux container they all run, as on Linux.
 
 No test needs a model, a git host or an MCP server. Code that talks to one is tested against recorded
 fixtures, never hand-written echoes, with `fetch` injected or mocked. The scripts under `apps/*/scripts`

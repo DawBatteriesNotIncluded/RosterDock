@@ -249,6 +249,8 @@ describe("worker protocol", () => {
     ).body;
     const run2 = (await dispatch(api, base, t2.id)).body;
     const asRun2 = board.api((await claim(run2.id)).body.token);
+    // The worker names the teammate by the handle in blocked.md; the board stores who that is.
+    const brody = await addTeammate(api, base, "Brody", "requirements");
     await asRun2.post(`/api/worker/runs/${run2.id}/complete`, {
       status: "blocked",
       summary: "Need the comparison criteria.",
@@ -261,7 +263,7 @@ describe("worker protocol", () => {
     t = (await api.get(`${base}/tasks/${t2.id}`)).body;
     expect(t.status).toBe("blocked");
     expect(t.blocker.code).toBe("waiting_on_teammate");
-    expect(t.blocker.waitingOn.name).toBe("brody");
+    expect(t.blocker.waitingOn).toEqual({ kind: "teammate", id: brody.id, name: "brody" });
   });
 
   it("stop: a queued run stops at once; a running run is told at its next heartbeat", async () => {

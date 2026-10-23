@@ -1,0 +1,28 @@
+diff --git a/README.md  b/README.md 
+new file mode 100644
+index 0000000..b92e452
+--- /dev/null
++++ b/README.md 	
+@@ -0,0 +1 @@
++not the readme
+diff --git a/café.md b/café.md
+index 3367afd..3e75765 100644
+--- a/café.md
++++ b/café.md
+@@ -1 +1 @@
+-old
++new
+diff --git a/résumé.md b/résumé.md
+new file mode 100644
+index 0000000..648414e
+--- /dev/null
++++ b/résumé.md
+@@ -0,0 +1 @@
++CV
+diff --git "a/say \"hi\"\tnow.md" "b/say \"hi\"\tnow.md"
+new file mode 100644
+index 0000000..b04fedb
+--- /dev/null
++++ "b/say \"hi\"\tnow.md"	
+@@ -0,0 +1 @@
++quoted

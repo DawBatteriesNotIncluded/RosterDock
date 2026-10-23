@@ -3,6 +3,7 @@
 // missing credential, an unreachable system); the heuristic writes the note
 // from the error itself. Pure: the caller records and dispatches.
 
+import { asSentence } from "@rosterdock/shared";
 import { z } from "zod";
 
 /** After this many re-plans of one task Peter escalates instead of trying again. */
@@ -53,7 +54,7 @@ export function heuristicReplan(ctx: FailureContext): Replan {
   if (ctx.blockerCode === "approval_required") {
     return {
       note: [
-        `${what.slice(0, 400)}.`,
+        asSentence(what.slice(0, 400)),
         "Do not propose that write again as it was. Finish the task without it, or propose a narrower write and say in its reason what changed.",
         "If the task cannot be done without it, set a blocker naming who decides instead of proposing it again.",
       ].join(" "),

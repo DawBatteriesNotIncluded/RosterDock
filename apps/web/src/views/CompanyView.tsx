@@ -3,7 +3,7 @@ import { Plus } from "lucide-react";
 import type { CompanyData, Department, Draft, Run, Task } from "../api/types.ts";
 import { Avatar, Button, Dot, Empty, Pill, Topbar } from "../components/ui.tsx";
 import { cn } from "../lib/cn.ts";
-import { describeEvent, isOpenTask, relativeTime, teammateStatus } from "../lib/format.ts";
+import { blockerNeedsYou, describeEvent, isOpenTask, relativeTime, teammateStatus } from "../lib/format.ts";
 import { DraftsSection, GoalsSection, type GoalResultAccess } from "./GoalsPanel.tsx";
 import { WorkingNow } from "./WorkingNow.tsx";
 
@@ -50,7 +50,7 @@ function DeptCard({
   const dt = tasks.filter((t) => t.departmentId === d.id);
   const open = dt.filter((t) => isOpenTask(t.status)).length;
   const working = dt.filter((t) => t.status === "doing").length;
-  const needs = dt.some((t) => t.blocker?.code === "approval_required");
+  const needs = dt.some((t) => blockerNeedsYou(t.blocker));
   const lead = data.teammates.find((t) => t.id === d.leadTeammateId);
   const members = d.members.filter((m) => !m.isLead);
   const leadTask = lead ? dt.find((t) => t.assignee?.id === lead.id && isOpenTask(t.status)) : undefined;

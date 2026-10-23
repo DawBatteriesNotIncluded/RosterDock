@@ -4,10 +4,13 @@
 // teammates only ever reach a connection through the broker. A stdio
 // connection's command runs inside the board, so it must be a command line the
 // operator lists (ROSTERDOCK_STDIO_COMMANDS), checked when it is written and again
-// before anything starts.
+// before anything starts. The web connection is the board's own fetch: no URL,
+// command or credential, one tool that reads, and the company's list of web
+// domains in its manifest.
 
 import {
   classifyTool,
+  domainList,
   type ActorRef,
   type StdioCommand,
   type ConnectionOAuthInput,
@@ -26,6 +29,7 @@ import { catalogEntry } from "./catalog.js";
 import { discoverTools, type McpClientDeps, type McpTarget } from "./client.js";
 import type { TokenAuth } from "./oauth.js";
 import { buildOpenApiManifest, probeOpenApi, toolsFromManifest, type OpenApiManifest } from "./openapi.js";
+import { WEB_FETCH_TOOL, WEB_TOOLS } from "../web/read.js";
 
 export type ConnectionTool = ConnectionToolInput;
 
@@ -81,7 +85,7 @@ export interface ConnectionRow {
   company_id: string;
   name: string;
   catalog_id: string | null;
-  kind: "mcp" | "openapi";
+  kind: "mcp" | "openapi" | "web";
   transport: "http" | "stdio";
   url: string | null;
   command: string | null;
@@ -142,6 +146,8 @@ export function targetFor(row: ConnectionRow): McpTarget {
     oauth: row.oauth
       ? {
           secretName: connectionSecretName(row.id),
+          authorizationServer: row.oauth.authorizationServer,
+          authorizedAt: row.oauth.authorizedAt,
           tokenEndpoint: row.oauth.tokenEndpoint,
           clientId: row.oauth.clientId,
           clientSecretEnvName: row.oauth.clientSecretEnvName ?? null,
@@ -182,12 +188,25 @@ export async function connectionByName(
   return res.rows[0] ?? null;
 }
 
+/** The web connection's manifest: the company's list of web domains, or null for any public site. */
+export function webManifest(domains: readonly string[] | null | undefined): { domains: string[] | null } {
+  return { domains: domainList(domains) };
+}
+
 function assertReachable(
   row: Pick<ConnectionRow, "kind" | "transport" | "url" | "command"> & {
     oauth?: ConnectionOAuth | null;
     auth_env_name?: string | null;
   },
 ): void {
+  if (row.kind === "web") {
+    if (row.url || row.command || row.oauth || row.auth_env_name)
+      throw new HttpError(
+        422,
+        "the web connection is the board's own: it takes no URL, command or credential",
+      );
+    return;
+  }
   if (row.oauth) {
     if (row.kind !== "mcp" || row.transport !== "http" || !row.url)
       throw new HttpError(422, "OAuth is for MCP servers over HTTP");
@@ -223,7 +242,7 @@ export async function createConnection(
 ): Promise<ConnectionRow> {
   const entry = catalogEntry(input.catalogId);
   const kind = input.kind ?? entry?.kind ?? "mcp";
-  const transport = input.transport ?? entry?.transport ?? "http";
+  const transport = kind === "web" ? "http" : (input.transport ?? entry?.transport ?? "http");
   const oauth = input.oauth ? oauthFrom(input.oauth) : null;
   assertReachable({
     kind,
@@ -233,6 +252,8 @@ export async function createConnection(
     oauth,
     auth_env_name: input.authEnvName ?? null,
   });
+  if (kind !== "web" && input.domains?.length)
+    throw new HttpError(422, "only the web connection keeps a list of web domains");
   if (kind === "mcp" && transport === "stdio") assertStdioCommand(stdioCommands, input.command, input.args);
   const { result } = await mutate(db, companyId, actor, async (ctx) => {
     const dup = await ctx.client.query("SELECT 1 FROM connections WHERE company_id = $1 AND name = $2", [
@@ -240,10 +261,18 @@ export async function createConnection(
       input.name,
     ]);
     if (dup.rowCount) throw new HttpError(409, `a connection named ${input.name} already exists`);
+    if (kind === "web") {
+      const web = await ctx.client.query<{ name: string }>(
+        "SELECT name FROM connections WHERE company_id = $1 AND kind = 'web'",
+        [companyId],
+      );
+      if (web.rowCount)
+        throw new HttpError(409, `this company has its web connection already: ${web.rows[0]!.name}`);
+    }
     const row = (
       await ctx.client.query<ConnectionRow>(
-        `INSERT INTO connections (company_id, name, catalog_id, kind, transport, url, command, args, auth_env_name, env_names, enabled, tools, oauth)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+        `INSERT INTO connections (company_id, name, catalog_id, kind, transport, url, command, args, auth_env_name, env_names, enabled, tools, oauth, manifest)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
         [
           companyId,
           input.name,
@@ -257,17 +286,21 @@ export async function createConnection(
           JSON.stringify(input.envNames ?? []),
           input.enabled ?? true,
           JSON.stringify(
-            seedTools(
-              input.catalogId ?? null,
-              input.tools?.map((t) => ({
-                name: t.name,
-                description: t.description ?? "",
-                write: t.write,
-                source: t.source ?? "default",
-              })),
-            ),
+            // The web connection's tools are the board's, whatever the request says.
+            kind === "web"
+              ? WEB_TOOLS
+              : seedTools(
+                  input.catalogId ?? null,
+                  input.tools?.map((t) => ({
+                    name: t.name,
+                    description: t.description ?? "",
+                    write: t.write,
+                    source: t.source ?? "default",
+                  })),
+                ),
           ),
           oauth ? JSON.stringify(oauth) : null,
+          kind === "web" ? JSON.stringify(webManifest(input.domains)) : null,
         ],
       )
     ).rows[0]!;
@@ -282,6 +315,7 @@ export async function createConnection(
         authEnvName: row.auth_env_name,
         oauth: !!row.oauth,
         tools: row.tools.length,
+        ...(kind === "web" ? { domains: webManifest(input.domains).domains } : {}),
       },
     );
     return row;
@@ -364,6 +398,12 @@ export async function updateConnection(
       )
     ).rows[0];
     if (!row) throw notFound("connection");
+    if (input.domains !== undefined && row.kind !== "web")
+      throw new HttpError(422, "only the web connection keeps a list of web domains");
+    if (row.kind === "web" && input.tools?.some((t) => t.write === true || t.name !== WEB_FETCH_TOOL))
+      throw new HttpError(422, `${row.name} has one tool, ${WEB_FETCH_TOOL}, and it only reads`);
+    const manifest =
+      row.kind === "web" && input.domains !== undefined ? webManifest(input.domains) : row.manifest;
     // A change of authorisation starts over: whatever tokens the store held for it go first.
     const oauth = input.oauth === undefined ? row.oauth : input.oauth ? oauthFrom(input.oauth) : null;
     if (input.oauth !== undefined && row.oauth) await store?.delete(connectionSecretName(id));
@@ -384,9 +424,11 @@ export async function updateConnection(
     )
       assertStdioCommand(stdioCommands, next.command, next.args);
     // A person's classification is recorded as theirs and survives the next discovery; so does a tool
-    // they switched off, which stays classified by whatever classified it.
+    // they switched off, which stays classified by whatever classified it. A tool held as a write because
+    // only the server called it read-only becomes a read here once a person confirms it.
     let tools = row.tools ?? [];
     const reclassified: string[] = [];
+    const confirmed: string[] = [];
     const switchedOff: string[] = [];
     const switchedOn: string[] = [];
     if (input.tools) {
@@ -397,6 +439,7 @@ export async function updateConnection(
         if (existing) {
           if (t.write !== undefined && (existing.write !== t.write || existing.source !== "person"))
             reclassified.push(t.name);
+          if (t.write === false && existing.source === "unconfirmed") confirmed.push(t.name);
           tools = tools.map((x) =>
             x.name === t.name
               ? {
@@ -419,7 +462,7 @@ export async function updateConnection(
     }
     const updated = (
       await ctx.client.query<ConnectionRow>(
-        `UPDATE connections SET url = $3, command = $4, args = $5, auth_env_name = $6, env_names = $7, enabled = $8, tools = $9, oauth = $10, updated_at = now()
+        `UPDATE connections SET url = $3, command = $4, args = $5, auth_env_name = $6, env_names = $7, enabled = $8, tools = $9, oauth = $10, manifest = $11, updated_at = now()
          WHERE id = $1 AND company_id = $2 RETURNING *`,
         [
           id,
@@ -432,6 +475,7 @@ export async function updateConnection(
           next.enabled,
           JSON.stringify(tools),
           next.oauth ? JSON.stringify(next.oauth) : null,
+          manifest ? JSON.stringify(manifest) : null,
         ],
       )
     ).rows[0]!;
@@ -443,10 +487,14 @@ export async function updateConnection(
         changes: Object.keys(input),
         enabled: updated.enabled,
         reclassified,
+        confirmed,
         switchedOff,
         switchedOn,
         writes: tools.filter((t) => t.write).map((t) => t.name),
         off: tools.filter((t) => t.off).map((t) => t.name),
+        ...(row.kind === "web" && input.domains !== undefined
+          ? { domains: (manifest as { domains: string[] | null }).domains }
+          : {}),
       },
     );
     return updated;
@@ -486,8 +534,9 @@ export async function deleteConnection(
 
 /**
  * tools/list against the live server. Each tool is classified from its
- * annotations, the catalog and its name; a classification a person set earlier
- * for a tool of the same name is kept. Replaces the stored tools.
+ * annotations, the catalog and its name (a read-only label alone holds it as a
+ * write for a person to confirm); a classification a person set earlier for a
+ * tool of the same name is kept. Replaces the stored tools.
  */
 export async function discoverConnectionTools(
   db: Db,
@@ -498,6 +547,11 @@ export async function discoverConnectionTools(
 ): Promise<ConnectionRow> {
   const row = await loadConnection(db, companyId, id);
   const deps = await withCompanyEnv(boardDeps, companyId);
+  if (row.kind === "web")
+    throw new HttpError(
+      422,
+      `${row.name} is the board's own: its one tool is ${WEB_FETCH_TOOL}, nothing to discover`,
+    );
   if (row.kind !== "mcp")
     throw new HttpError(422, "only MCP connections discover tools; OpenAPI ones carry a manifest");
   if (row.transport === "stdio") assertStdioCommand(deps.stdioCommands ?? [], row.command, row.args);
@@ -535,6 +589,8 @@ export async function discoverConnectionTools(
         discovered: tools.length,
         reads: tools.filter((t) => !t.write).map((t) => t.name),
         writes: tools.filter((t) => t.write).map((t) => t.name),
+        // Held for a person to confirm as reads; one switched off waits for nothing.
+        unconfirmed: tools.filter((t) => t.source === "unconfirmed" && !t.off).map((t) => t.name),
       },
     );
     return updated;
@@ -561,13 +617,24 @@ export async function checkConnection(
   const known = (row.tools ?? []).map((t) => t.name);
   const none = { seen: 0, missing: [] as string[], extra: [] as string[] };
   let check: ConnectionCheck;
-  if (row.kind === "openapi") {
+  if (row.kind === "web") {
+    // Nothing to ask: the board reads the web itself, or its operator keeps it off the web.
+    check = {
+      ok: !!deps.web,
+      at: "",
+      latencyMs: 0,
+      error: deps.web
+        ? null
+        : "this board is kept off the web by its operator (ROSTERDOCK_FETCH_SOURCES=0); it fetches nothing",
+      tools: { seen: WEB_TOOLS.length, missing: [], extra: [] },
+    };
+  } else if (row.kind === "openapi") {
     const manifest = row.manifest as unknown as OpenApiManifest | null;
     if (!row.url || !manifest) {
       check = { ok: false, at: "", latencyMs: 0, error: "the connection has no manifest", tools: none };
     } else {
       const probe = await probeOpenApi({ url: row.url, authEnvName: row.auth_env_name }, manifest, {
-        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        ...(deps.egress ? { egress: deps.egress } : {}),
         ...(deps.env ? { env: deps.env } : {}),
       });
       check = {
@@ -611,6 +678,7 @@ export async function checkConnection(
       { kind: "connection", id },
       {
         name: updated.name,
+        kind: updated.kind,
         ok: check.ok,
         latencyMs: check.latencyMs,
         error: check.error,

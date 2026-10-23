@@ -4,8 +4,8 @@
 // and an assignee chosen by role and load. The model produces the plan when
 // Peter has one; the heuristic produces it otherwise, and whenever the model's
 // plan does not validate. Both are pure functions of the goal and the roster.
-// The intake shape is the v1 planner's task pack (agent-board planner.ts),
-// with lanes replaced by teammates and departments.
+// The intake shape is the v1 prototype planner's task pack, with lanes
+// replaced by teammates and departments.
 
 import { z } from "zod";
 
@@ -46,7 +46,8 @@ export interface PlanInput {
   maxTasks: number;
   /** Route to this department only (a lead planning its own department). */
   departmentId: string | null;
-  repoUrl: string | null;
+  /** The project's repository and the branch its pull requests go to; null: there is no code to change. */
+  repo: { url: string; branch: string } | null;
   /** Why the board did not accept the model's first plan; the second try reads it. */
   refused?: string[];
 }
@@ -84,9 +85,15 @@ const OUTPUT_NAME = /^[A-Za-z0-9][A-Za-z0-9._ -]*$/;
 /**
  * A plan must name teammates that exist (never the manager, never a
  * reviewer), form a DAG, stay within the cap, and use flat output names.
- * Returns the reasons it does not, empty when it does.
+ * Without a repository there is no code to change, so build work names the
+ * files it delivers. Returns the reasons it does not, empty when it does.
  */
-export function validatePlan(plan: Plan, roster: Roster, maxTasks: number): string[] {
+export function validatePlan(
+  plan: Plan,
+  roster: Roster,
+  maxTasks: number,
+  project: { repository: boolean },
+): string[] {
   const errors: string[] = [];
   const handles = new Map(roster.teammates.map((t) => [t.handle, t]));
   if (plan.questions.length === 0 && plan.tasks.length === 0) errors.push("no tasks and no questions");
@@ -101,6 +108,10 @@ export function validatePlan(plan: Plan, roster: Roster, maxTasks: number): stri
     }
     for (const o of t.outputs)
       if (!OUTPUT_NAME.test(o)) errors.push(`task ${i + 1} output "${o}" is not a flat file name`);
+    if (t.workKind === "build" && !t.outputs.length && !project.repository)
+      errors.push(
+        `task ${i + 1} is build work with no outputs, and the project has no repository to change: name the files it delivers`,
+      );
     for (const c of t.criteria)
       if (!(c.weight > 0) || c.weight > 100)
         errors.push(`task ${i + 1} has a criterion with weight ${c.weight}`);
@@ -207,13 +218,13 @@ export function heuristicPlan(input: PlanInput, roster: Roster): Plan {
     tasks.push({
       title: `Build: ${title}`,
       brief: brief(
-        input.repoUrl
+        input.repo
           ? "Implement the goal in the repository. Keep the change small and reviewable; do not commit, your diff is captured."
           : "Produce the deliverable for the goal in your working directory and describe it in the handover.",
       ),
       assignee: worker.handle,
       workKind: "build",
-      outputs: input.repoUrl ? [] : ["deliverable.md"],
+      outputs: input.repo ? [] : ["deliverable.md"],
       criteria: [
         { text: "The goal's outcome is met", weight: 3 },
         { text: "No credential values anywhere", weight: 1 },
@@ -274,7 +285,11 @@ export function plannerSystemPrompt(roster: Roster): string {
 
 export function plannerUserPrompt(input: PlanInput): string {
   const lines = [`Goal from the owner:\n${input.goal}`];
-  if (input.repoUrl) lines.push(`\nThe project's repository: ${input.repoUrl}`);
+  lines.push(
+    input.repo
+      ? `\nThe project's repository: ${input.repo.url}, branch ${input.repo.branch}. A build task changes its code: it starts from a fresh checkout, its diff is reviewed, and an approved review opens a pull request to ${input.repo.branch}. Research documents are reviewed on the board and open no pull request.`
+      : "\nThe project has no repository, so there is no code to change: a build task delivers the files it names as outputs.",
+  );
   if (input.answers.length) {
     lines.push("\nYou asked, and the owner answered:");
     for (const a of input.answers) lines.push(`Q: ${a.text}\nA: ${a.answer}`);

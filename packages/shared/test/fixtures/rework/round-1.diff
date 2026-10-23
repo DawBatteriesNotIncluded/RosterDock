@@ -1,0 +1,289 @@
+diff --git a/README.md b/README.md
+index fca06a3..5aa6465 100644
+--- a/README.md
++++ b/README.md
+@@ -1,91 +1,44 @@
+ # RosterDock
+ 
+-RosterDock is a self-hosted platform for running a company of AI teammates. You set up departments staffed by
+-teammates, each with a brain (Claude Code or Codex and a model), a persona and a toolbox of governed
+-connections. Peter, the project-manager teammate, turns a goal into tasks, assigns them by role and load,
+-chases what is stuck and re-plans what fails. Teammates work in parallel on a shared kanban, message and
+-delegate to each other, and review each other's work hunk by hunk. People gate two things only: merges to
+-protected branches and writes to live external systems. It runs on your own Kubernetes cluster from a Helm
+-chart, or on one machine for development.
++Run a company of AI teammates on your own Kubernetes cluster, with a manager, reviews and a person approving
++what leaves it.
+ 
+-It is for teams that want AI agents doing real work (research, code, content, operations) as a team with a
+-manager, reviews, budgets and an audit trail, on infrastructure they control, with a person deciding
+-everything that leaves it.
++[![CI](https://github.com/DawBatteriesNotIncluded/RosterDock/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DawBatteriesNotIncluded/RosterDock/actions/workflows/ci.yml)
++[![Licence: Apache 2.0](https://img.shields.io/badge/licence-Apache_2.0-6b675f)](LICENSE)
+ 
+-![The board of the Lighthouse demo company: AI teammates' tasks to do, running, blocked on a teammate, in review and done](docs/images/board.png)
++RosterDock is a self-hosted platform for departments of AI teammates that plan, do and review real work on a
++shared kanban. It is for teams that want agents doing research, code, content and operations on
++infrastructure they control.
+ 
+-_The Lighthouse demo company on the dev stack, every teammate on the stub engine._
++- **Only an approved review marks work Done**, and a person can veto any review.
++- **A live write runs only after a person approves its exact payload** (sha256).
++- **Your cluster and Postgres**, with every credential referenced by name.
++- **Peter plans, chases and re-plans**; Claude Code and Codex teammates share one company.
+ 
+-## Status
+-
+-Alpha, version 0.x. The board, the workers, Peter, reviews, approvals and the chart work end to end, and the
+-test suite runs offline, but expect breaking changes between versions and rough edges. Pin a version, and read
+-its entry in [`CHANGELOG.md`](CHANGELOG.md) before upgrading.
+-
+-## What it does
+-
+-- **Teammates** are first-class actors: authors, assignees and reviewers with the same role checks as people.
+-  A toolbox grants each one connections (MCP servers, OpenAPI services) in a mode (`read`, `ask` or `off`);
+-  department and project client policies only ever narrow it.
+-- **Peter** plans every goal: with a model when one is available (and then he may ask questions first), by
+-  role when not. He re-plans a failed task with a note and turns the goal amber when it needs you.
+-- **Reviews**: every finished task opens a review with checks (secret scan, declared outputs, the
+-  repository's tests, cited sources, weighted criteria), decided by a reviewer teammate or a person. Only an
+-  approved review marks a task Done, and a person can veto it. On a GitHub or GitLab project the approval
+-  opens a pull or merge request; merging stays with you.
+-- **Approvals**: a write to a live system is proposed with the exact payload and its sha256, and runs only
+-  after a person approves that payload.
+-- **One event stream** per company behind the activity feed, the office view and the costs; budgets per
+-  company, department, project and teammate; roles (owner, admin, reviewer, viewer); sign-in through OpenID
+-  Connect.
+-
+-## How it fits together
+-
+-```text
+-browser ──▶ web ──/api──▶ board ──────▶ connections (MCP, OpenAPI), git hosts, webhooks
+-                          ▲   │
+-            claim runs,   │   │ state, events
+-            events, files │   ▼
+-                       workers ──────▶ Postgres (every row, the events, the run queue)
+-                          │
+-                          ▼
+-                      model API
+-```
++[Quick start](#quick-start-free-on-one-machine) · [Install on Kubernetes](docs/install.md) ·
++[Security](docs/security.md) · [Demo companies](#demo-companies) · [Contributing](CONTRIBUTING.md)
+ 
+-- **board** (`apps/board`): the API, which owns all state and the event stream. Node 22, Fastify,
+-  Postgres. It runs Peter's loop, the review checks, the tool broker and approvals, and the notifications,
+-  and applies migrations on boot. It alone calls connections, opens pull requests and sends notifications.
+-- **web** (`apps/web`): the React app, served by nginx, which proxies `/api` to the board.
+-- **workers** (`apps/worker`): each claims a run from the queue, prepares a workspace (a clone of the
+-  project's repository, if it has one), runs the teammate's engine headless and streams events and files
+-  back. They run model output, so on a cluster their network policy lets them reach the board, Postgres and
+-  public HTTPS (the model API, the git host), and nothing private.
+-- **Postgres** holds everything: rows, events, sessions and the queue. An S3 bucket is optional, for
+-  artifacts over 512 KB.
++![The board of the Lighthouse demo company: teammates' tasks to do, in progress, blocked on a teammate, in review and done](docs/images/board.png)
+ 
+-## Prerequisites
++_Tasks from to do to done, one waiting on a teammate's answer, three in review. Lighthouse is an invented
++demo company, every teammate on the stub engine._
+ 
+-- Node.js 22.12 or later and pnpm 10 (`corepack enable` picks the pinned version)
+-- Docker, for Postgres in development and for the test suite
+-- For a cluster: Kubernetes 1.27 or later and Helm 3.8 or later (see [`docs/install.md`](docs/install.md))
++## Status
+ 
+-Each teammate runs on an engine, and only real engines need anything:
++Alpha: expect breaking changes; [`CHANGELOG.md`](CHANGELOG.md) says what each one changes.
++Version 0.1.0 is being prepared and nothing is published yet (no tag, release, images or chart), so
++RosterDock runs from a checkout.
+ 
+-| Engine          | What the worker needs                                                                                         |
+-| --------------- | ------------------------------------------------------------------------------------------------------------- |
+-| Stub (no model) | Nothing. It writes the task's declared outputs and a handover; no model, no tokens, no cost.                  |
+-| Claude Code     | The `claude` CLI, signed in (`claude auth login`), or `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` for it |
+-| Codex           | The `codex` CLI, signed in (`codex login`), or `OPENAI_API_KEY` for it                                        |
++Good to know:
+ 
+-Peter needs nothing either: without a model he plans by role (research, requirements, build). With
+-`ANTHROPIC_API_KEY` on the board, or a signed-in `claude` or `codex` CLI where the board runs, he plans with a
+-model; each company chooses in Settings > Peter. On a cluster, the published worker image carries Codex but
+-not Claude Code, whose licence keeps it out of a public image; the install guide shows how to add it in an
+-image of your own ([Engines on the worker](docs/install.md#engines-on-the-worker)).
++- Self-hosted only: you run the board, the workers and Postgres.
++- The engines are Claude Code, Codex and the stub; Claude Code on a cluster needs a worker image you build.
++- A real install needs Kubernetes 1.27+, Helm 3.8+, Postgres 16 and an OpenID Connect provider.
+ 
+ ## Quick start: free, on one machine
+ 
+-The stub engine and Peter without a model: nothing calls a model and nothing costs anything.
++The stub engine and Peter without a model: nothing calls a model and nothing costs anything. You need Node.js
++22.12+, pnpm 10 (`corepack enable` picks the pinned version), git and Docker.
+ 
+ ```bash
+ git clone https://github.com/DawBatteriesNotIncluded/RosterDock.git
+@@ -117,36 +70,90 @@ Then, in the browser:
+ 4. **Company > New goal**: "Send a weekly digest of Gong calls with next steps to #sales every Friday."
+    Peter splits it into tasks, the worker runs the research task, and it lands in **Reviews**.
+ 
+-To use real models, sign in to a CLI from the table above and switch a teammate's engine. What a goal costs
+-then depends on the models and the review rounds; the demo guides list measured figures
+-([Lighthouse](deploy/demo/lighthouse/README.md), [Cirrus](deploy/demo/cirrus/README.md)), and a company
+-budget in Settings caps it.
++For real models, see [Engines](#engines) below; a company's token budget in Settings caps what they use.
++
++### Docker only
++
++```bash
++docker compose --profile worker up --build -d
++```
++
++Open http://localhost:8080 and follow the same steps; ports listen on 127.0.0.1 only, as the dev login is on.
++Stub teammates need nothing. `docker compose down -v` deletes the data.
++
++## What it does
++
++- **Teammates** have a brain, a persona and a toolbox, message each other, and pass people's role checks.
++- **Toolboxes** grant any MCP server or OpenAPI service as `read`, `ask` or `off`; policies only narrow them.
++- **Peter** plans each goal with a model (and may ask questions first) or by role, and re-plans what fails.
++- **Reviews** go hunk by hunk with checks; on GitHub or GitLab an approval opens the pull or merge request,
++  and merging stays with you.
++- **One event stream** per company feeds activity, the office view and costs, with token budgets per company,
++  department, project and teammate.
++- **Roles** (owner, admin, reviewer, viewer) and sign-in through OpenID Connect.
++
++## How it fits together
++
++```text
++browser ──▶ web ──/api──▶ board ──────▶ connections (MCP, OpenAPI), git hosts, webhooks
++                          ▲   │
++            claim runs,   │   │ state, events
++            events, files │   ▼
++                       workers ──────▶ Postgres (every row, the events, the run queue)
++                          │
++                          ▼
++                      model API
++```
++
++- **board** (`apps/board`): owns all state and events, runs Peter, reviews and approvals, alone calls
++  connections.
++- **web** (`apps/web`): the React app behind nginx, which proxies `/api` to the board.
++- **workers** (`apps/worker`): run a teammate's engine headless; on a cluster they reach nothing private.
++- **Postgres**: rows, events, sessions and the queue; an S3 bucket is optional, for artifacts over 512 KB.
++
++The [operator guide](docs/operator.md) has each part in full.
++
++## Engines
++
++Each teammate runs on an engine, and only real engines need anything:
++
++| Engine          | What the worker needs                                                                                         |
++| --------------- | ------------------------------------------------------------------------------------------------------------- |
++| Stub (no model) | Nothing. It writes the task's declared outputs and a handover; no model, no tokens, no cost.                  |
++| Claude Code     | The `claude` CLI, signed in (`claude auth login`), or `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` for it |
++| Codex           | The `codex` CLI, signed in (`codex login`), or `OPENAI_API_KEY` for it                                        |
++
++Peter needs nothing either: without a model he plans by role; with `ANTHROPIC_API_KEY` on the board, or a
++signed-in `claude` or `codex` CLI where it runs, he may use one (Settings > Peter). The worker image built from `apps/worker/Dockerfile` carries Codex; Claude Code's licence keeps it out
++of public images, so add it in your own ([Engines on the worker](docs/install.md#engines-on-the-worker)).
++
++## On Kubernetes today
+ 
+-### The whole stack in Docker
++- `deploy/scripts/local-cluster.sh`: a kind cluster on your laptop that stays.
++- `deploy/scripts/smoke.sh`: a throwaway install that checks the board answers.
++- Elsewhere: build the images, push them to your registry and install `deploy/helm/rosterdock` with
++  `image.registry` pointing at it.
+ 
+-`docker compose up --build -d` builds and starts Postgres, MinIO, the board and the web on
+-http://localhost:8080, with every port published on 127.0.0.1 only, since the stack runs with the dev login
+-on. It starts no worker: add `--profile worker` to build and start one with Claude Code (it hands
+-`ANTHROPIC_API_KEY` from your environment to Claude Code teammates; stub teammates need nothing).
++Read the [install guide](docs/install.md), the [operator guide](docs/operator.md) and the
++[security notes](docs/security.md); the [docs index](docs/README.md) lists the rest.
+ 
+-## On Kubernetes
++## Demo companies
+ 
+-Each release publishes the three images and the chart to GHCR, and [`CHANGELOG.md`](CHANGELOG.md) says what
+-it changed.
++Two invented companies show it doing real work: [Lighthouse](deploy/demo/lighthouse/README.md) launches a
++product, and [Cirrus](deploy/demo/cirrus/README.md), a telecoms company, recovers from a bad week.
+ 
+-- [`docs/install.md`](docs/install.md): a fresh cluster to a working board, with a first demo
+-- [`docs/operator.md`](docs/operator.md): what to watch and what to do once it runs
+-- [`docs/security.md`](docs/security.md): what the platform guarantees and what it needs from you
++## How this repository is worked
+ 
+-Two demo companies show it doing real work: [Lighthouse](deploy/demo/lighthouse/README.md) launches a product,
+-and [Cirrus](deploy/demo/cirrus/README.md), a telecoms company, recovers from a bad week.
++Alongside the maintainer, a RosterDock company on the maintainer's board (Engineering, Issues & PRs, Docs,
++Release & Security, and Peter) takes tasks in this repository. A reviewer teammate reviews each change it
++makes, the board opens the pull request, and a person merges it, as in
++[#7](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/7) and
++[#8](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/8).
+ 
+ ## Contributing
+ 
+-[`CONTRIBUTING.md`](CONTRIBUTING.md) has the setup and the rules for a change. The plan is
+-[`docs/plan.html`](docs/plan.html) and the visual spec [`docs/prototype.html`](docs/prototype.html). Report a
+-security problem privately, as [`SECURITY.md`](SECURITY.md) says, and see the
+-[code of conduct](CODE_OF_CONDUCT.md).
++[`CONTRIBUTING.md`](CONTRIBUTING.md) has the setup and the rules for a change. Report a security problem
++privately, as [`SECURITY.md`](SECURITY.md) says, and see the [code of conduct](CODE_OF_CONDUCT.md).
+ 
+ ## Licence
+ 
+diff --git a/docs/README.md b/docs/README.md
+new file mode 100644
+index 0000000..7a907fd
+--- /dev/null
++++ b/docs/README.md
+@@ -0,0 +1,24 @@
++# RosterDock docs
++
++The guides, the demos and the documents the project is built from. The [README](../README.md) has the quick
++start.
++
++## Run it
++
++- [Install](install.md): a fresh cluster to a working board, with a first demo.
++- [Operate](operator.md): what to watch and what to do once it runs.
++- [Security](security.md): what the platform guarantees and what it needs from you.
++
++## Demos
++
++- [Lighthouse](../deploy/demo/lighthouse/README.md): an invented company launches a product.
++- [Cirrus](../deploy/demo/cirrus/README.md): an invented telecoms company recovers from a bad week.
++
++## How the project is built
++
++- `plan.html`, the plan, and `prototype.html`, the visual spec: single files in this folder that you open in
++  a browser from a clone.
++- The milestones' design notes and demo scripts: [M0](m0.md), [M1](m1.md), [M2](m2.md), [M3](m3.md),
++  [M4](m4.md), [M5](m5.md), [M6](m6.md).
++- [Backlog](backlog.md): what was noticed outside the milestones, not yet scheduled.
++- [Releasing](releasing.md): how the maintainers cut a release.
+diff --git a/docs/install.md b/docs/install.md
+index 1f8df7b..d4b59b5 100644
+--- a/docs/install.md
++++ b/docs/install.md
+@@ -70,6 +70,9 @@ can reach, turn it off and configure OIDC first (below). `deploy/scripts/serve.s
+ 
+ ## Where the images and the chart come from
+ 
++Nothing below is published until 0.1.0 is released: until then, build the images and use the chart from a
++checkout (the end of this section).
++
+ Every release is one version, cut from a `v` tag by `.github/workflows/release.yml`; `CHANGELOG.md` says
+ what each one changed.
+ 
+diff --git a/docs/releasing.md b/docs/releasing.md
+index 9624b88..d89efae 100644
+--- a/docs/releasing.md
++++ b/docs/releasing.md
+@@ -63,3 +63,6 @@ their parsers' fixtures were recorded with; moving one means recording the fixtu
+   Private vulnerability reporting, Enable. Then check that `/security/advisories/new` opens.
+ - **Who may release.** Anyone who can push a `v*` tag publishes. A tag ruleset on `v*` (Settings, Rules)
+   can keep creating release tags to the maintainers and forbid moving or deleting one.
++- **Delete the pre-release sentences** when 0.1.0 ships: in `README.md` the one under Status saying 0.1.0 is
++  being prepared and nothing is published, and in `docs/install.md` the one under "Where the images and the
++  chart come from" saying nothing is published until 0.1.0.

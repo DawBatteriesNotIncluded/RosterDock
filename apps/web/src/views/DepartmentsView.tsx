@@ -3,6 +3,7 @@ import type { CompanyData, Department, Teammate } from "../api/types.ts";
 import { Avatar, Button, Empty, Pill, Topbar } from "../components/ui.tsx";
 import { cn } from "../lib/cn.ts";
 import { isOpenTask, POLICY_LABEL } from "../lib/format.ts";
+import { DomainsField, domainsText } from "./WebDomains.tsx";
 
 export type CellState = "none" | "member" | "lead";
 
@@ -24,10 +25,13 @@ export interface DepartmentsViewProps {
   onCycleCell(departmentId: string, teammateId: string, from: CellState): Promise<void>;
   onHire(): void;
   onDesign(): void;
+  /** Set the web sites this department's runs may read through the web connection; absent for people who may not. */
+  onSaveWebDomains?(departmentId: string, domains: string[]): Promise<void>;
 }
 
 export function DepartmentsView(p: DepartmentsViewProps) {
   const { data } = p;
+  const web = data.connections.find((c) => c.kind === "web");
   return (
     <>
       <Topbar
@@ -77,6 +81,21 @@ export function DepartmentsView(p: DepartmentsViewProps) {
                       <span className="text-[12px] text-muted">No teammates yet. Use the matrix below.</span>
                     ) : null}
                   </div>
+                  {web ? (
+                    <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                      <span className="text-muted">Web sites</span>
+                      {p.onSaveWebDomains ? (
+                        <DomainsField
+                          label={`${d.name} web sites`}
+                          value={d.sandbox?.webDomains}
+                          placeholder="as the company's"
+                          onSave={(domains) => p.onSaveWebDomains!(d.id, domains)}
+                        />
+                      ) : (
+                        <span>{domainsText(d.sandbox?.webDomains) || "as the company's"}</span>
+                      )}
+                    </div>
+                  ) : null}
                   <div className="dept-foot">
                     <span className="text-muted">
                       {dt.filter((t) => isOpenTask(t.status)).length} open ·{" "}
@@ -159,7 +178,7 @@ export function DepartmentsView(p: DepartmentsViewProps) {
             )}
             <span className="hint">
               Policy only narrows: a department policy tightens its members' toolboxes, never widens them.
-              Toolboxes arrive in M5.
+              {web ? ` Its web sites narrow what ${web.name} reads for its tasks, the same way.` : ""}
             </span>
           </div>
         </div>

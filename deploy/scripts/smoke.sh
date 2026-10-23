@@ -124,6 +124,9 @@ done
 curl -fsS http://127.0.0.1:18080/api/health && echo
 curl -fsS http://127.0.0.1:18080/api/ready && echo
 curl -fsS -o /dev/null -w 'web: %{http_code}\n' http://127.0.0.1:18080/
+# The page is revalidated on every load, or an upgrade keeps serving the old bundle.
+curl -fsSI http://127.0.0.1:18080/ | grep -qi '^cache-control: no-cache' ||
+  { echo "web: / is served without Cache-Control: no-cache" >&2; exit 1; }
 curl -fsS -X POST -H 'content-type: application/json' -d '{"email":"smoke@example.com","name":"Smoke"}' \
   http://127.0.0.1:18080/api/auth/dev-login | head -c 120 && echo
 

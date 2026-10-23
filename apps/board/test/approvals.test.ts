@@ -75,7 +75,7 @@ async function runningTask(api: Api, base: string, assigneeId: string, title = "
   return { task, run, claimed };
 }
 
-const proposal = (taskId: string, runId: string, teammateId: string, name = "Q3 warm accounts") => ({
+const proposal = (taskId: string, runId: string | null, teammateId: string, name = "Q3 warm accounts") => ({
   taskId,
   runId,
   teammateId,
@@ -231,9 +231,16 @@ describe("approvals", () => {
     });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("rejected");
+    // A teammate's task outside any goal: Peter takes it from here, and the answer says so.
+    expect(res.body.afterRejection).toEqual({ kind: "replan", by: "Peter" });
     let t = (await api.get(`${base}/tasks/${task.id}`)).body;
     expect(t.status).toBe("blocked");
-    expect(t.blocker.code).toBe("approval_required");
+    // The task says what happened: nothing waits for a decision any more.
+    expect(t.blocker.code).toBe("approval_rejected");
+    expect(t.blocker.what).toBe(
+      'Create a HubSpot list "Q3 warm accounts" (hubspot · create_list) was rejected: Not a static list; use the existing active list.',
+    );
+    expect(t.blocker.waitingOn).toBeUndefined();
 
     const pass = await peterPass(deps(), companyId);
     expect(pass.replanned).toHaveLength(1);
@@ -243,11 +250,20 @@ describe("approvals", () => {
     expect(t.replans).toBe(1);
     const runs = (await api.get(`${base}/tasks/${task.id}/runs`)).body as { id: string; note: string }[];
     expect(runs[0]!.note).toContain("rejected proposal");
-    expect(runs[0]!.note).toContain("Do not propose that write again");
+    // The note ends in its own full stop: quoted once, never "list..".
+    expect(runs[0]!.note).toContain("use the existing active list. Do not propose that write again");
+    expect(runs[0]!.note).not.toContain("..");
     const next = await workerClaim(board, runs[0]!.id);
     expect(next.pack).toContain("rejected: Not a static list; use the existing active list.");
     // A second pass changes nothing.
     expect((await peterPass(deps(), companyId)).replanned).toHaveLength(0);
+    // The card says what became of it, in the listing and on the task.
+    expect((await api.get(`${base}/approvals/${approval.id}`)).body.afterRejection).toEqual({
+      kind: "replanned",
+      by: "Peter",
+    });
+    const onTask = (await api.get(`${base}/tasks/${task.id}/approvals`)).body as any[];
+    expect(onTask[0].afterRejection).toEqual({ kind: "replanned", by: "Peter" });
   });
 
   it("with two proposals waiting, the proposer continues only once both are decided", async () => {
@@ -261,10 +277,168 @@ describe("approvals", () => {
     expect(first.body.status).toBe("executed");
     expect(first.body.restarted.runId).toBeNull();
     expect(first.body.restarted.reason).toContain("still wait");
-    expect((await api.get(`${base}/tasks/${task.id}`)).body.status).toBe("blocked");
+    const waiting = (await api.get(`${base}/tasks/${task.id}`)).body;
+    expect(waiting.status).toBe("blocked");
+    // It waits on the one still waiting, not on the one decided.
+    expect(waiting.blocker.waitingOn).toEqual({
+      kind: "approval",
+      id: b.approval.id,
+      name: b.approval.title,
+    });
     const second = await api.post(`${base}/approvals/${b.approval.id}/approve`, {});
     expect(second.body.restarted.runId).toBeTruthy();
     expect((await api.get(`${base}/tasks/${task.id}`)).body.status).toBe("doing");
+  });
+
+  it("a rejection with another proposal waiting leaves the task on that one; the last one rejected ends the wait", async () => {
+    const { api, base } = await seedCompany(board, "ap8@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const { task, run, claimed } = await runningTask(api, base, cody.id);
+    const a = await proposeApproval(board.db, task.companyId, proposal(task.id, run.id, cody.id, "List A"));
+    const b = await proposeApproval(board.db, task.companyId, proposal(task.id, run.id, cody.id, "List B"));
+    await workerComplete(board, claimed.token, run.id, { status: "completed" });
+    expect((await api.get(`${base}/tasks/${task.id}`)).body.blocker.waitingOn.id).toBe(a.approval.id);
+    const first = await api.post(`${base}/approvals/${a.approval.id}/reject`, { note: "Not A." });
+    expect(first.body.afterRejection).toEqual({ kind: "proposal" });
+    let t = (await api.get(`${base}/tasks/${task.id}`)).body;
+    expect(t.blocker.code).toBe("approval_required");
+    expect(t.blocker.waitingOn.id).toBe(b.approval.id);
+    expect(t.blocker.what).toBe('Waiting for approval: Create a HubSpot list "List B" (hubspot).');
+    const last = await api.post(`${base}/approvals/${b.approval.id}/reject`, {});
+    expect(last.body.afterRejection).toEqual({ kind: "replan", by: "Peter" });
+    t = (await api.get(`${base}/tasks/${task.id}`)).body;
+    expect(t.status).toBe("blocked");
+    expect(t.blocker.code).toBe("approval_rejected");
+    expect(t.blocker.what).toBe('Create a HubSpot list "List B" (hubspot · create_list) was rejected.');
+    // The first rejection's card says the same now: nothing else waits.
+    const listed = (await api.get(`${base}/approvals?status=rejected`)).body as any[];
+    expect(listed.map((x) => x.afterRejection)).toEqual([
+      { kind: "replan", by: "Peter" },
+      { kind: "replan", by: "Peter" },
+    ]);
+  });
+
+  it("a task filed after its project's goal closed is outside it, so a rejection there is re-planned", async () => {
+    // As on the end-to-end run: a person filed a task into the project a finished goal had opened.
+    const { api, base, companyId } = await seedCompany(board, "ap9@example.com");
+    await addTeammate(api, base, "Ricky", "researcher");
+    await addTeammate(api, base, "Brody", "requirements");
+    const cody = await addTeammate(api, base, "Cody");
+    const goal = (await api.post(`${base}/goals`, { text: "A Friday digest of Gong calls in Slack." })).body;
+    await board.db.query("UPDATE goals SET status = 'done', closed_at = now() WHERE id = $1", [goal.id]);
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: goal.projectId,
+        title: "Approval test: propose a note to the notes service",
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    expect(task.goalId).toBeNull();
+    const run = (await api.post(`${base}/tasks/${task.id}/runs`, {})).body;
+    const claimed = await workerClaim(board, run.id);
+    const { approval } = await proposeApproval(board.db, companyId, proposal(task.id, run.id, cody.id));
+    await workerComplete(board, claimed.token, run.id, { status: "completed" });
+    const rejected = await api.post(`${base}/approvals/${approval.id}/reject`, {
+      note: "Written once already.",
+    });
+    expect(rejected.body.afterRejection).toEqual({ kind: "replan", by: "Peter" });
+    const t = (await api.get(`${base}/tasks/${task.id}`)).body;
+    expect(t.blocker.code).toBe("approval_rejected");
+    expect(t.blocker.what).toMatch(/was rejected: Written once already\.$/);
+    const pass = await peterPass(deps(), companyId);
+    expect(pass.replanned.map((r) => r.taskId)).toEqual([task.id]);
+    expect((await api.get(`${base}/tasks/${task.id}`)).body.status).toBe("doing");
+    // The closed goal is not reopened.
+    expect((await api.get(`${base}/goals/${goal.id}`)).body.status).toBe("done");
+  });
+
+  it("a rejection Peter does not re-plan waits for a person, and the answer says so, not that he re-plans", async () => {
+    const { owner, api, base, companyId } = await seedCompany(board, "ap10@example.com");
+    await addTeammate(api, base, "Ricky", "researcher");
+    await addTeammate(api, base, "Brody", "requirements");
+    const cody = await addTeammate(api, base, "Cody");
+    const reject = async (taskId: string, runId: string | null, name: string) => {
+      const { approval } = await proposeApproval(board.db, companyId, proposal(taskId, runId, cody.id, name));
+      const res = await api.post(`${base}/approvals/${approval.id}/reject`, { note: "No." });
+      expect(res.status).toBe(200);
+      return res.body as { id: string; afterRejection: unknown };
+    };
+
+    // A person's task (a teammate proposed the write on it): it waits for that person.
+    const project = await addProject(api, base);
+    const mine = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Daniel's own task",
+        assignee: { kind: "user", id: owner.userId },
+      })
+    ).body;
+    const onMine = await reject(mine.id, null, "List for Daniel");
+    expect(onMine.afterRejection).toEqual({ kind: "person", name: "Daniel" });
+
+    // A teammate's task in a goal that was stopped or closed: Peter leaves it, so a person decides.
+    const goal = (await api.post(`${base}/goals`, { text: "A Friday digest of Gong calls in Slack." })).body;
+    const inGoal = goal.tasks[0];
+    const run = (await api.get(`${base}/tasks/${inGoal.id}/runs`)).body[0] as { id: string };
+    const claimed = await workerClaim(board, run.id);
+    const { approval: closedOne } = await proposeApproval(
+      board.db,
+      companyId,
+      proposal(inGoal.id, run.id, inGoal.assignee.id, "List for the digest"),
+    );
+    await workerComplete(board, claimed.token, run.id, { status: "completed" });
+    await board.db.query("UPDATE goals SET status = 'done', closed_at = now() WHERE id = $1", [goal.id]);
+    const onClosed = await api.post(`${base}/approvals/${closedOne.id}/reject`, {});
+    expect(onClosed.body.afterRejection).toEqual({ kind: "person", name: null });
+
+    // A teammate's task Peter has re-planned twice already: he escalates instead, so a person decides.
+    const twice = await runningTask(api, base, cody.id, "Twice re-planned");
+    const spent = twice.task;
+    await board.db.query("UPDATE tasks SET replans = 2 WHERE id = $1", [spent.id]);
+    const { approval: spentOne } = await proposeApproval(
+      board.db,
+      companyId,
+      proposal(spent.id, twice.run.id, cody.id, "List after two re-plans"),
+    );
+    await workerComplete(board, twice.claimed.token, twice.run.id, { status: "completed" });
+    const onSpent = await api.post(`${base}/approvals/${spentOne.id}/reject`, {});
+    expect(onSpent.body.afterRejection).toEqual({ kind: "person", name: null });
+
+    // Peter's pass bears it out: none of the three is started again; each still waits on its rejection.
+    const pass = await peterPass(deps(), companyId);
+    expect(pass.replanned).toEqual([]);
+    expect(pass.escalated.map((e) => e.reason).join("\n")).toContain("Twice re-planned");
+    for (const id of [mine.id, inGoal.id, spent.id]) {
+      const t = (await api.get(`${base}/tasks/${id}`)).body;
+      expect([t.status, t.blocker.code]).toEqual(["blocked", "approval_rejected"]);
+    }
+    const listed = (await api.get(`${base}/approvals?status=rejected`)).body as any[];
+    expect(listed.find((a) => a.id === onMine.id).afterRejection).toEqual({ kind: "person", name: "Daniel" });
+
+    // A department's task is its lead's to re-plan, and the answer names the lead, not Peter.
+    const lena = await addTeammate(api, base, "Lena", "engineering lead");
+    const eng = (
+      await api.post(`${base}/departments`, {
+        name: "Engineering",
+        leadTeammateId: lena.id,
+        memberTeammateIds: [cody.id],
+      })
+    ).body;
+    const theirs = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Engineering's list",
+        departmentId: eng.id,
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    const onTheirs = await reject(theirs.id, null, "List for Engineering");
+    expect(onTheirs.afterRejection).toEqual({ kind: "replan", by: "Lena" });
+    expect((await peterPass(deps(), companyId)).replanned.map((r) => r.taskId)).toEqual([theirs.id]);
+    expect((await api.get(`${base}/approvals/${onTheirs.id}`)).body.afterRejection).toEqual({
+      kind: "replanned",
+      by: "Lena",
+    });
   });
 
   it("refuses a proposal that carries a credential value", async () => {

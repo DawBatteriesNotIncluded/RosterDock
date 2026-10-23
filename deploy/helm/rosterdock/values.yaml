@@ -51,6 +51,11 @@ board:
   #  - "npx -y @modelcontextprotocol/server-memory@2026.8.31"
   #  - "npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /home/node/data/drive"
   stdioCommands: []
+  # The model provider kinds a company may add (ROSTERDOCK_MODEL_PROVIDERS): anthropic, openai, azure_openai,
+  # bedrock, openai_compatible, and board, which lends the board's own models to every company. A provider's
+  # credentials are names, resolved as connections' are (its own secrets, then sharedEnvNames). Empty: every
+  # kind and board. [board] alone: no company providers. The board does not start on an entry it does not know.
+  modelProviders: []
   # Needs-you notifications go to this webhook URL (may carry a token), by NAME from a Secret. Empty: none,
   # unless a company names its own (one of its secrets, or a name in sharedEnvNames) in Settings.
   notifySecret:
@@ -74,6 +79,8 @@ board:
   githubSecret:
     name: ""
     key: ROSTERDOCK_GITHUB_TOKEN
+  # The API root for GitHub Enterprise Server (ROSTERDOCK_GITHUB_API). Empty: https://api.github.com.
+  githubApi: ""
   # The same for GitLab projects: a token with the api scope, by NAME from a Secret, and the API root when
   # self-hosted (its host is the one repository URLs must carry). Empty: GitLab repositories propose nothing.
   gitlabSecret:
@@ -100,11 +107,51 @@ board:
       key: ROSTERDOCK_OIDC_CLIENT_SECRET
   # The URL people reach the board at, for sign-in redirects. Empty: from the ingress host, else the request.
   publicUrl: ""
+  # Requests a minute one client address may make to each sign-in route (the dev login, the OIDC start and
+  # callback), counted per board replica (ROSTERDOCK_SIGNIN_RATE_LIMIT); 0 turns the limit off. Any wider
+  # limit belongs at the ingress, which must set X-Forwarded-For itself (docs/security.md).
+  signInRateLimit: 60
+  # The board reads the public web: the sources a research review's documents cite, and the pages teammates
+  # read through a company's web connection (ROSTERDOCK_FETCH_SOURCES). false keeps the board off the web.
+  fetchSources: true
+  # The private destinations companies may make the board reach (ROSTERDOCK_PRIVATE_DESTINATIONS). What a
+  # company chooses (an MCP server or OpenAPI service, the OAuth endpoints its server names, its own webhook
+  # and SMTP server) must be at a public address unless it is listed here: loopback, private, link-local
+  # (where cloud metadata lives) and the other special-purpose ranges are refused, a name that resolves to
+  # one included. The board judges an address by its range alone: cluster addresses outside those ranges
+  # (GKE's privately used public IPs, routable pod IPv6) and public addresses that lead inside (a node's
+  # NodePort, Azure's 168.63.129.16) pass it, so keep networkPolicy.board.egressTo narrow (docs/security.md).
+  # Entries: host names, matched as a connection's URL writes them ("*.tools.svc.cluster.local" for the
+  # names under one), addresses and ranges ("10.20.0.0/16"). A listed name is trusted with whatever it
+  # resolves to: never list a wildcard over the cluster's domain (*.cluster.local, *.svc.cluster.local,
+  # *.pod.cluster.local), whose DNS answers some names with any address, cloud metadata included; list each
+  # service, or a namespace only you create services in. With networkPolicy.enabled, add the services'
+  # ports to networkPolicy.board.egressPorts. What you configure yourself (the git hosts, OIDC, OTLP, the
+  # bucket, the API server, the model API, notifySecret and notifyEmail above) is not held to it. Empty:
+  # public addresses only.
+  # An entry for one company alone takes its id (Settings > Connections shows it to its owners and admins):
+  # no other company reaches it through a connection or sees it (a stdio command with free arguments, above,
+  # is not held to this list at all), unless an entry for every company covers it too (a range it is in, a
+  # `*.` name it is under, a range its address falls in). A destination may be a list of entries for that
+  # company; a plain string that holds a company's entry and a comma is refused: one entry per item.
+  #  - "playwright-mcp.tools.svc.cluster.local" # http://playwright-mcp.tools.svc.cluster.local:8931/mcp
+  #  - company: "4f1aee73-e65e-4c8d-83f7-aa1169379d7f"
+  #    destination: "ollama.acme.svc.cluster.local"
+  privateDestinations: []
+  # More environment for the board container, as Kubernetes env entries, for the settings with no value of
+  # their own above (docs/operator.md, Environment reference): ROSTERDOCK_DB_POOL_MAX,
+  # ROSTERDOCK_RUN_STALE_AFTER_MS, ROSTERDOCK_SESSION_TTL_SECONDS and the like. A credential belongs in a
+  # Secret, named with valueFrom, never as a value here.
+  extraEnv: []
+  #  - name: ROSTERDOCK_DB_POOL_MAX
+  #    value: "20"
   # OAuth on connections: a connection may authorise against its MCP server's authorization server instead
   # of naming an env var, and the board keeps the tokens it obtains in Secrets of its own
   # (rosterdock-connection-<id>) in the release namespace. That takes the pod's service account token and a
   # Role over Secrets in the namespace (rbac.yaml), which the chart withholds otherwise; keep RosterDock in a
-  # namespace of its own when you turn this on. Off: connections authenticate by env var NAME only.
+  # namespace of its own when you turn this on. With networkPolicy.enabled it also opens the board's egress
+  # on ports 443 and 6443 to any address, for the API server, whatever networkPolicy.board.egressTo lists:
+  # private ranges and the rest of the cluster included. Off: connections authenticate by env var NAME only.
   oauth:
     enabled: false
   # Model CLIs Peter may plan with where the board runs (Settings > Peter; Automatic takes the first signed in).
@@ -127,7 +174,8 @@ board:
     minReplicas: 2
     maxReplicas: 6
     targetCPUUtilizationPercentage: 70
-  # Keep at least this many boards up through node drains; only rendered when replicas or autoscaling allow it.
+  # Keep at least this many boards up through node drains. Rendered only over more than one board (replicas
+  # above 1, or autoscaling, and no persistence): over one, it would refuse every eviction and block drains.
   podDisruptionBudget:
     enabled: false
     minAvailable: 1
@@ -172,10 +220,29 @@ worker:
   engineEnvNames: [ANTHROPIC_API_KEY]
   engineSecret:
     name: rosterdock-engines
-  # Optional git token the worker clones private repositories with, by NAME from a Secret.
+  # The most a Claude Code teammate may use (ROSTERDOCK_CLAUDE_ALLOWED_TOOLS): the only built-in tools it has,
+  # with the rules it uses them under. A department's sandbox only narrows it: a tool listed there and not
+  # here is left out of the run. Empty: the worker's
+  # default, Read, Write, Edit, Glob and Grep inside the workspace. A department that needs the web
+  # (WebSearch, WebFetch) gets it from a pool that lists them; those reach the web outside the board's
+  # address checks, site lists and records, so prefer a company's web connection (docs/operator.md, Web
+  # access for teammates). Codex runs in its own sandbox instead.
+  claudeAllowedTools: []
+  # More environment for the worker container, as Kubernetes env entries, for the settings with no value of
+  # their own above (docs/operator.md, Environment reference): ROSTERDOCK_RUN_REPO_TESTS ("0" turns the
+  # repository's tests off), ROSTERDOCK_TEST_TIMEOUT_MS, ROSTERDOCK_LOG_FORMAT, ROSTERDOCK_HEARTBEAT_MS
+  # and the like. A pool's own extraEnv replaces this list. A credential belongs in a Secret, named with
+  # valueFrom, never as a value here.
+  extraEnv: []
+  #  - name: ROSTERDOCK_RUN_REPO_TESTS
+  #    value: "0"
+  # Optional git token the worker clones private repositories with, by NAME from a Secret, and the git hosts
+  # it is sent to (ROSTERDOCK_GIT_TOKEN_HOSTS), with a port where it is not 443: a repository on any other
+  # host is cloned without it. List your GitLab or GitHub Enterprise Server host here.
   gitSecret:
     name: ""
     key: ROSTERDOCK_GIT_TOKEN
+    hosts: [github.com]
   workVolumeSize: 4Gi
   # The worker serves its own counters (runs by outcome, seconds on runs, in flight) on this port; the pod
   # is annotated for scraping, and with observability.serviceMonitor.enabled a ServiceMonitor covers the
@@ -187,21 +254,25 @@ worker:
   # runtime whose engine forks beyond it, the worker can ask the metrics API instead (metrics-server or
   # an equivalent must be installed): that takes a service account token in a pod that runs model output,
   # so the chart gives the worker an account of its own with one Role, get pod metrics in this namespace,
-  # mounts the token, and opens the worker's egress to the API server. The cgroup stays behind it.
+  # mounts the token, and opens the worker's egress to the API server; the cgroup stays behind it. That
+  # egress rule has no destination: every worker pod, in every pool, then reaches any address on ports 443
+  # and 6443, private ranges and the rest of the cluster included, even in a pool whose egress is otherwise
+  # only the board and Postgres.
   podMetrics:
     enabled: false
   # Extra worker fleets, one per department sandbox pool. A department whose sandbox names the pool
   # sends its runs to that fleet's queue (runs.<name>) and only that fleet takes them. Each pool may set
-  # replicas, resources, autoscaling bounds, engineEnvNames, engineSecret, workVolumeSize, image (a full
-  # worker image reference, for a fleet on its own engine build or a pinned tag; default: worker.image),
-  # and its own network policy egress (egressTo, egressPorts; default: the pool reaches only the board and
-  # Postgres).
+  # replicas, resources, autoscaling bounds, engineEnvNames, engineSecret, claudeAllowedTools, extraEnv,
+  # workVolumeSize, image (a full worker image reference, for a fleet on its own engine build or a pinned
+  # tag; default: worker.image), and its own network policy egress (egressTo, egressPorts; default: the pool
+  # reaches only the board and Postgres).
   #  - name: secure
   #    replicas: 1
   #    egressTo: []          # nothing but the board and Postgres
   #    egressPorts: []
   #  - name: research
   #    image: ghcr.io/example/rosterdock-worker-research:1.4.0
+  #    claudeAllowedTools: [Read(./**), Write(./**), Edit(./**), Glob(./**), Grep(./**), WebSearch, WebFetch]
   #    egressPorts: [443]
   #    egressTo:
   #      - ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16] }
@@ -260,6 +331,8 @@ ingress:
 # Network policies. The web reaches only the board; the board reaches Postgres, storage and the outside
 # (model API, git host, MCP servers, webhooks); the worker reaches the board, Postgres and the public
 # internet on 443 (model API, git host) and nothing private in the cluster. Worker pods run model output.
+# Two settings open ports 443 and 6443 to any address, for the API server, private ranges included:
+# worker.podMetrics.enabled for every worker pod in every pool, and board.oauth.enabled for the board.
 networkPolicy:
   enabled: false
   # Extra sources allowed to reach the web (the ingress controller's namespace, a load balancer range).
@@ -269,8 +342,11 @@ networkPolicy:
   # Extra sources allowed to reach the board's port directly (a metrics scraper, an admin pod).
   boardIngressFrom: []
   board:
-    # Everything the board calls lives outside the cluster; allow all egress on these ports, or list
-    # destinations as NetworkPolicyPeers below to narrow.
+    # The board calls the model API, the git hosts, companies' MCP servers, services and webhooks, and the
+    # private destinations board.privateDestinations lists. With egressTo empty it may reach any address on
+    # these ports (its own check still refuses a company's private destination that is not listed); list
+    # NetworkPolicyPeers in egressTo to narrow, and add the ports of the private destinations you list
+    # (8931 for the Playwright browser, 11434 for Ollama).
     egressPorts: [443, 80]
     egressTo: []
   worker:
@@ -278,7 +354,8 @@ networkPolicy:
     # else ever reaches a worker.
     metricsFrom: []
     # Public HTTPS only by default: the model API and the git host; nothing private in the cluster besides
-    # the board, Postgres and storage. Narrow to your provider's ranges when you know them.
+    # the board and Postgres (any address on postgres.port until postgres.cidr names it). Narrow to your
+    # provider's ranges when you know them.
     egressPorts: [443]
     egressTo:
       - ipBlock:

@@ -4,3 +4,5 @@
 *.ico binary
 # Style packs as their authors published them: no line-ending conversion, or the pin breaks
 apps/board/styles/vendor/** -text
+# npm's Windows shims as npm wrote them, CRLF and all
+packages/shared/test/fixtures/npm-shims/** -text

@@ -1,5 +1,6 @@
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import { stdioCommandLine } from "@rosterdock/shared";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { ApprovalExecutor } from "./approvals/service.js";
@@ -19,6 +20,7 @@ import type { SmtpOptions } from "./notify/smtp.js";
 import { registerNotifyRoutes } from "./routes/notify.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
 import { registerConnectionRoutes } from "./routes/connections.js";
+import { registerProviderRoutes } from "./routes/providers.js";
 import { registerSecretRoutes } from "./routes/secrets.js";
 import { registerBudgetRoutes } from "./routes/budgets.js";
 import { registerCompanyRoutes } from "./routes/companies.js";
@@ -53,6 +55,10 @@ import { plannerRouter, probePlanners, type PlannerStatus } from "./peter/planne
 import { anthropicModel, tracedModel, type PeterModel } from "./peter/model.js";
 import { startReaper } from "./runs/reaper.js";
 import { sourceFetcher, type SourceFetcher } from "./reviews/sources.js";
+import { coveringEntry } from "@rosterdock/shared";
+import { isUuid } from "./validate.js";
+import { boardEgress, type Egress } from "./web/egress.js";
+import { boardWebReader, type Resolve, type WebReader } from "./web/transport.js";
 import { s3Store, type ObjectStore } from "./storage/s3.js";
 import { registerStyleRoutes } from "./routes/styles.js";
 import { STYLE_PACKS, VENDOR_DIR, type StylePack } from "./styles/catalog.js";
@@ -81,7 +87,7 @@ export interface BuildOptions {
   peterCliPrefixArgs?: string[];
   /** The same for the Codex CLI. */
   peterCodexPrefixArgs?: string[];
-  /** The fetch a style pack's file is downloaded with; tests use a fake. Default: global fetch. */
+  /** What a style pack's file is downloaded with, under the egress check (egressResolve); tests use a fake. Default: the board's pinned transport. */
   stylesFetch?: typeof fetch;
   /** The style packs offered; tests pin their own stand-in files. Default: styles/catalog.ts. */
   styleCatalog?: readonly StylePack[];
@@ -91,9 +97,15 @@ export interface BuildOptions {
   plannerStatuses?: () => Promise<PlannerStatus[]>;
   /** Sends an approved write to its live system. Tests inject one; the default sends nothing until a connection exists. */
   approvalExecutor?: ApprovalExecutor;
-  /** The fetch the board's MCP client uses for HTTP connections; tests replay recorded JSON-RPC. Default: global fetch. */
+  /**
+   * What HTTP connections (MCP and OpenAPI) and their OAuth are sent with, under the egress check
+   * (egressResolve); tests replay recorded JSON-RPC. Default: the board's pinned transport.
+   */
   mcpFetch?: typeof fetch;
-  /** The fetch needs-you notifications go out with; tests record the posts. Default: global fetch. */
+  /**
+   * What needs-you webhooks are posted with: the board's own as it is, a company's under the egress check;
+   * tests record the posts. Default: global fetch for the board's own, the pinned transport for a company's.
+   */
   notifyFetch?: typeof fetch;
   /** For the SMTP client behind email notifications: a private CA in tests. */
   smtp?: SmtpOptions;
@@ -105,8 +117,19 @@ export interface BuildOptions {
   otlpFetch?: typeof fetch;
   /** The fetch the object store is reached with; tests replay recorded MinIO responses. Default: global fetch. */
   storageFetch?: typeof fetch;
-  /** The fetch research sources are read with when a review opens; tests use a fake. Default: global fetch. */
-  sourcesFetch?: typeof fetch;
+  /**
+   * What the board reads the web with (research sources when a review opens, the web connection's pages):
+   * a fetch that follows no redirect, and the resolver every hop's name is checked with. Tests inject both.
+   * Default: node's HTTP client pinned to the addresses the system resolver gives, once each is public.
+   */
+  webFetch?: typeof fetch;
+  webResolve?: Resolve;
+  /**
+   * What the names a company chose are checked with before anything is sent (a connection's server, its OAuth
+   * endpoints, a company's webhook and SMTP server, a style pack's host): every address public, or private
+   * where ROSTERDOCK_PRIVATE_DESTINATIONS allows it. Tests inject one. Default: the system resolver.
+   */
+  egressResolve?: Resolve;
   /** The fetch the Kubernetes secret store reaches the API server with; tests use a fake. Default: global fetch. */
   secretsFetch?: typeof fetch;
 }
@@ -153,10 +176,19 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
       : null,
   };
 
-  // Artifacts over the inline limit live here, when the config names a bucket.
-  const sources: SourceFetcher | null = config.fetchSources
-    ? sourceFetcher({ fetch: opts.sourcesFetch ?? ((input, init) => fetch(input, init)) })
+  // The web, when the operator lets the board read it: research sources and the web connection share it.
+  const board = boardWebReader(opts.webResolve);
+  const web: WebReader | null = config.fetchSources
+    ? { fetch: opts.webFetch ?? board.fetch, resolve: opts.webResolve ?? board.resolve }
     : null;
+  const sources: SourceFetcher | null = web ? sourceFetcher(web) : null;
+  // What a company chose the board should reach: public addresses, and the private ones the operator lists.
+  // Each call site keeps its own transport in tests; the check above it is the same everywhere.
+  const egress = boardEgress(config.privateDestinations, opts.egressResolve);
+  // An injected transport stays itself for every company: only the list is narrowed (companyEgress).
+  const reach = (transport: typeof fetch | undefined): Egress =>
+    transport ? { fetch: transport, resolve: egress.resolve, allow: egress.allow } : egress;
+  // Artifacts over the inline limit live here, when the config names a bucket.
   const store: ObjectStore | null = config.storage
     ? s3Store(config.storage, opts.storageFetch ? { fetch: opts.storageFetch } : {})
     : null;
@@ -187,16 +219,18 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
   // stdio children stay up between calls and go when idle; closed with the board.
   const mcpPool = mcpClientPool();
   const mcp: McpClientDeps = {
-    ...(opts.mcpFetch ? { fetch: opts.mcpFetch } : {}),
+    egress: reach(opts.mcpFetch),
     env: shared,
     secrets,
     log: { warn: (msg) => app.log.warn(msg) },
     pool: mcpPool,
     stdioCommands: config.stdioCommands,
+    web,
   };
   const notify: NotifyDeps = {
     db,
     ...(opts.notifyFetch ? { fetch: opts.notifyFetch } : {}),
+    egress: reach(opts.notifyFetch),
     env: shared,
     secrets,
     defaultWebhookUrl: config.notifyWebhookUrl,
@@ -255,6 +289,9 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
   await app.register(cookie);
   if (config.corsOrigin)
     await app.register(cors, { origin: config.corsOrigin.split(","), credentials: true });
+  // Counts only on the routes that ask for it: the sign-in routes (auth/plugin.ts). Any wider limit is the
+  // ingress's (docs/security.md).
+  await app.register(rateLimit, { global: false });
 
   app.setErrorHandler((err: unknown, _req, reply) => {
     if (err instanceof HttpError) {
@@ -302,21 +339,24 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
   registerPeterRoutes(app, peter, planners);
   registerStyleRoutes(app, {
     db,
-    fetch: opts.stylesFetch ?? ((input, init) => fetch(input, init)),
+    egress: reach(opts.stylesFetch),
     catalog: opts.styleCatalog ?? STYLE_PACKS,
     vendorDir: opts.stylesVendorDir === undefined ? VENDOR_DIR : opts.stylesVendorDir,
   });
   registerApprovalRoutes(app, db, queue, opts.approvalExecutor ?? brokerExecutor({ db, mcp }));
   registerConnectionRoutes(app, db, mcp, {
     store: secrets,
-    oauth: { fetch: opts.mcpFetch ?? ((input, init) => fetch(input, init)), log: mcp.log! },
+    oauth: { egress: reach(opts.mcpFetch), log: mcp.log! },
     env: shared,
     publicUrl: config.publicUrl,
     operator,
   });
-  registerSecretRoutes(app, db, secrets);
+  registerSecretRoutes(app, db, secrets, config.sharedEnvNames);
+  registerProviderRoutes(app, { db, operator, policy: config.modelProviders, egress });
   // What this board can do beyond the basics, for the web to show the right controls. Names only; what the
-  // operator lets connections reach goes to the people who manage connections somewhere.
+  // operator lets connections reach goes to the people who manage connections somewhere. The private
+  // destinations the operator gave one company alone go to that company's owners and admins only, when the
+  // web asks for the company (?companyId=).
   app.get("/api/features", { config: {} }, async (req) => {
     const p = req.principal;
     const manages =
@@ -327,11 +367,37 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
           [p.actor.id],
         )
       ).rowCount;
+    const asked = (req.query as { companyId?: unknown }).companyId;
+    const companyId = isUuid(asked) ? asked.toLowerCase() : null;
+    const managesCompany =
+      manages &&
+      companyId !== null &&
+      !!(
+        await db.query(
+          "SELECT 1 FROM memberships WHERE user_id = $1 AND company_id = $2 AND role IN ('owner', 'admin')",
+          [p.actor.id, companyId],
+        )
+      ).rowCount;
+    // What the company was given: an entry every company has already covers is not shown as its own.
+    const own = managesCompany
+      ? (config.privateDestinations.companies?.[companyId!]?.entries ?? []).filter(
+          (e) => !coveringEntry(e, config.privateDestinations),
+        )
+      : [];
     return {
       oauth: !!secrets,
       objectStore: !!store,
+      // Whether the board reads the web: the web connection's pages and research sources.
+      web: !!web,
       ...(manages
-        ? { sharedEnvNames: config.sharedEnvNames, stdioCommands: config.stdioCommands.map(stdioCommandLine) }
+        ? {
+            sharedEnvNames: config.sharedEnvNames,
+            stdioCommands: config.stdioCommands.map(stdioCommandLine),
+            // The private names, addresses and ranges connections may reach, as the operator wrote them:
+            // every company's, then the company's own, which companyPrivateDestinations repeats.
+            privateDestinations: [...config.privateDestinations.entries, ...own],
+            companyPrivateDestinations: own,
+          }
         : {}),
     };
   });

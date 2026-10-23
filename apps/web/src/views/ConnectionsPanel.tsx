@@ -1,15 +1,32 @@
 // Connections: the external systems this company can reach, on the Settings
 // page. Add one from the catalog, by URL or command, or from an OpenAPI spec
 // with an allowlist; discover its tools; flip a tool between read and write;
-// switch it off; remove it. Credentials are env var NAMES, never values; a
-// connection may instead authorise by OAuth, when the board has a secret
-// store, and its tokens live there.
+// confirm a tool only the server calls read-only; switch it off; remove it.
+// Credentials are env var NAMES, never values; a connection may instead
+// authorise by OAuth, when the board has a secret store, and its tokens live
+// there. The web connection is the board's own fetch: added here once, with
+// the company's list of web domains on its card.
 import { Activity, KeyRound, Plug, Power, PowerOff, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import type { CreateConnectionInput, CreateOpenApiConnectionInput } from "@rosterdock/shared";
-import type { CatalogEntry, CompanySecret, Connection, Features, OpenApiScan } from "../api/types.ts";
+import {
+  isAddress,
+  nameListed,
+  parsePrivateDestinations,
+  refuseDestination,
+  type PrivateDestinations,
+} from "@rosterdock/shared/address";
+import type {
+  CatalogEntry,
+  CompanySecret,
+  Connection,
+  ConnectionTool,
+  Features,
+  OpenApiScan,
+} from "../api/types.ts";
 import { Button, Field, Pill, Tip } from "../components/ui.tsx";
 import { relativeTime } from "../lib/format.ts";
+import { DomainsField, domainsPhrase, parseDomains, webDomainsOf } from "./WebDomains.tsx";
 
 export interface ConnectionsPanelProps {
   connections: Connection[];
@@ -20,7 +37,12 @@ export interface ConnectionsPanelProps {
   createOpenApiConnection(input: CreateOpenApiConnectionInput): Promise<Connection>;
   updateConnection(
     id: string,
-    input: { enabled?: boolean; tools?: { name: string; write?: boolean; off?: boolean }[] },
+    input: {
+      enabled?: boolean;
+      tools?: { name: string; write?: boolean; off?: boolean }[];
+      /** The web connection's list of web domains; empty for any public site. */
+      domains?: string[] | null;
+    },
   ): Promise<Connection>;
   discoverConnection(id: string): Promise<Connection>;
   checkConnection(id: string): Promise<Connection>;
@@ -35,6 +57,8 @@ export interface ConnectionsPanelProps {
   deleteSecret?(name: string): Promise<void>;
   /** For headless rendering. */
   initialCatalog?: CatalogEntry[];
+  /** The company's id, which the operator names to give it a private destination of its own. */
+  companyId?: string;
 }
 
 /** How a connection authenticates, in one phrase. */
@@ -54,6 +78,8 @@ export function checkLine(c: Connection): string | null {
   if (!k) return null;
   const when = relativeTime(k.at);
   if (!k.ok) return `Check failed ${when}: ${k.error ?? "no answer"}`;
+  // Nothing is asked of the web connection: the board reads the web itself, or its operator keeps it off.
+  if (c.kind === "web") return `Checked ${when} · the board reads the web`;
   const parts = [`Checked ${when} · answered in ${k.latencyMs} ms`];
   if (c.kind === "mcp") {
     parts.push(`${k.tools.seen} tool${k.tools.seen === 1 ? "" : "s"} listed`);
@@ -63,7 +89,30 @@ export function checkLine(c: Connection): string | null {
   return parts.join(" · ");
 }
 
+/**
+ * The tools only the server calls read-only: neither their names nor the catalog say they read, so they are
+ * writes, and each call waits for approval, until a person confirms them. A tool switched off waits for nothing.
+ */
+export function heldReads(c: Connection): ConnectionTool[] {
+  return c.tools.filter((t) => t.source === "unconfirmed" && t.write && !t.off);
+}
+
+/** Confirming tools as reads: a person's classification of each, which discovery keeps. */
+export function confirmAsRead(names: string[]): { tools: { name: string; write: boolean }[] } {
+  return { tools: names.map((name) => ({ name, write: false })) };
+}
+
+/** What classified a tool, for its tooltip. */
+function sourceNote(t: ConnectionTool): string {
+  if (t.source === "person") return "set by a person";
+  if (t.source === "unconfirmed")
+    return "only the server calls it read-only; a write until a person confirms it";
+  return t.source;
+}
+
 export function connectionSummary(c: Connection): string {
+  if (c.kind === "web")
+    return `Web · the board's own fetch · reads ${domainsPhrase(webDomainsOf(c))}${c.tools.some((t) => t.off) ? " · fetch switched off" : ""}`;
   const reads = c.tools.filter((t) => !t.write && !t.off).length;
   const writes = c.tools.filter((t) => t.write && !t.off).length;
   const off = c.tools.filter((t) => t.off).length;
@@ -112,10 +161,91 @@ export function stdioListed(lines: readonly string[], typed: string): boolean {
   });
 }
 
+// Names that usually lead inside a network. Only resolving one tells, which the board does and the browser
+// cannot, so for a name the flag says what would happen, not that it will.
+const LOCAL_SUFFIXES = [".localhost", ".local", ".internal", ".lan", ".home.arpa", ".svc", ".cluster.local"];
+
+/**
+ * What the board will do with a URL's host, as far as the browser can tell, by the board's own rules
+ * (@rosterdock/shared/address): `refused`, an address it does not take and the operator's list does not
+ * cover; `unless-listed`, a name that looks private and no entry names, so it is refused if it resolves to a
+ * private address outside the listed ranges; null, nothing to say.
+ */
+export function privateFlag(url: string, listed: readonly string[]): "refused" | "unless-listed" | null {
+  let host: string;
+  try {
+    host = new URL(url).hostname
+      .toLowerCase()
+      .replace(/^\[|\]$/g, "")
+      .replace(/\.$/, "");
+  } catch {
+    return null;
+  }
+  if (!host) return null;
+  // The board read every entry at boot; one this page cannot read is left out, not the whole list.
+  const allow: PrivateDestinations = { names: [], ranges: [], entries: [] };
+  for (const entry of listed) {
+    try {
+      const one = parsePrivateDestinations(entry);
+      allow.names.push(...one.names);
+      allow.ranges.push(...one.ranges);
+    } catch {
+      // not one the board would have started with
+    }
+  }
+  if (isAddress(host)) return refuseDestination(host, allow) ? "refused" : null;
+  const looks = host === "localhost" || !host.includes(".") || LOCAL_SUFFIXES.some((s) => host.endsWith(s));
+  return looks && !nameListed(host, allow) ? "unless-listed" : null;
+}
+
+/** The consent page the board names, only when it is a web page: a script URL would run in this page. */
+export function consentUrl(url: string): string {
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(url);
+  } catch {
+    // not a URL at all
+  }
+  if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:"))
+    throw new Error("The board named a consent page that is not a web page; nothing was opened.");
+  return parsed.toString();
+}
+
+/** What the operator's list is, for a person to read; the company's own entries say so. */
+function listedPhrase(listed: readonly string[], own: readonly string[] = []): string {
+  return listed.length
+    ? listed.map((e) => (own.includes(e) ? `${e} (given to this company)` : e)).join(" · ")
+    : "none";
+}
+
+/** Under a URL the board refuses, or would if its name resolves privately: what this board reaches, and who changes it. */
+function PrivateHint({
+  flag,
+  listed,
+  own,
+}: {
+  flag: "refused" | "unless-listed";
+  listed: readonly string[];
+  /** The company's own entries among them, marked as such. */
+  own?: readonly string[];
+}) {
+  return (
+    <span className="hint" style={{ color: "var(--warn-ink)" }}>
+      {flag === "refused"
+        ? "The board refuses this address: it is not public, and no private destination its operator lists covers it."
+        : "This name looks private. If it resolves to a private address, the board refuses it unless its operator lists the name, or a range its address is in."}{" "}
+      Private destinations here: {listedPhrase(listed, own)} (board.privateDestinations on the chart, or
+      ROSTERDOCK_PRIVATE_DESTINATIONS).
+    </span>
+  );
+}
+
 function AddMcpForm({
   catalog,
   oauthOffered,
   stdioCommands,
+  privateDestinations,
+  ownPrivateDestinations,
   onCreate,
   onSetSecret,
 }: {
@@ -123,6 +253,10 @@ function AddMcpForm({
   oauthOffered: boolean;
   /** The command lines the board runs for stdio connections; undefined until the board says. */
   stdioCommands?: string[];
+  /** The private destinations the board reaches; undefined until the board says. */
+  privateDestinations?: string[];
+  /** Of those, the company's own. */
+  ownPrivateDestinations?: string[];
   /** Resolves true when the connection was made; the form then clears. */
   onCreate(input: CreateConnectionInput): Promise<boolean>;
   /** Set the credential's value under its name first, when one was typed; absent without a secret store. */
@@ -146,6 +280,9 @@ function AddMcpForm({
   /** A stdio server runs inside the board, so only a command line the operator lists. */
   const stdioRefused =
     transport === "stdio" && stdioCommands !== undefined && !stdioListed(stdioCommands, command);
+  /** The server's address is refused, or would be if its name resolves privately. */
+  const privateNote =
+    transport === "http" && privateDestinations !== undefined ? privateFlag(url, privateDestinations) : null;
   /** The name a typed value would be set under: the client secret's for OAuth, else the credential's. */
   const secretTarget = byOAuth
     ? clientId.trim()
@@ -220,7 +357,11 @@ function AddMcpForm({
                   : stdioListed(stdioCommands, e.commandExample ?? "")
                     ? " · runs on this board"
                     : " · its command must be one the operator allows"
-                : ""}
+                : e.transport === "http" &&
+                    privateDestinations &&
+                    privateFlag(e.urlExample ?? "", privateDestinations)
+                  ? " · usually on a private address, which the operator must allow"
+                  : ""}
             </option>
           ))}
         </select>
@@ -264,6 +405,9 @@ function AddMcpForm({
           </datalist>
         </Field>
       )}
+      {privateNote ? (
+        <PrivateHint flag={privateNote} listed={privateDestinations ?? []} own={ownPrivateDestinations} />
+      ) : null}
       {stdioRefused ? (
         <span className="hint" style={{ color: "var(--warn-ink)" }}>
           {stdioCommands?.length
@@ -339,10 +483,16 @@ function AddMcpForm({
 }
 
 function AddOpenApiForm({
+  privateDestinations,
+  ownPrivateDestinations,
   onPreview,
   onCreate,
   onSetSecret,
 }: {
+  /** The private destinations the board reaches; undefined until the board says. */
+  privateDestinations?: string[];
+  /** Of those, the company's own. */
+  ownPrivateDestinations?: string[];
   onPreview(spec: string): Promise<OpenApiScan>;
   /** Resolves true when the connection was made; the form then clears. */
   onCreate(input: CreateOpenApiConnectionInput): Promise<boolean>;
@@ -439,6 +589,13 @@ function AddOpenApiForm({
             style={{ width: 240 }}
           />
         </Field>
+        {privateDestinations && privateFlag(url, privateDestinations) ? (
+          <PrivateHint
+            flag={privateFlag(url, privateDestinations)!}
+            listed={privateDestinations}
+            own={ownPrivateDestinations}
+          />
+        ) : null}
         <Field label="Credential env var NAME">
           <input
             value={authEnvName}
@@ -524,6 +681,70 @@ function AddOpenApiForm({
         </div>
       ) : null}
     </form>
+  );
+}
+
+/** The web connection: the board's own fetch, one per company, with the company's list of web domains. */
+export function AddWebForm({
+  existing,
+  offline,
+  onCreate,
+}: {
+  existing: Connection | undefined;
+  /** The operator keeps this board off the web. */
+  offline: boolean;
+  /** Resolves true when the connection was made; the form then clears. */
+  onCreate(input: CreateConnectionInput): Promise<boolean>;
+}) {
+  const [name, setName] = useState("web");
+  const [domains, setDomains] = useState("");
+  const [busy, setBusy] = useState(false);
+  const parsed = parseDomains(domains);
+  const submit = async (ev: FormEvent) => {
+    ev.preventDefault();
+    if (!name.trim() || parsed.bad !== null) return;
+    setBusy(true);
+    try {
+      if (await onCreate({ name: name.trim(), kind: "web", domains: parsed.domains })) setDomains("");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="hint">
+        The board reads public web pages for the teammates you grant it to: http and https only, every address
+        checked, every page recorded in Activity (the address, the status, the size, never what it says).
+        Teammates call it as a read; it never writes. A department and a client can narrow its sites, never
+        widen them.
+        {offline ? " This board's operator keeps it off the web, so for now it reads no page." : ""}
+      </span>
+      {existing ? (
+        <span className="hint">
+          This company has its web connection: {existing.name}. Its sites are on its card above.
+        </span>
+      ) : (
+        <form className="fields" onSubmit={submit}>
+          <Field label="Name" hint="Toolboxes use it">
+            <input value={name} onChange={(e) => setName(e.target.value)} style={{ width: 120 }} />
+          </Field>
+          <Field label="Sites" hint="Domains, each with the sites under it; empty for any public site">
+            <input
+              value={domains}
+              onChange={(e) => setDomains(e.target.value)}
+              placeholder="gong.io, developers.hubspot.com"
+              className="mono"
+              style={{ width: 280 }}
+            />
+          </Field>
+          {parsed.bad !== null ? <Pill tone="bad">{`${parsed.bad} is not a domain`}</Pill> : null}
+          <Button type="submit" variant="primary" disabled={busy || !name.trim() || parsed.bad !== null}>
+            <Plug size={14} />
+            <span>Add the web connection</span>
+          </Button>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -639,11 +860,77 @@ function SecretsSection({
   );
 }
 
+/** A connection's tools only the server calls read-only, each with a person's confirmation to give. */
+function HeldReads({
+  connection,
+  held,
+  canEdit,
+  onConfirm,
+}: {
+  connection: string;
+  held: ConnectionTool[];
+  canEdit: boolean;
+  onConfirm(names: string[]): Promise<unknown>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const confirm = async (names: string[]) => {
+    setBusy(true);
+    try {
+      await onConfirm(names);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const one = held.length === 1;
+  return (
+    <div className="flex flex-col gap-1.5 rounded-[6px] border border-border px-2.5 py-2 text-[12px]">
+      <span>
+        <span className="font-semibold">
+          {connection} says {one ? "this tool only reads" : `these ${held.length} tools only read`}.
+        </span>{" "}
+        <span className="text-muted">
+          Neither {one ? "its name" : "their names"} nor the catalog says so, so a call to{" "}
+          {one ? "it" : "one"} waits for approval as a write until{" "}
+          {canEdit ? "you confirm" : "an owner or admin confirms"} it reads.
+          {canEdit ? " Confirm a tool once you are sure it changes nothing." : ""}
+        </span>
+      </span>
+      <div className="chips">
+        {held.map((t) => (
+          <span
+            key={t.name}
+            className="flex items-center gap-1.5 rounded-[6px] border border-border px-2 py-1"
+            title={t.description || undefined}
+          >
+            <span className="mono">{t.name}</span>
+            {canEdit ? (
+              <button
+                className="link"
+                aria-label={`Confirm ${t.name} as read`}
+                disabled={busy}
+                onClick={() => void confirm([t.name])}
+              >
+                Confirm as read
+              </button>
+            ) : null}
+          </span>
+        ))}
+        {canEdit && !one ? (
+          <Button size="sm" disabled={busy} onClick={() => void confirm(held.map((t) => t.name))}>
+            Confirm all {held.length} as reads
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function ConnectionsPanel(p: ConnectionsPanelProps) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>(p.initialCatalog ?? []);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
-  const [kind, setKind] = useState<"mcp" | "openapi">("mcp");
+  const [kind, setKind] = useState<"mcp" | "openapi" | "web">("mcp");
+  const web = p.connections.find((c) => c.kind === "web");
   useEffect(() => {
     if (p.initialCatalog) return;
     void p.loadCatalog().then(setCatalog, (err: Error) => setError(err.message));
@@ -674,6 +961,9 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
           Approvals. Credentials are env var names: this company&apos;s secrets, or names the board shares
           {p.features?.sharedEnvNames ? ` (${p.features.sharedEnvNames.join(", ") || "none"})` : ""}; the rest
           of the board&apos;s environment never reaches a company, and no value is stored here.
+          {p.features?.privateDestinations
+            ? ` A connection reaches public addresses, and of private ones only those this board's operator lists: ${listedPhrase(p.features.privateDestinations, p.features.companyPrivateDestinations)}.${p.companyId ? ` The operator can list one for this company alone by its id, ${p.companyId}.` : ""}`
+            : ""}
           {p.features?.oauth
             ? " A value can be set under its name below; it goes into the board's secret store and is never shown again. A connection may authorise by OAuth instead; its tokens live in the same store."
             : ""}
@@ -689,7 +979,7 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
               </button>
               <Pill tone={c.enabled ? "ok" : "muted"}>{c.enabled ? "on" : "off"}</Pill>
               <span className="text-[12px] text-muted">{connectionSummary(c)}</span>
-              {c.authEnvName ? (
+              {c.kind === "web" ? null : c.authEnvName ? (
                 <Tip text="Credential by name">
                   <span className="tool">{c.authEnvName}</span>
                 </Tip>
@@ -707,7 +997,7 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
                         variant={c.oauth.authorizedAt ? "ghost" : "accent"}
                         onClick={wrap(async () => {
                           const { url } = await p.startOAuth(c.id);
-                          window.location.assign(url);
+                          window.location.assign(consentUrl(url));
                         })}
                       >
                         <KeyRound size={14} />
@@ -748,13 +1038,41 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
                 {checkLine(c)}
               </span>
             ) : null}
+            {heldReads(c).length ? (
+              <HeldReads
+                connection={c.name}
+                held={heldReads(c)}
+                canEdit={p.canEdit}
+                onConfirm={(names) => wrap(() => p.updateConnection(c.id, confirmAsRead(names)))()}
+              />
+            ) : null}
+            {c.kind === "web" ? (
+              <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                <span className="text-muted">Sites</span>
+                {p.canEdit ? (
+                  <DomainsField
+                    label={`${c.name} sites`}
+                    value={webDomainsOf(c)}
+                    placeholder="any public site"
+                    onSave={(domains) => wrap(() => p.updateConnection(c.id, { domains }))()}
+                  />
+                ) : (
+                  <span>{domainsPhrase(webDomainsOf(c))}</span>
+                )}
+                {p.features?.web === false ? (
+                  <span style={{ color: "var(--warn-ink)" }}>
+                    This board&apos;s operator keeps it off the web: it reads no page.
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
             {open === c.id ? (
               <div className="chips">
                 {c.tools.map((t) => (
                   <span key={t.name} className="chips" style={{ gap: 2 }}>
                     <button
                       className="tool"
-                      title={`${t.description || t.name}${t.source === "person" ? " · set by a person" : ` · ${t.source}`}${t.off ? " · switched off by a person; refused for every teammate" : p.canEdit ? ". Click to flip." : ""}`}
+                      title={`${t.description || t.name} · ${sourceNote(t)}${t.off ? " · switched off by a person; refused for every teammate" : p.canEdit ? ". Click to flip." : ""}`}
                       disabled={!p.canEdit || !!t.off}
                       onClick={wrap(() =>
                         p.updateConnection(c.id, { tools: [{ name: t.name, write: !t.write }] }),
@@ -813,17 +1131,30 @@ export function ConnectionsPanel(p: ConnectionsPanelProps) {
             >
               OpenAPI service
             </Button>
+            <Button size="sm" variant={kind === "web" ? "primary" : "ghost"} onClick={() => setKind("web")}>
+              Web, built in
+            </Button>
           </div>
-          {kind === "mcp" ? (
+          {kind === "web" ? (
+            <AddWebForm
+              existing={web}
+              offline={p.features?.web === false}
+              onCreate={(i) => wrap(() => p.createConnection(i))()}
+            />
+          ) : kind === "mcp" ? (
             <AddMcpForm
               catalog={catalog}
               oauthOffered={!!p.features?.oauth}
               stdioCommands={p.features?.stdioCommands}
+              privateDestinations={p.features?.privateDestinations}
+              ownPrivateDestinations={p.features?.companyPrivateDestinations}
               onCreate={(i) => wrap(() => p.createConnection(i))()}
               onSetSecret={setSecret}
             />
           ) : (
             <AddOpenApiForm
+              privateDestinations={p.features?.privateDestinations}
+              ownPrivateDestinations={p.features?.companyPrivateDestinations}
               onPreview={p.previewOpenApi}
               onCreate={(i) => wrap(() => p.createOpenApiConnection(i))()}
               onSetSecret={setSecret}

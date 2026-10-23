@@ -1,5 +1,7 @@
 node_modules
 dist
+# Other checkouts of this repository (Claude Code worktrees) nested inside it
+.claude/worktrees
 docs/*.html
 pnpm-lock.yaml
 deploy/helm/**/templates

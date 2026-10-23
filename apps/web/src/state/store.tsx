@@ -29,7 +29,7 @@ export type View =
 
 /** The Settings page, one tab at a time. */
 export type SettingsTab =
-  "prices" | "peter" | "style" | "connections" | "notifications" | "drift" | "templates";
+  "prices" | "models" | "peter" | "style" | "connections" | "notifications" | "drift" | "templates";
 
 export interface Ui {
   view: View;

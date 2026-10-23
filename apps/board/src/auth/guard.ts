@@ -1,7 +1,8 @@
 // The single role guard. Every route under /api/companies/:companyId declares
 // `config.action`; this hook resolves the caller's role in that company and
-// consults the shared permission matrix. A mutating company route without an
-// action is a programming error and fails closed with 500.
+// consults the shared permission matrix, for the route and for any body field
+// the route reserves to a further action (`config.fieldActions`). A mutating
+// company route without an action is a programming error and fails closed with 500.
 
 import { can, type Action, type Role } from "@rosterdock/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -13,6 +14,8 @@ declare module "fastify" {
   interface FastifyContextConfig {
     /** Permission required in the route's company. */
     action?: Action;
+    /** Body fields that need a further permission: a caller without it may not name them. */
+    fieldActions?: Readonly<Record<string, Action>>;
     /** No authentication needed. */
     public?: boolean;
   }
@@ -52,6 +55,11 @@ export function registerGuard(app: FastifyInstance, db: Db): void {
     const role = await roleInCompany(db, req.principal, companyId);
     if (!role) throw new HttpError(403, "not a member of this company");
     if (!can(role, config.action)) throw new HttpError(403, `role ${role} may not ${config.action}`);
+    const body = req.body;
+    if (config.fieldActions && body && typeof body === "object")
+      for (const [field, action] of Object.entries(config.fieldActions))
+        if (Object.hasOwn(body, field) && !can(role, action))
+          throw new HttpError(403, `role ${role} may not ${action} (${field})`);
     req.companyRole = role;
     req.companyId = companyId;
   });

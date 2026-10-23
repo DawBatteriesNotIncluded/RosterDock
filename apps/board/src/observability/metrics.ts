@@ -6,7 +6,7 @@
 // bounded (no company ids, no task ids); the per-company view is the Costs page.
 
 import { timingSafeEqual } from "node:crypto";
-import { TASK_STATUSES, type EventRecord } from "@rosterdock/shared";
+import { bearerToken, TASK_STATUSES, type EventRecord } from "@rosterdock/shared";
 import type { FastifyInstance } from "fastify";
 import type { Db } from "../db/pool.js";
 import type { EventBus } from "../events/bus.js";
@@ -249,8 +249,7 @@ export function registerMetrics(
   // Open on the board's port by default (cluster-internal); with a token, only a scraper that presents it.
   app.get("/metrics", { config: { public: true } }, async (req, reply) => {
     if (opts.token) {
-      const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "");
-      const given = Buffer.from(m?.[1]?.trim() ?? "");
+      const given = Buffer.from(bearerToken(req.headers.authorization) ?? "");
       const want = Buffer.from(opts.token);
       if (given.length !== want.length || !timingSafeEqual(given, want)) {
         reply.code(401).header("www-authenticate", 'Bearer realm="metrics"');

@@ -13,6 +13,17 @@ export interface ModelPrice {
   seatPriceMonth: number | null;
 }
 
+/** The stub engine calls no model: its runs' usage counts under this name. */
+export const STUB_MODEL = "stub";
+
+/**
+ * The model a run's usage counts under: the one it ran on, except on the stub engine, which calls none and
+ * counts under its own name, so Costs never files (or prices) a stub run as the teammate's model.
+ */
+export function usageModel(engine: string, model: string): string {
+  return engine === "stub" ? STUB_MODEL : model;
+}
+
 export function totalTokens(u: Partial<RunUsage>): number {
   return (u.inputTokens ?? 0) + (u.outputTokens ?? 0) + (u.cacheReadTokens ?? 0) + (u.cacheWriteTokens ?? 0);
 }

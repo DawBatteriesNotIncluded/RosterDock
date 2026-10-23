@@ -70,8 +70,15 @@ spec:
               value: {{ ternary "1" "0" .Values.board.devLogin | quote }}
             - name: ROSTERDOCK_COOKIE_SECURE
               value: "1"
+            - name: ROSTERDOCK_SIGNIN_RATE_LIMIT
+              value: {{ .Values.board.signInRateLimit | quote }}
             {{- with .Values.board.companyCreators }}
             - name: ROSTERDOCK_COMPANY_CREATORS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.board.modelProviders }}
+            # The model provider kinds a company may add, and board when this board lends its own models.
+            - name: ROSTERDOCK_MODEL_PROVIDERS
               value: {{ join "," . | quote }}
             {{- end }}
             {{- if .Values.board.corsOrigin }}
@@ -92,6 +99,33 @@ spec:
             # The only command lines a stdio connection may start in this pod.
             - name: ROSTERDOCK_STDIO_COMMANDS
               value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.board.privateDestinations }}
+            {{- $entries := list }}
+            {{- range . }}
+            {{- if kindIs "map" . }}
+            {{- $company := toString (required "a board.privateDestinations entry with a destination names its company" .company) }}
+            {{- $destinations := required "a board.privateDestinations entry with a company names its destination" .destination }}
+            {{- if regexMatch "[,=]" $company }}
+            {{- fail (printf "board.privateDestinations: company %q holds a comma or =; give its id alone" $company) }}
+            {{- end }}
+            {{- range (kindIs "slice" $destinations | ternary $destinations (list $destinations)) }}
+            {{- if regexMatch "[,=]" (toString .) }}
+            {{- fail (printf "board.privateDestinations: destination %q holds a comma or =; give one per entry, or a list" (toString .)) }}
+            {{- end }}
+            {{- $entries = append $entries (printf "%s=%s" $company (toString .)) }}
+            {{- end }}
+            {{- else }}
+            {{- if and (contains "=" (toString .)) (contains "," (toString .)) }}
+            {{- fail (printf "board.privateDestinations: %q holds a company's entry and more in one string, where the rest would go to every company; write one entry per item, or use { company, destination }" (toString .)) }}
+            {{- end }}
+            {{- $entries = append $entries (toString .) }}
+            {{- end }}
+            {{- end }}
+            # The private destinations a company may make the board reach; everything else it chooses is public.
+            # An entry <company id>=<destination> is that company's alone.
+            - name: ROSTERDOCK_PRIVATE_DESTINATIONS
+              value: {{ join "," $entries | quote }}
             {{- end }}
             {{- if .Values.board.oauth.enabled }}
             - name: ROSTERDOCK_SECRET_STORE
@@ -179,6 +213,10 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.board.githubSecret.name }}
                   key: {{ .Values.board.githubSecret.key }}
+            {{- if .Values.board.githubApi }}
+            - name: ROSTERDOCK_GITHUB_API
+              value: {{ .Values.board.githubApi | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.board.gitlabSecret.name }}
             - name: ROSTERDOCK_GITLAB_TOKEN
@@ -232,6 +270,13 @@ spec:
                   name: {{ $.Values.board.plannerSecret.name }}
                   key: {{ . }}
                   optional: true
+            {{- end }}
+            {{- if not .Values.board.fetchSources }}
+            - name: ROSTERDOCK_FETCH_SOURCES
+              value: "0"
+            {{- end }}
+            {{- with .Values.board.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- if .Values.board.connectionsSecret.name }}
           envFrom:
@@ -365,7 +410,9 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.board.autoscaling.targetCPUUtilizationPercentage }}
 {{- end }}
-{{- if .Values.board.podDisruptionBudget.enabled }}
+{{- /* Over a single board, minAvailable 1 refuses every eviction and a node drain hangs: no budget then. */}}
+{{- $manyBoards := and (not .Values.board.persistence.enabled) (or .Values.board.autoscaling.enabled (gt (int .Values.board.replicas) 1)) }}
+{{- if and .Values.board.podDisruptionBudget.enabled $manyBoards }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
