@@ -1,4 +1,4 @@
-// Settings, one tab at a time: prices and budgets, how Peter thinks,
+// Settings, one tab at a time: prices and budgets, the company's model providers, how Peter thinks,
 // connections (with the secrets note and the client policies), notifications,
 // drift, templates.
 // Secrets never appear here; the platform knows them by name only.
@@ -29,6 +29,7 @@ import { DEFAULT_MODEL } from "../lib/format.ts";
 import type { SettingsTab } from "../state/store.tsx";
 import { ClientPoliciesPanel } from "./ClientPoliciesPanel.tsx";
 import { ConnectionsPanel, type ConnectionsPanelProps } from "./ConnectionsPanel.tsx";
+import { ModelsPanel, type ModelsPanelProps } from "./ModelsPanel.tsx";
 import { fmtTokens } from "./RunPanel.tsx";
 import { money } from "./CostsView.tsx";
 
@@ -48,6 +49,8 @@ export interface SettingsViewProps {
   deleteBudget(id: string): Promise<void>;
   initialPrices?: ModelPrice[];
   initialBudgets?: Budget[];
+  /** The company's own model providers (Settings > Models). */
+  models: Omit<ModelsPanelProps, "data" | "canEdit">;
   // Governed tools (M5)
   connections: Omit<ConnectionsPanelProps, "connections" | "canEdit">;
   saveClientPolicy(projectId: string, policy: Project["clientPolicy"]): Promise<void>;
@@ -71,6 +74,7 @@ export interface SettingsViewProps {
 
 export const SETTINGS_TABS: { value: SettingsTab; label: string }[] = [
   { value: "prices", label: "Prices and budgets" },
+  { value: "models", label: "Models" },
   { value: "peter", label: "Peter" },
   { value: "style", label: "Style" },
   { value: "connections", label: "Connections" },
@@ -1065,6 +1069,7 @@ export function SettingsView(p: SettingsViewProps) {
           <div className="content">
             <div className="company scroll" style={{ gap: 16 }}>
               {p.tab === "prices" ? <PricesTab {...p} /> : null}
+              {p.tab === "models" ? <ModelsPanel {...p.models} data={p.data} canEdit={p.canEdit} /> : null}
               {p.tab === "style" ? (
                 <StyleCard
                   canEdit={p.canEdit}

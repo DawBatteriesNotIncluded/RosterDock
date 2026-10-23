@@ -25,6 +25,10 @@
     "./address": {
       "types": "./dist/address.d.ts",
       "default": "./dist/address.js"
+    },
+    "./providers": {
+      "types": "./dist/provider-kinds.d.ts",
+      "default": "./dist/provider-kinds.js"
     }
   },
   "scripts": {

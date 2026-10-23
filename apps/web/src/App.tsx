@@ -559,6 +559,17 @@ export function App() {
       loadBudgets={() => client.budgets(cid)}
       saveBudget={(input) => run(() => client.saveBudget(cid, input), "Budget set.")}
       deleteBudget={(id) => run(() => client.deleteBudget(cid, id), "Budget removed.")}
+      models={{
+        features,
+        load: () => client.modelProviders(cid),
+        loadSecrets: () => client.secrets(cid),
+        setSecret: (name, value) => run(() => client.setNewSecret(cid, name, value), `${name} set.`),
+        replaceSecret: (name, value) => run(() => client.setSecret(cid, name, value), `${name} set.`),
+        checkNew: (input) => run(() => client.checkNewModelProvider(cid, input)),
+        create: (input) => run(() => client.createModelProvider(cid, input), `${input.label} added.`),
+        update: (id, input) => run(() => client.updateModelProvider(cid, id, input)),
+        remove: (id) => run(() => client.deleteModelProvider(cid, id), "Provider removed."),
+      }}
       connections={{
         loadCatalog: () => client.catalog(),
         features,

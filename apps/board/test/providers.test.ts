@@ -280,15 +280,24 @@ describe("model providers", () => {
     });
     expect(refused.status).toBe(400);
     expect(JSON.stringify(refused.body)).not.toContain(value);
-    // Anywhere else in the body, the raw-secret guard refuses it.
+    // In a label, the label's own rule refuses it; anywhere else, the raw-secret guard does.
     const inLabel = await api.post(`${base}/model-providers`, {
       kind: "anthropic",
       name: "raw",
       label: value,
       credentials: { apiKey: "MODELS_RAW_KEY" },
     });
-    expect(inLabel.status).toBe(422);
+    expect(inLabel.status).toBe(400);
     expect(JSON.stringify(inLabel.body)).not.toContain(value);
+    const asModel = await api.post(`${base}/model-providers`, {
+      kind: "anthropic",
+      name: "raw",
+      label: "Raw",
+      credentials: { apiKey: "MODELS_RAW_KEY" },
+      models: [{ id: value, family: "claude" }],
+    });
+    expect(asModel.status).toBe(422);
+    expect(JSON.stringify(asModel.body)).not.toContain(value);
 
     // A key shaped like a name: an Azure key is 32 hex characters, and an AWS key id is all capitals.
     for (const key of ["a3f9c2e1b4d5f60718293a4b5c6d7e8f", "AKIAABCDEFGHIJKLMNOP"]) {
@@ -445,6 +454,39 @@ describe("model providers", () => {
     );
     expect(listed.status).toBe(201);
     expect(listed.body.endpoint).toBe("http://vllm.internal.test:8000/v1");
+  });
+
+  it("answers whether a provider would be added, writing nothing", async () => {
+    const { api, base } = await seedCompany(board, "mp9@example.com");
+    const body = {
+      kind: "anthropic",
+      name: "acme",
+      label: "Acme",
+      credentials: { apiKey: "MODELS_ACME_KEY" },
+    };
+    const check = (b: unknown) => api.post(`${base}/model-providers/check-new`, b);
+    expect((await check(body)).body).toEqual({ ok: true });
+    expect((await api.get(`${base}/model-providers`)).body.providers).toEqual([]);
+    expect((await providerEvents(api, base)).length).toBe(0);
+    // Refused as adding it would be: a private endpoint, a board-own name, a value, a name taken.
+    const privateEndpoint = await check({
+      kind: "openai_compatible",
+      name: "l",
+      label: "L",
+      endpoint: "https://vllm.internal.test/v1",
+    });
+    expect(privateEndpoint.status).toBe(422);
+    expect((await check({ ...body, credentials: { apiKey: "ANTHROPIC_API_KEY" } })).status).toBe(403);
+    expect(
+      (await check({ ...body, credentials: { apiKey: "a3f9c2e1b4d5f60718293a4b5c6d7e8f" } })).status,
+    ).toBe(400);
+    expect((await api.post(`${base}/model-providers`, body)).status).toBe(201);
+    expect((await check(body)).status).toBe(409);
+    // Only those who may add one may ask.
+    await api.post(`${base}/members`, { email: "mp9-viewer@example.com", role: "viewer" });
+    const viewer = board.api((await board.login("mp9-viewer@example.com")).token);
+    expect((await viewer.post(`${base}/model-providers/check-new`, body)).status).toBe(403);
+    expect((await providerEvents(api, base)).length).toBe(1);
   });
 
   it("checks endpoints against the company's own private destinations, and no other company's", async () => {

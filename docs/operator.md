@@ -274,13 +274,25 @@ networkPolicy:
 
 ## Company model providers
 
-A company can keep its own model accounts as providers (`/api/companies/:companyId/model-providers`):
-Anthropic, OpenAI, Azure OpenAI, Amazon Bedrock, or a server that speaks OpenAI's API (vLLM, Ollama,
-LiteLLM). A provider holds its endpoint or region, the models it serves, and the env var names of its
-credentials, never a value: a company sets a value once, write-only, under Settings > Connections > Secrets,
-or names one you share (`board.sharedEnvNames`). Owners and admins add, change and remove providers; everyone
-in the company sees them by name.
+A company can keep its own model accounts as providers, under Settings > Models
+(`/api/companies/:companyId/model-providers`): Anthropic, OpenAI, Azure OpenAI, Amazon Bedrock, or a server
+that speaks OpenAI's API (vLLM, Ollama, LiteLLM). A provider holds its endpoint or region, the models it
+serves, and the env var names of its credentials, never a value: a company pastes a key once, write-only, into
+its secrets (the Models form puts it under a name such as `MODELS_ACME_KEY`, and Settings > Connections >
+Secrets lists it), picks a secret it set before, or names one you share (`board.sharedEnvNames`). Pasting
+needs a secret store (`board.oauth.enabled`). Owners and admins add, change and remove providers; everyone in
+the company sees them by name.
 
+- The Models form asks the board first whether a provider would be added
+  (`POST /api/companies/:companyId/model-providers/check-new`, which writes nothing), then sets a pasted key
+  only under a name not set yet (`PUT /secrets/:name` with `If-None-Match: *`, refused with 409 otherwise),
+  then saves the provider. A key never replaces another one, nor hides a name you share, and a provider the
+  board refuses at its check leaves no key. One refused after the key is set (someone added the same name a
+  moment before) leaves the key under its name, listed under Settings > Connections > Secrets.
+- A provider's card changes its label, its endpoint or region and its key's name, and sets the value under its
+  key's name, replacing it for everything that names that secret, as Settings > Connections > Secrets does.
+  Removing asks first, and says the key stays in the company's secrets; Archive keeps everything. Without a
+  secret store a company pastes no key: it names one you share, and the page says so.
 - `board.modelProviders` (`ROSTERDOCK_MODEL_PROVIDERS`) lists the kinds a company may add: `anthropic`,
   `openai`, `azure_openai`, `bedrock`, `openai_compatible`, and `board`, which lends the board's own models to
   every company. Empty: all of them. `[board]` alone: no company providers. The board does not start on an

@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   assertNoRawSecrets,
   azureEndpoint,
+  labelLooksLikeKey,
+  modelIdProblem,
   nameLooksLikeKey,
+  providerNameRefusal,
   compatibleEndpoint,
   engineFor,
   ModelProviderSchema,
@@ -181,6 +184,64 @@ describe("a provider's schema", () => {
     ).toBe(false);
   });
 
+  it("refuses a name or a label that is a key typed in the wrong field", () => {
+    expect(providerNameRefusal("acme-azure")).toBeNull();
+    expect(providerNameRefusal("Acme")).toMatch(/lowercase/);
+    expect(providerNameRefusal("a3f9c2e1b4d5f60718293a4b5c6d7e8f")).toBe(
+      "a short name; this looks like a key",
+    );
+    expect(labelLooksLikeKey("Acme Azure (prod)")).toBe(false);
+    expect(labelLooksLikeKey("Production-Claude-Opus-Deployment-2026")).toBe(false);
+    expect(labelLooksLikeKey("Acme a3f9c2e1b4d5f60718293a4b5c6d7e8f")).toBe(true);
+    expect(labelLooksLikeKey("Acme a3f9c2e1-b4d5-4c6d-8e7f-0123456789ab")).toBe(true);
+    // Labels people write: long words, addresses, brackets, slashes, other scripts.
+    for (const label of [
+      "Azure Entwicklungsumgebung",
+      "Acme (acme-prod.openai.azure.com)",
+      "Owner: dana.lee@acme.com",
+      "SK-Telecom Azure",
+      "xoxo-labs vLLM",
+      "Production/Development",
+      "生産環境のアズールオープンエーアイ接続設定用プロバイダー",
+      "gpt4o-prod-eastus2-deployment",
+    ])
+      expect(labelLooksLikeKey(label), label).toBe(false);
+    expect(providerNameRefusal("acme-internationalization")).toBeNull();
+    expect(providerNameRefusal("deepseekr1distillqwen32b")).toBeNull();
+    expect(providerNameRefusal("a3f9c2e1-b4d5-4c6d-8e7f-0123456789ab")).toBe(
+      "a short name; this looks like a key",
+    );
+    expect(nameLooksLikeKey("githubPersonalAccessToken")).toBe(false);
+    expect(nameLooksLikeKey("DEEPSEEKR1DISTILLQWEN32B_KEY")).toBe(false);
+    // A model's name in a label is a word.
+    for (const label of [
+      "DeepSeekR1DistillQwen32B on vLLM",
+      "Acme Mixtral8x7BInstructV01",
+      "Entwicklungsumgebungsverwaltung2026",
+    ])
+      expect(labelLooksLikeKey(label), label).toBe(false);
+  });
+
+  it("knows keys with no digits, keys with slashes, and keys by their prefix", () => {
+    // Built here, so the repository holds no string a secret scanner would stop a push for.
+    const hf = ["hf", "AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh"].join("_");
+    expect(nameLooksLikeKey(hf)).toBe(true);
+    expect(labelLooksLikeKey(`Router ${hf}`)).toBe(true);
+    // Mixed case and no digits, flipping as a key's does.
+    expect(nameLooksLikeKey("aBcDeFgHiJkLmNoPqRsTuVwXyZ")).toBe(true);
+    // AWS's documented example secret access key: base64, with slashes.
+    expect(labelLooksLikeKey("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")).toBe(true);
+    expect(labelLooksLikeKey("sk-ant-api03-abcdefghijklmnopqrstuvwxyz")).toBe(true);
+    const r = parse({
+      kind: "openai",
+      name: "o",
+      label: "a3f9c2e1b4d5f60718293a4b5c6d7e8f",
+      credentials: { apiKey: "K" },
+    });
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).not.toContain("a3f9c2e1b4d5f60718293a4b5c6d7e8f");
+  });
+
   it("takes a name of one long word in one case: the names the paste flow builds", () => {
     expect(nameLooksLikeKey("MODELS_ACMEPRODUCTIONOPENAI_KEY")).toBe(false);
     expect(nameLooksLikeKey("AZUREOPENAIPRODUCTIONKEY")).toBe(false);
@@ -190,6 +251,38 @@ describe("a provider's schema", () => {
     expect(nameLooksLikeKey("aBcDeFgHiJkLmNoPqRsTuVwXyZ")).toBe(true);
     // Built here, so the repository holds no string a secret scanner would stop a push for.
     expect(nameLooksLikeKey(["hf", "AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh"].join("_"))).toBe(true);
+  });
+
+  it("knows the keys model providers issue, by prefix or by how random they read, in a label or a name", () => {
+    // Built here, so the repository holds no string a secret scanner would stop a push for.
+    const run = (n: number) => "mR7xQ2pL9vN4kT8wZ1sJ5bH3cY6dG0aF8eK2uB4iO6".repeat(3).slice(0, n);
+    for (const key of [
+      `gsk_${run(52)}`,
+      `pplx-${run(48)}`,
+      `csk-${run(48)}`,
+      `nvapi-${run(64)}`,
+      `fw_${run(24)}`,
+      run(32), // Mistral's: no prefix, 32 random characters
+    ]) {
+      expect(labelLooksLikeKey(`Acme ${key}`), key).toBe(true);
+      expect(nameLooksLikeKey(key.replace(/-/g, "_")), key).toBe(true);
+    }
+    // Identifiers people write, a digit in them or not, read as words.
+    for (const name of ["notionIntegrationV2Secret", "hubspotPrivateApp2Token", "AzureOpenAiKeyEastUs2"])
+      expect(nameLooksLikeKey(name), name).toBe(false);
+    for (const label of ["Qwen25Coder32BInstructAWQ", "Llama31Nemotron70BInstructHF on vLLM"])
+      expect(labelLooksLikeKey(label), label).toBe(false);
+  });
+
+  it("says why a model id will not do, as the board would", () => {
+    expect(modelIdProblem("anthropic", "claude", "claude-opus-5.5", ["claude-opus-5-5"])).toBe(
+      "This model is on the list already.",
+    );
+    expect(modelIdProblem("openai", "openai", "gpt x", [])).toBe("A model id has no spaces.");
+    expect(modelIdProblem("bedrock", "openai", "gpt-oss-120b", [])).toMatch(/cross-Region inference profile/);
+    expect(modelIdProblem("bedrock", "openai", "global.openai.example-model", [])).toBeNull();
+    expect(modelIdProblem("openai", "claude", "claude-x", [])).toBe("OpenAI serves OpenAI models here.");
+    expect(modelIdProblem("anthropic", "claude", "", [])).toBe("Give the model's id.");
   });
 
   it("keeps a key out of a server's address, and an account id in it", () => {

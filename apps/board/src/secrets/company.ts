@@ -7,8 +7,8 @@
 // with every company (ROSTERDOCK_SHARED_ENV_NAMES), and from nothing else: the
 // rest of the board's environment (its database, its worker token) never
 // reaches a company.
-import type { ActorRef } from "@rosterdock/shared";
-import type { Db } from "../db/pool.js";
+import { nameLooksLikeKey, type ActorRef } from "@rosterdock/shared";
+import type { Db, Queryable } from "../db/pool.js";
 import { HttpError } from "../http-error.js";
 import { mutate } from "../mutate.js";
 import { companyEgress, type Egress } from "../web/egress.js";
@@ -100,7 +100,21 @@ function requireStore(store: SecretStore | null | undefined): SecretStore {
   return store;
 }
 
-/** Set (or replace) one value. The value goes to the store inside the transaction; the row and the event carry the name only. */
+/**
+ * One company's secrets are changed one at a time, whichever board replica serves the request: the store
+ * entry is read, changed and written whole, so two at once would lose one of them.
+ */
+async function holdCompanySecrets(client: Queryable, companyId: string): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtext('company_secrets:' || $1::text))", [companyId]);
+}
+
+/**
+ * Set (or replace) one value. The value goes to the store inside the transaction; the row and the event carry
+ * the name only. A new name that looks like a key is refused (it would be kept as one, in the row and the
+ * event); a name set before can always be set again. With `createOnly`, a name already set is refused (409)
+ * and its value left as it was, and so is a name the operator shares (`sharedEnvNames`), which this company's
+ * own value would hide from every connection.
+ */
 export async function setCompanySecret(
   db: Db,
   store: SecretStore | null | undefined,
@@ -108,22 +122,45 @@ export async function setCompanySecret(
   actor: ActorRef,
   name: string,
   value: string,
+  opts: { createOnly?: boolean; sharedEnvNames?: readonly string[] } = {},
 ): Promise<CompanySecretRow> {
   const s = requireStore(store);
   const entry = companySecretName(companyId);
   const { result } = await mutate(db, companyId, actor, async (ctx) => {
-    const existing = (await s.get(entry)) ?? {};
-    await s.put(entry, { ...existing, [name]: value });
+    await holdCompanySecrets(ctx.client, companyId);
+    const exists = !!(
+      await ctx.client.query("SELECT 1 FROM company_secrets WHERE company_id = $1 AND name = $2", [
+        companyId,
+        name,
+      ])
+    ).rowCount;
+    if (!exists && nameLooksLikeKey(name))
+      throw new HttpError(
+        400,
+        "name must be an env var NAME, such as MODELS_ACME_KEY; this looks like the key itself",
+      );
+    if (opts.createOnly && !exists && opts.sharedEnvNames?.includes(name))
+      throw new HttpError(
+        409,
+        `${name} is a name the operator shares with every company; give the key another name`,
+      );
     const row = (
       await ctx.client.query<CompanySecretRow>(
         `INSERT INTO company_secrets (company_id, name, updated_by_kind, updated_by_id)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (company_id, name)
-         DO UPDATE SET updated_at = now(), updated_by_kind = EXCLUDED.updated_by_kind, updated_by_id = EXCLUDED.updated_by_id
+         DO ${opts.createOnly ? "NOTHING" : "UPDATE SET updated_at = now(), updated_by_kind = EXCLUDED.updated_by_kind, updated_by_id = EXCLUDED.updated_by_id"}
          RETURNING *`,
         [companyId, name, actor.kind, actor.id],
       )
-    ).rows[0]!;
+    ).rows[0];
+    if (!row)
+      throw new HttpError(
+        409,
+        `${name} is already set for this company; use it as it is, or give the key another name`,
+      );
+    const existing = (await s.get(entry)) ?? {};
+    await s.put(entry, { ...existing, [name]: value });
     await ctx.emit("secret.set", { kind: "company", id: companyId }, { name, replaced: name in existing });
     return row;
   });
@@ -141,6 +178,7 @@ export async function deleteCompanySecret(
   const s = requireStore(store);
   const entry = companySecretName(companyId);
   await mutate(db, companyId, actor, async (ctx) => {
+    await holdCompanySecrets(ctx.client, companyId);
     const gone = await ctx.client.query(
       "DELETE FROM company_secrets WHERE company_id = $1 AND name = $2 RETURNING name",
       [companyId, name],

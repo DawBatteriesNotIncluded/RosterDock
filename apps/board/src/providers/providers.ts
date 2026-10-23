@@ -309,17 +309,36 @@ function isUniqueViolation(err: unknown): boolean {
   return (err as { code?: string }).code === "23505";
 }
 
+/**
+ * Every check a new provider must pass, without writing anything: what the operator offers, a name the
+ * company does not have yet, names that are not the board's own, an endpoint the board may reach. The add form
+ * asks this before it sets a pasted key, so a provider the board would refuse leaves no key behind.
+ */
+export async function checkNewProvider(
+  deps: ProviderDeps,
+  companyId: string,
+  input: ModelProvider,
+): Promise<ReturnType<typeof columns>> {
+  const refusal = kindRefusal(deps.policy, input.kind);
+  if (refusal) throw new HttpError(403, refusal);
+  const taken = await deps.db.query("SELECT 1 FROM model_providers WHERE company_id = $1 AND name = $2", [
+    companyId,
+    input.name,
+  ]);
+  if (taken.rowCount) throw conflict(`this company already has a provider named ${input.name}`);
+  const c = columns(input);
+  await assertCompanyEnvNames(deps.operator, companyId, Object.values(c.credentials));
+  await assertEndpoint(deps, companyId, c.endpoint);
+  return c;
+}
+
 export async function createProvider(
   deps: ProviderDeps,
   companyId: string,
   actor: ActorRef,
   input: ModelProvider,
 ): Promise<ProviderRow> {
-  const refusal = kindRefusal(deps.policy, input.kind);
-  if (refusal) throw new HttpError(403, refusal);
-  const c = columns(input);
-  await assertCompanyEnvNames(deps.operator, companyId, Object.values(c.credentials));
-  await assertEndpoint(deps, companyId, c.endpoint);
+  const c = await checkNewProvider(deps, companyId, input);
   try {
     const { result } = await mutate(deps.db, companyId, actor, async (ctx) => {
       const row = (
