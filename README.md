@@ -132,12 +132,19 @@ with a model; each company chooses in Settings > Peter.
 The worker image built from `apps/worker/Dockerfile` carries Codex; Claude Code's licence keeps it out of
 public images ([Engines on the worker](docs/install.md#engines-on-the-worker)).
 
-## On Kubernetes today
+## On Kubernetes
 
-Run `deploy/scripts/local-cluster.sh` (a kind cluster that stays) or `deploy/scripts/smoke.sh` (a throwaway
-install), or build the images and install `deploy/helm/rosterdock` with `image.registry` and `image.tag` set
-to where you pushed the images and the tag you gave them. Guides: [install](docs/install.md),
-[operator](docs/operator.md), [security](docs/security.md) and the [docs index](docs/README.md).
+A release's chart installs that release's images, against your Postgres and S3-compatible bucket:
+
+```bash
+helm upgrade --install rosterdock oci://ghcr.io/dawbatteriesnotincluded/charts/rosterdock --version 0.1.0 \
+  -n rosterdock -f my-values.yaml --wait
+```
+
+[`docs/install.md`](docs/install.md) takes a fresh cluster there, its Secrets and `my-values.yaml` first.
+From a checkout, `deploy/scripts/local-cluster.sh` keeps a kind cluster and `deploy/scripts/smoke.sh` makes a
+throwaway install. Guides: [install](docs/install.md), [operator](docs/operator.md),
+[security](docs/security.md) and the [docs index](docs/README.md).
 
 ## Demo companies
 

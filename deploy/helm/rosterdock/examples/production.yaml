@@ -38,8 +38,11 @@ board:
 worker:
   tokenSecret:
     name: rosterdock-worker # ROSTERDOCK_WORKER_TOKEN, shared with the board
+  # The engines' keys, by name. The published image runs Codex (OPENAI_API_KEY, which engineEnvNames must
+  # list) and leaves Claude Code out (ANTHROPIC_API_KEY, in a worker image of your own): docs/install.md,
+  # Engines on the worker.
   engineSecret:
-    name: rosterdock-engines # ANTHROPIC_API_KEY for the engine process
+    name: rosterdock-engines
   autoscaling:
     enabled: true # needs KEDA
     minReplicas: 1

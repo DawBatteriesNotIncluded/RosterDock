@@ -337,9 +337,9 @@ see Peter plan, a worker run, a review open and the numbers land.
 2. **Create your first company.** Peter is seated with it.
 3. **Teammates, Hire from template**: Ricky (researcher), Brody (requirements) and a third teammate named
    Stubby with the role "n8n engineer". Pick the engine **Stub (no model)** for all three unless the
-   worker has a model key. Or **Settings, Templates, Import a file** with
-   `deploy/templates/gtm-company.json` for the whole GTM company (those teammates run on Claude Code and
-   need `rosterdock-engines`).
+   worker has an engine and its key (Engines on the worker, above). Or **Settings, Templates, Import a
+   file** with `deploy/templates/gtm-company.json` for the whole GTM company: those teammates run on Claude
+   Code, which needs a worker image of your own (above) and its key in `rosterdock-engines`.
 4. **Company page, New goal**: "Send a weekly digest of Gong calls with next steps to #sales every
    Friday." Peter plans before the modal returns: research, requirements and build, by role. The feed
    says "Peter split … into 3 tasks"; the research task starts on its own.
