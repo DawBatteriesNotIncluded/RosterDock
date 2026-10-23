@@ -44,10 +44,12 @@ that hangs ends after 10 minutes. Re-run soon: each half takes its base images (
 `nginx:1.30-alpine`) as they are when it builds, so a half re-run days later can sit on newer ones than the
 half already pushed. And never re-run a release's run once a newer version is out: every merge also pushes
 `MAJOR.MINOR` and `latest`, which would move back to the older images. Cut the next version instead. If
-CI fails on the tag, nothing was pushed, but the tag stays:
-the `release tags` ruleset forbids moving or deleting a `v*` tag. Fix on `main` and tag again under the next
-version, so a failed `v0.2.0-rc.1` is followed by `v0.2.0-rc.2` and a failed `v0.2.0` by `v0.2.1`. That is
-why a version starts with a dry run and a prerelease tag.
+CI fails on the tag, nothing was pushed, and the tag stays: the `release tags` ruleset forbids moving or
+deleting a `v*` tag. A CI job that failed on a flake (one that passes on the same commit elsewhere) is
+re-run the same way, with Re-run failed jobs: once it passes, the builds, merges and chart it held back
+run, as they did for `v0.1.0-rc.3` and `v0.1.0`. Only a real failure spends the version: fix it on `main`
+and tag the next one, so a failed `v0.2.0-rc.1` is followed by `v0.2.0-rc.2` and a failed `v0.2.0` by
+`v0.2.1`. That is why a version starts with a dry run and a prerelease tag.
 
 **A dry run.** Actions, release, Run workflow, with any version: CI (without the smoke install, which runs
 on a tag) and all six builds run, every image on both architectures on its own runner, attestations
