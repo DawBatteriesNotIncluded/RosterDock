@@ -158,6 +158,11 @@ describe("runRepoTests", () => {
       expect(call.env).toEqual({ PATH: "/usr/bin", HOME: "/home/node", TMPDIR: "/tmp", CI: "1" });
   });
 
+  // The time limit of a test that is not about it: one no runner reaches. On Windows the first command waits
+  // for the job's probe as well (jobsWork, Windows PowerShell's first start), and on a slow runner the two took
+  // past 10 s. Such a test gives vitest 90 s, so a command that does reach its limit fails on its output.
+  const UNREACHED_MS = 60_000;
+
   it("reads a command's output as a stream, so a character on a pipe boundary arrives whole", async () => {
     // This Node stands in for the package manager: no npm runs here. By name and with a script file, as a
     // package manager is run: on Windows the command goes through cmd, which splits a path or code with spaces.
@@ -169,12 +174,12 @@ describe("runRepoTests", () => {
     const res = await execCommand("node", ["stream.js"], {
       cwd: root,
       env: { PATH: process.env.PATH ?? "" },
-      timeoutMs: 10_000,
+      timeoutMs: UNREACHED_MS,
     });
     expect(res.code, res.output.slice(-2000)).toBe(0);
     expect(res.output.includes("\ufffd")).toBe(false);
     expect(res.output.endsWith("— ✅ 😀 ")).toBe(true);
-  });
+  }, 90_000);
 
   it("gives a command the environment it was given, and nothing the job's PowerShell adds on Windows", async () => {
     await writeFile(
@@ -189,14 +194,14 @@ describe("runRepoTests", () => {
     const res = await execCommand("node", ["env.js"], {
       cwd: root,
       env: { PATH: process.env.PATH ?? "", GIVEN: "yes" },
-      timeoutMs: 10_000,
+      timeoutMs: UNREACHED_MS,
     });
     expect(res.code, res.output).toBe(0);
     const seen = JSON.parse(res.output) as Record<string, string | null>;
     expect(seen).toMatchObject({ PSModulePath: null, GIVEN: "yes" });
     // cmd.exe sets its own PATHEXT where it is given none; PowerShell's .CPL is not in it.
     expect(seen.PATHEXT ?? "").not.toMatch(/\.CPL/i);
-  });
+  }, 90_000);
 
   it("ends a command past its time limit, with what a Windows shim started under it", async () => {
     // Found on PATH like a package manager: on Windows a .cmd shim, which cmd.exe runs and which starts
