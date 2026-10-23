@@ -636,6 +636,14 @@ export function describeEvent(
       return { text: `${who} archived the model provider ${p(ev).label ?? p(ev).name}` };
     case "model_provider.deleted":
       return { text: `${who} removed the model provider ${p(ev).label ?? p(ev).name}` };
+    case "model_provider.checked": {
+      const listed = (p(ev).listed as number | undefined) ?? 0;
+      return {
+        text: p(ev).ok
+          ? `${who} checked the model provider ${p(ev).label ?? p(ev).name}: the key works, ${listed} model${listed === 1 ? "" : "s"}`
+          : `${who} checked the model provider ${p(ev).label ?? p(ev).name}: ${p(ev).detail ?? "no answer"}`,
+      };
+    }
     case "connection.checked": {
       const extra = ((p(ev).extra as string[] | undefined) ?? []).length;
       const missing = ((p(ev).missing as string[] | undefined) ?? []).length;

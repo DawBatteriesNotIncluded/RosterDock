@@ -14,6 +14,7 @@ import {
   PROVIDER_KIND_LABELS,
   type ActorRef,
   type CompatibleAuthHeader,
+  type ListedModel,
   type ModelProvider,
   type ModelProvidersPolicy,
   type ProviderKind,
@@ -37,13 +38,17 @@ import {
 } from "../web/address.js";
 import { companyEgress, type Egress } from "../web/egress.js";
 
-/** The last check of a provider's key and models, kept on the row. */
+/** The last check of a provider's key and models, kept on the row (check.ts). */
 export interface ProviderCheck {
   ok: boolean;
   at: string;
   latencyMs: number;
+  /** Why it did not work, in the board's words; null when it did. */
   detail: string | null;
+  /** How many models the key reaches. */
   listed: number;
+  /** The models the key reaches, for a person to add from; absent when the check did not work. */
+  models?: ListedModel[];
 }
 
 export interface ProviderRow {
@@ -233,9 +238,19 @@ async function assertEndpoint(deps: ProviderDeps, companyId: string, endpoint: s
   if (refusal) throw new HttpError(422, refusal);
 }
 
-/** The models as the row keeps them: one Check listed stays listed; any other was typed by a person. */
-function keptModels(given: readonly ProviderModelInput[], before: readonly ProviderModel[]): ProviderModel[] {
-  const listed = new Set(before.filter((m) => m.source === "listed").map((m) => m.id));
+/**
+ * The models as the row keeps them: one the key reached at its last check that worked is `listed`, any other
+ * `typed`; before any check worked, a model stays what it was.
+ */
+export function keptModels(
+  given: readonly ProviderModelInput[],
+  before: readonly ProviderModel[],
+  check: ProviderCheck | null,
+): ProviderModel[] {
+  const listed =
+    check?.ok && check.models
+      ? new Set(check.models.map((m) => m.id))
+      : new Set(before.filter((m) => m.source === "listed").map((m) => m.id));
   return given.map((m) => ({ ...m, source: listed.has(m.id) ? "listed" : "typed" }));
 }
 
@@ -360,7 +375,7 @@ export async function createProvider(
             c.region,
             c.authHeader,
             JSON.stringify(c.credentials),
-            JSON.stringify(keptModels(input.models, [])),
+            JSON.stringify(keptModels(input.models, [], null)),
             input.enabled,
             actor.kind,
             actor.id,
@@ -403,7 +418,7 @@ function plan(row: ProviderRow, patch: UpdateModelProviderInput) {
   if (!parsed.success) throw new HttpError(400, "invalid request body", safeIssues(parsed.error.issues));
   const next = parsed.data;
   const c = columns(next);
-  const models = keptModels(next.models, row.models);
+  const models = keptModels(next.models, row.models, row.last_check);
   const archive = patch.archived === true && !row.archived_at;
   const restore = patch.archived === false && !!row.archived_at;
   const changes = [

@@ -1,9 +1,10 @@
 // Company model providers: what the operator offers, and the company's providers with where each credential
-// name gets its value (never the value). Reading them is company.read; adding, changing and removing them is
-// model.manage: owners and admins.
+// name gets its value (never the value). Reading them is company.read; adding, changing, checking and removing
+// them is model.manage: owners and admins.
 
 import { ModelProviderSchema, UpdateModelProviderSchema } from "@rosterdock/shared";
 import type { FastifyInstance } from "fastify";
+import { checkProvider } from "../providers/check.js";
 import {
   checkNewProvider,
   createProvider,
@@ -65,6 +66,15 @@ export function registerProviderRoutes(app: FastifyInstance, deps: ProviderDeps)
       await checkNewProvider(deps, req.companyId, body);
       return { ok: true };
     },
+  );
+
+  // Does its key work, and which models does it reach? One free call to the provider that lists models; the
+  // outcome lands on the provider's lastCheck, with an event.
+  app.post(
+    "/api/companies/:companyId/model-providers/:providerId/check",
+    { config: { action: "model.manage" } },
+    async (req) =>
+      one(req.companyId, await checkProvider(deps, req.companyId, req.principal.actor, idParam(req))),
   );
 
   app.patch(

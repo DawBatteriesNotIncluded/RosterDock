@@ -23,7 +23,9 @@ import {
   providerSlug,
   removeLine,
   submitForm,
+  suggestedModels,
   suggestedSecretName,
+  unreached,
   whereLine,
   type ModelsPanelProps,
   type ProviderForm,
@@ -65,6 +67,22 @@ describe("model provider events", () => {
     // A removal written before the label was carried names the provider by its name.
     expect(said("model_provider.deleted", { name: "acme-azure", kind: "azure_openai" })).toBe(
       "Daniel removed the model provider acme-azure",
+    );
+  });
+
+  it("says what a check found, in the board's words", () => {
+    expect(said("model_provider.checked", { ...acme, ok: true, detail: null, listed: 12 })).toBe(
+      "Daniel checked the model provider Acme Azure: the key works, 12 models",
+    );
+    expect(
+      said("model_provider.checked", {
+        ...acme,
+        ok: false,
+        listed: 0,
+        detail: "the key was refused (HTTP 401): it is wrong, revoked or expired",
+      }),
+    ).toBe(
+      "Daniel checked the model provider Acme Azure: the key was refused (HTTP 401): it is wrong, revoked or expired",
     );
   });
 });
@@ -174,6 +192,7 @@ const panel = (over: Partial<ModelsPanelProps> = {}) =>
         create={async () => providers.providers[0]!}
         update={async () => providers.providers[0]!}
         remove={async () => undefined}
+        check={async () => providers.providers[0]!}
         initial={providers}
         initialSecrets={[]}
         loadPrices={async () => prices}
@@ -576,6 +595,71 @@ describe("Settings > Models", () => {
     );
     // A viewer sees them too: they are the board's, not the company's to change.
     expect(panel({ canEdit: false })).toContain("signed in using ChatGPT");
+  });
+
+  it("checks a provider's key, says what it found, and offers the models it reaches when one is added", () => {
+    const at = "2026-10-22T11:58:00.000Z";
+    const reached = [
+      {
+        id: "claude-opus-5-5",
+        family: "claude" as const,
+        label: "Claude Opus 5.5",
+        contextWindow: 1_000_000,
+      },
+      { id: "claude-sonnet-5-5", family: "claude" as const, label: "Claude Sonnet 5.5" },
+    ];
+    const ok = { ok: true, at, latencyMs: 210, detail: null, listed: 2, models: reached };
+    expect(checkLine({ lastCheck: ok }, NOW)).toBe("Checked 2 min ago: key works, reaches 2 models");
+    expect(
+      checkLine(
+        {
+          lastCheck: {
+            ...ok,
+            ok: false,
+            listed: 0,
+            models: undefined,
+            detail: "the key was refused (HTTP 401)",
+          },
+        },
+        NOW,
+      ),
+    ).toBe("Checked 2 min ago: the key was refused (HTTP 401)");
+    // An Azure resource lists the models it offers, never the deployments a model here names.
+    expect(checkLine({ kind: "azure_openai", lastCheck: { ...ok, listed: 1, models: [] } }, NOW)).toBe(
+      "Checked 2 min ago: key works; the resource offers 1 model, and a model here is one of your deployments, by its name",
+    );
+
+    // What the list does not have yet is offered; nothing after a check that failed, nothing on Azure.
+    const checked = provider({ lastCheck: ok });
+    expect(suggestedModels(checked).map((m) => m.id)).toEqual(["claude-sonnet-5-5"]);
+    expect(suggestedModels(provider({ lastCheck: { ...ok, ok: false } }))).toEqual([]);
+    expect(suggestedModels(provider({ kind: "azure_openai", lastCheck: ok }))).toEqual([]);
+    // A model the key did not reach says so, once the check listed all it reaches.
+    expect(unreached(checked, { source: "typed" })).toBe(true);
+    expect(unreached(checked, { source: "listed" })).toBe(false);
+    expect(unreached(provider({ lastCheck: { ...ok, listed: 900 } }), { source: "typed" })).toBe(false);
+    expect(unreached(provider({ kind: "azure_openai", lastCheck: ok }), { source: "typed" })).toBe(false);
+    expect(unreached(provider({ lastCheck: null }), { source: "typed" })).toBe(false);
+
+    // On the page, two minutes before now, whenever the test runs.
+    const shown = provider({ lastCheck: { ...ok, at: new Date(Date.now() - 2 * 60_000).toISOString() } });
+    const html = panel({ initial: { ...providers, providers: [shown, ...providers.providers.slice(1)] } });
+    expect(html).toContain('aria-label="Check Acme Anthropic"');
+    expect(html).toContain('aria-label="Check Local vLLM"');
+    // Not an archived provider, nor one of a kind no longer offered.
+    expect(html).not.toContain('aria-label="Check Old Bedrock"');
+    expect(html).toContain("Checked 2 min ago: key works, reaches 2 models");
+    expect(html).toContain("Runs on Claude Code · not among the models the key reaches");
+    // The model id field offers what the key reaches and the list lacks, by the provider's own names.
+    expect(html).toMatch(
+      /<datalist id="[^"]+"><option value="claude-sonnet-5-5">Claude Sonnet 5.5<\/option><\/datalist>/,
+    );
+    expect(html).toContain("Type to pick one of the 1 more the key reaches");
+    expect(html).not.toContain('<option value="claude-opus-5-5"');
+    // Someone who may not manage providers sees what was found, and cannot check.
+    const viewer = panel({ canEdit: false, initial: { ...providers, providers: [shown] } });
+    expect(viewer).toContain("Checked 2 min ago: key works, reaches 2 models");
+    expect(viewer).not.toContain("Check Acme Anthropic");
   });
 
   it("says what removing takes and leaves, and never makes a name from a label that looks like a key", () => {

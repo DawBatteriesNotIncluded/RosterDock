@@ -7,6 +7,7 @@ import type {
   DiffHunk,
   DiffLine,
   EventRecord,
+  ListedModel,
   PlannerKind,
   PlannerSettings,
   ProviderKind,
@@ -324,7 +325,15 @@ export interface ModelProvider {
   enabled: boolean;
   /** Whether the operator still offers its kind; one no longer offered is kept, unused. */
   offered: boolean;
-  lastCheck: { ok: boolean; at: string; latencyMs: number; detail: string | null; listed: number } | null;
+  /** The last Check: whether the key worked, why not, and the models it reaches (`models`, for a person to add). */
+  lastCheck: {
+    ok: boolean;
+    at: string;
+    latencyMs: number;
+    detail: string | null;
+    listed: number;
+    models?: ListedModel[];
+  } | null;
   archivedAt: string | null;
   createdBy: ActorRef;
   createdAt: string;

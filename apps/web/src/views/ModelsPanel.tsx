@@ -1,12 +1,14 @@
 // Settings > Models: what the company thinks with. This board's own models first (the Claude Code and Codex
 // CLIs and the Anthropic API key, each with whether it works where the board runs), then the company's own
-// model accounts: each provider with where it is reached, where its key comes from (never the key) and the
-// models it serves, and a form per kind to add one. A key pasted here goes write-only into the company's
+// model accounts: each provider with where it is reached, where its key comes from (never the key), its Check
+// (whether the key works, and the models it reaches, offered when a model is added) and the models it serves,
+// and a form per kind to add one. A key pasted here goes write-only into the company's
 // secrets (PUT /secrets/:name) before the provider is saved with that name; it is the only value this page
 // ever takes, and it is never shown again.
 import { Trash2 } from "lucide-react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useId, useState } from "react";
 import type {
+  ListedModel,
   ModelFamily,
   ModelPriceInput,
   ModelProviderInput,
@@ -62,6 +64,8 @@ export interface ModelsPanelProps {
   create(input: ModelProviderInput): Promise<ModelProvider>;
   update(id: string, input: UpdateModelProviderInput): Promise<ModelProvider>;
   remove(id: string): Promise<void>;
+  /** Check: whether its key works and which models it reaches, with one free call the board makes. */
+  check(id: string): Promise<ModelProvider>;
   initial?: ModelProviders;
   initialSecrets?: CompanySecret[];
   /** The company's prices: a provider's are the ones with its id. */
@@ -146,13 +150,46 @@ export function boardLine(board: boolean): string {
     : "Not lent by your operator. Once teammates think with your providers, each will need one.";
 }
 
-/** The last check, in a sentence; nothing checked yet says so. */
-export function checkLine(p: Pick<ModelProvider, "lastCheck">, now: number = Date.now()): string {
+/**
+ * The last check, in a sentence; nothing checked yet says so. An Azure resource lists the models it offers, not
+ * your deployments, which are what a model here names.
+ */
+export function checkLine(
+  p: Pick<ModelProvider, "lastCheck"> & { kind?: ProviderKind },
+  now: number = Date.now(),
+): string {
   const c = p.lastCheck;
   if (!c) return "Not checked yet";
-  return c.ok
-    ? `Checked ${relativeTime(c.at, now)}: key works, ${c.listed} model${c.listed === 1 ? "" : "s"}`
-    : `Checked ${relativeTime(c.at, now)}: ${c.detail ?? "no answer"}`;
+  const when = `Checked ${relativeTime(c.at, now)}`;
+  if (!c.ok) return `${when}: ${c.detail ?? "no answer"}`;
+  const models = `${c.listed} model${c.listed === 1 ? "" : "s"}`;
+  return p.kind === "azure_openai"
+    ? `${when}: key works; the resource offers ${models}, and a model here is one of your deployments, by its name`
+    : `${when}: key works, reaches ${models}`;
+}
+
+/**
+ * The models the last check found that the list does not have yet, for a person to add from. None for Azure,
+ * whose resource lists its models, not your deployments.
+ */
+export function suggestedModels(p: Pick<ModelProvider, "kind" | "lastCheck" | "models">): ListedModel[] {
+  if (p.kind === "azure_openai" || !p.lastCheck?.ok) return [];
+  const listed = new Set(p.models.map((m) => m.id));
+  return (p.lastCheck.models ?? []).filter((m) => !listed.has(m.id));
+}
+
+/**
+ * Whether a model on the list is one the key did not reach at its last check: only when that check listed every
+ * model the key reaches, and never on Azure, whose list names no deployment.
+ */
+export function unreached(
+  p: Pick<ModelProvider, "kind" | "lastCheck">,
+  model: Pick<ProviderModel, "source">,
+): boolean {
+  const c = p.lastCheck;
+  return (
+    p.kind !== "azure_openai" && !!c?.ok && (c.models?.length ?? 0) >= c.listed && model.source !== "listed"
+  );
 }
 
 /** A price per million tokens, in and out, in a line. */
@@ -701,16 +738,28 @@ function AddModelForm(p: {
   /** What people call the provider, so each card's fields have names of their own. */
   of: string;
   listed: readonly string[];
+  /** The models the key reaches that the list does not have yet: offered as the id is typed. */
+  suggestions: readonly ListedModel[];
   /** Null once added; else why not, shown beside the form. */
-  onAdd(id: string, family: ModelFamily, label: string): Promise<string | null>;
+  onAdd(id: string, family: ModelFamily, label: string, contextWindow?: number): Promise<string | null>;
 }) {
   const families = familiesFor(p.kind);
+  const listId = useId();
   const [id, setId] = useState("");
   // A compatible server's models are seldom Claude's or OpenAI's own.
   const [family, setFamily] = useState<ModelFamily>(p.kind === "openai_compatible" ? "other" : families[0]!);
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // A model picked from what the key reaches: whose it is, its name and its context window, as the provider said.
+  const picked = p.suggestions.find((s) => s.id === id.trim());
+  const typeId = (next: string) => {
+    setId(next);
+    const hit = p.suggestions.find((s) => s.id === next.trim());
+    if (!hit) return;
+    if (families.includes(hit.family)) setFamily(hit.family);
+    if (!label.trim() && hit.label && !labelLooksLikeKey(hit.label)) setLabel(hit.label);
+  };
   // The board's own rules, said before anything is sent; a label that looks like a key is refused there too.
   const problem = !id.trim()
     ? null
@@ -718,7 +767,7 @@ function AddModelForm(p: {
       (label.trim() && labelLooksLikeKey(label) ? "That label looks like a key." : null));
   const add = async () => {
     setBusy(true);
-    const why = await p.onAdd(id.trim(), family, label.trim());
+    const why = await p.onAdd(id.trim(), family, label.trim(), picked?.contextWindow);
     setBusy(false);
     setRefusal(why);
     if (why !== null) return;
@@ -728,15 +777,34 @@ function AddModelForm(p: {
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-end gap-2">
-        <Field label="Add a model id" hint={p.kind === "azure_openai" ? "Your deployment's name" : undefined}>
+        <Field
+          label="Add a model id"
+          hint={
+            p.kind === "azure_openai"
+              ? "Your deployment's name"
+              : p.suggestions.length
+                ? `Type to pick one of the ${p.suggestions.length} more the key reaches`
+                : undefined
+          }
+        >
           <input
             aria-label={`Model id for ${p.of}`}
             className="mono"
             value={id}
-            onChange={(e) => setId(e.target.value)}
+            onChange={(e) => typeId(e.target.value)}
+            {...(p.suggestions.length ? { list: listId } : {})}
             style={{ width: 240 }}
           />
         </Field>
+        {p.suggestions.length ? (
+          <datalist id={listId}>
+            {p.suggestions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label ?? s.id}
+              </option>
+            ))}
+          </datalist>
+        ) : null}
         {families.length > 1 ? (
           <Field label="Whose model">
             <select
@@ -1045,6 +1113,8 @@ function ProviderCard(p: {
   /** Null once done; else why not, shown on the card. */
   onUpdate(input: UpdateModelProviderInput): Promise<string | null>;
   onRemove(): Promise<string | null>;
+  /** Check its key; what it found lands on the provider, and the card says it. */
+  onCheck(): Promise<string | null>;
   onSetValue(name: string, value: string): Promise<string | null>;
   onSavePrice(input: ModelPriceInput): Promise<string | null>;
   onDeletePrice(priceId: string): Promise<string | null>;
@@ -1065,7 +1135,9 @@ function ProviderCard(p: {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [checking, setChecking] = useState(false);
   const act = async (fn: () => Promise<string | null>) => setError(await fn());
+  const suggestions = suggestedModels(v);
   return (
     <div className="card flex flex-col gap-2 px-[18px] py-4" style={v.archivedAt ? { opacity: 0.7 } : {}}>
       <div className="flex flex-wrap items-center gap-2">
@@ -1080,6 +1152,20 @@ function ProviderCard(p: {
         ) : null}
         {p.canEdit ? (
           <span className="ml-auto flex items-center gap-2">
+            {!v.archivedAt && v.offered ? (
+              <Button
+                size="sm"
+                aria-label={`Check ${v.label}`}
+                disabled={checking}
+                onClick={async () => {
+                  setChecking(true);
+                  await act(p.onCheck);
+                  setChecking(false);
+                }}
+              >
+                {checking ? "Checking…" : "Check"}
+              </Button>
+            ) : null}
             {!v.archivedAt ? (
               <Button size="sm" aria-label={`Change ${v.label}`} onClick={() => setEditing(!editing)}>
                 {editing ? "Close" : "Change"}
@@ -1147,7 +1233,9 @@ function ProviderCard(p: {
           ) : null}
         </span>
       ) : null}
-      <span className="hint">{checkLine(v)}</span>
+      <span className="hint" style={v.lastCheck && !v.lastCheck.ok ? { color: "var(--warn-ink)" } : {}}>
+        {checkLine(v)}
+      </span>
       {editing ? (
         <EditProvider
           provider={v}
@@ -1168,7 +1256,10 @@ function ProviderCard(p: {
                   <td className="mono py-1 pr-3">{m.id}</td>
                   <td className="py-1 pr-3">{m.label ?? ""}</td>
                   <td className="hint py-1 pr-3">{familyName(m.family)}</td>
-                  <td className="hint py-1 pr-3">{engineLine(v.kind, m.family)}</td>
+                  <td className="hint py-1 pr-3">
+                    {engineLine(v.kind, m.family)}
+                    {unreached(v, m) ? " · not among the models the key reaches" : ""}
+                  </td>
                   <td className="hint py-1 pr-3">
                     {modelPriceLine(v, m, p.prices)}
                     {p.canEdit && !v.archivedAt ? (
@@ -1269,8 +1360,14 @@ function ProviderCard(p: {
           kind={v.kind}
           of={v.label}
           listed={v.models.map((m) => m.id)}
-          onAdd={(id, family, label) =>
-            p.onUpdate({ models: [...given(v.models), { id, family, ...(label ? { label } : {}) }] })
+          suggestions={suggestions}
+          onAdd={(id, family, label, contextWindow) =>
+            p.onUpdate({
+              models: [
+                ...given(v.models),
+                { id, family, ...(label ? { label } : {}), ...(contextWindow ? { contextWindow } : {}) },
+              ],
+            })
           }
         />
       ) : null}
@@ -1338,6 +1435,7 @@ export function ModelsPanel(p: ModelsPanelProps) {
       prices={prices}
       onUpdate={(input) => change(() => p.update(v.id, input))}
       onRemove={() => change(() => p.remove(v.id))}
+      onCheck={() => change(() => p.check(v.id))}
       onSavePrice={(input) => change(() => p.savePrice(input))}
       onDeletePrice={(id) => change(() => p.deletePrice(id))}
       onFillList={async () => {
@@ -1366,8 +1464,8 @@ export function ModelsPanel(p: ModelsPanelProps) {
         <span className="font-semibold">Your model providers</span>
         <span className="hint">
           Your own model accounts. Keys are kept by name in this company&apos;s secrets and never shown again.
-          Teammates do not think with them yet: every teammate and Peter still use this board&apos;s own
-          models.
+          Check asks a provider which models its key reaches, and costs nothing. Teammates do not think with
+          them yet: every teammate and Peter still use this board&apos;s own models.
         </span>
         <div className="flex flex-wrap items-center gap-2">
           {info.offered.kinds.length ? (

@@ -2188,6 +2188,7 @@ describe("pure helpers", () => {
         create: async () => Promise.reject(new Error("not in this test")),
         update: async () => Promise.reject(new Error("not in this test")),
         remove: asyncNoop,
+        check: async () => Promise.reject(new Error("not in this test")),
         initial: { offered: { kinds: [], board: true }, providers: [] },
         initialSecrets: [],
         loadPrices: async () => priceFixture,

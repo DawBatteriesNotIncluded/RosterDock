@@ -66,6 +66,39 @@ export function engineFor(kind: ProviderKind, family: ModelFamily): Engine | nul
   }
 }
 
+/**
+ * A model a provider's Check found the key reaches, kept on the row for a person to add from: Check itself adds
+ * none. The family is the board's guess from the kind and the id, for the person to confirm.
+ */
+export interface ListedModel {
+  id: string;
+  family: ModelFamily;
+  /** What the provider calls it (Claude Opus 5.5, US Anthropic Claude Opus 4.5), when it says. */
+  label?: string;
+  contextWindow?: number;
+}
+
+/**
+ * Whose model a listed id most likely is: an Anthropic provider's are Claude's and OpenAI's its own; Bedrock
+ * says whose in the id (us.anthropic.…, global.openai.…); a compatible server's or an Azure resource's id by
+ * its name (claude-…, gpt-…), else another family. A guess a person confirms when they add the model.
+ */
+export function listedFamily(kind: ProviderKind, id: string): ModelFamily {
+  if (kind === "anthropic") return "claude";
+  if (kind === "openai") return "openai";
+  if (kind === "bedrock") {
+    if (/^(?:[a-z-]{2,8}\.)?anthropic\./.test(id)) return "claude";
+    // A bare openai.* id is Mantle's, which the board does not reach: not one an engine here runs.
+    return BEDROCK_OPENAI_ID_RE.test(id) && id.includes("openai") ? "openai" : "other";
+  }
+  const guess: ModelFamily = /^claude-/i.test(id)
+    ? "claude"
+    : /^(?:gpt-|o\d|codex-)/i.test(id)
+      ? "openai"
+      : "other";
+  return KIND_FAMILIES[kind].includes(guess) ? guess : "other";
+}
+
 /** The token in ROSTERDOCK_MODEL_PROVIDERS that lends the board's own models to every company. */
 export const BOARD_MODELS = "board";
 

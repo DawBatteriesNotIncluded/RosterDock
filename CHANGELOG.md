@@ -6,6 +6,16 @@ Every release of RosterDock, newest first. A release is one version shared by th
 [Semantic Versioning](https://semver.org/): before 1.0 a minor version may break something, and its entry
 says what. How to upgrade is in `docs/operator.md`; how a release is cut, in `docs/releasing.md`.
 
+## Unreleased
+
+### Added
+
+- Check, on a company's model provider (Settings > Models): whether its key works and which models it
+  reaches, with one call to the provider that spends no tokens, for every kind. The card marks a model the
+  key does not reach and offers the models it reaches when one is added; a refused key is said in the board's
+  words. The board resolves the key for that call only, sends it through the address guard, and reads none of
+  its own Anthropic settings for it (`docs/operator.md`, Company model providers).
+
 ## 0.1.0 (2026-10-23)
 
 The first published release: the plan's milestones M0 to M6 (`docs/plan.html`, `docs/m0.md` to

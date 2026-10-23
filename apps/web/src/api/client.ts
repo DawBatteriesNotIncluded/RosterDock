@@ -272,6 +272,8 @@ export interface Client {
     input: UpdateModelProviderInput,
   ): Promise<ModelProvider>;
   deleteModelProvider(companyId: string, providerId: string): Promise<void>;
+  /** Check: does its key work, and which models does it reach? The outcome lands on the provider's lastCheck. */
+  checkModelProvider(companyId: string, providerId: string): Promise<ModelProvider>;
   deleteConnection(companyId: string, connectionId: string): Promise<void>;
   updateCompany(companyId: string, input: { settings?: Record<string, unknown> }): Promise<Company>;
   /** One image of the office pack, as base64 PNG; the board keeps it and names it in settings.officePack. */
@@ -396,6 +398,7 @@ export const httpClient: Client = {
   checkNewModelProvider: (id, input) => request("POST", `${c(id)}/model-providers/check-new`, input),
   updateModelProvider: (id, pid, input) => request("PATCH", `${c(id)}/model-providers/${pid}`, input),
   deleteModelProvider: (id, pid) => request("DELETE", `${c(id)}/model-providers/${pid}`),
+  checkModelProvider: (id, pid) => request("POST", `${c(id)}/model-providers/${pid}/check`, {}),
   deleteConnection: (id, cn) => request("DELETE", `${c(id)}/connections/${cn}`),
   updateCompany: (id, input) => request("PATCH", c(id), input),
   putOfficeImage: (id, name, content) => request("PUT", `${c(id)}/office/images/${name}`, { content }),
