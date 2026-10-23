@@ -432,6 +432,14 @@ export function App() {
         await refresh();
       }}
       loadInbox={loadInbox}
+      loadPlanner={(refresh) => client.planner(cid, refresh)}
+      savePlanner={async (planner) => {
+        await run(
+          () => client.updateCompany(cid, { settings: { ...data.company.settings, planner } }),
+          "Saved what Peter plans with.",
+        );
+        await refresh();
+      }}
     />
   ) : ui.view === "activity" ? (
     <ActivityView data={data} meId={meId} onOpen={openFromSentence} />
@@ -573,6 +581,7 @@ export function App() {
         savePrice: (input) => run(() => client.savePrice(cid, input), "Price saved."),
         deletePrice: (id) => run(() => client.deletePrice(cid, id), "Price removed."),
         fillListPrices: (providerId) => run(() => client.fillListPrices(cid, providerId)),
+        loadBoardModels: (refresh) => client.planner(cid, refresh),
       }}
       connections={{
         loadCatalog: () => client.catalog(),
@@ -643,7 +652,6 @@ export function App() {
         await refresh();
       }}
       testNotify={() => client.testNotify(cid)}
-      loadPlanner={(refresh) => client.planner(cid, refresh)}
       loadStyles={() => client.styles(cid)}
       setStyle={async (pack, input) => {
         const packs = await run(
@@ -652,13 +660,6 @@ export function App() {
         );
         await refresh();
         return packs;
-      }}
-      savePlanner={async (planner) => {
-        await run(
-          () => client.updateCompany(cid, { settings: { ...data.company.settings, planner } }),
-          "Saved how Peter thinks.",
-        );
-        await refresh();
       }}
       saveDriftSettings={async (drift) => {
         await run(

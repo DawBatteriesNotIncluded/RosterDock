@@ -64,8 +64,8 @@ Then, in the browser:
 1. Sign in with any email and create a company; Peter is seated with it. The dev login lets anyone who
    reaches the board sign in as anyone and create companies, so it stays on this machine: a real install
    signs in through your identity provider and names who may create companies (`docs/install.md`).
-2. **Settings > Peter**: pick **No model**, so he never plans through a `claude` or `codex` CLI that happens
-   to be signed in on this machine.
+2. **Teammates > Peter**: under Brain, pick the engine **No model (plans by role)**, so he never plans
+   through a `claude` or `codex` CLI that happens to be signed in on this machine.
 3. **Teammates > Hire from template**: Ricky (researcher), Brody (requirements) and a third teammate named
    Stubby with the role "n8n engineer", each with the engine **Stub (no model)**.
 4. **Company > New goal**: "Send a weekly digest of Gong calls with next steps to #sales every Friday."
@@ -127,7 +127,8 @@ Only real engines need anything:
 
 Peter needs nothing either: without a model he plans by role (research, requirements, build). With
 `ANTHROPIC_API_KEY` on the board, or a signed-in `claude` or `codex` CLI where the board runs, he plans
-with a model; each company chooses in Settings > Peter.
+with a model; each company picks his engine on his page under Teammates, as for every teammate. Settings >
+Models lists what the board has, and whether each CLI is signed in.
 
 The worker image built from `apps/worker/Dockerfile` carries Codex; Claude Code's licence keeps it out of
 public images ([Engines on the worker](docs/install.md#engines-on-the-worker)).

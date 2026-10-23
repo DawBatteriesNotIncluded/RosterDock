@@ -27,9 +27,9 @@ export type View =
   | "team"
   | "settings";
 
-/** The Settings page, one tab at a time. */
+/** The Settings page, one tab at a time. Peter's brain is on his page under Teammates. */
 export type SettingsTab =
-  "prices" | "models" | "peter" | "style" | "connections" | "notifications" | "drift" | "templates";
+  "prices" | "models" | "style" | "connections" | "notifications" | "drift" | "templates";
 
 export interface Ui {
   view: View;

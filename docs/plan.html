@@ -279,7 +279,7 @@
 <ul>
   <li><strong>Providers.</strong> Settings, Models holds the company's named providers, of five kinds: Anthropic, OpenAI, Azure OpenAI, Amazon Bedrock, and an OpenAI-compatible server (vLLM, Ollama, LiteLLM and the like). Each has its endpoint or region, its credentials by secret name, and the models it serves with their prices. Check lists the models the key reaches, and costs nothing. Owners and admins manage providers. Everyone in the company sees them by name and setting, and no one ever sees a value.</li>
   <li><strong>A key enters once.</strong> A person pastes it through the existing write-only door (<code>PUT /secrets/:name</code>), picks a secret the company already set, or uses a name the operator shares. The provider keeps the name only, and the page says when the value was set and by whom, never what it is.</li>
-  <li><strong>A brain per teammate.</strong> Every teammate, Peter and the department leads included, picks a provider, then one of its models. The engine follows from the model: Claude models run on Claude Code, OpenAI models on Codex, so a teammate cannot be given a pair that does not run. "This board's own models" keeps today's engine and model choices exactly, and Peter's settings keep today's choices under it.</li>
+  <li><strong>A brain per teammate.</strong> Every teammate, Peter and the department leads included, picks a provider, then one of its models. The engine follows from the model: Claude models run on Claude Code, OpenAI models on Codex, so a teammate cannot be given a pair that does not run. "This board's own models" keeps today's engine and model choices exactly, and Peter's brain, picked on his page under Teammates like every teammate's, keeps today's choices under it. Settings, Models lists this board's own models (each CLI and the API key, and whether it works where the board runs) above the company's providers.</li>
   <li><strong>Costs by provider.</strong> A price belongs to a provider and a model. Without one the board uses the company's price for that model on the board's own models, then the Anthropic list price, and otherwise says "No price yet", never US$0.00. Costs gains a By provider table, both CSV exports gain a provider column, and the run panel names the provider. A company keeps one currency.</li>
 </ul>
 
@@ -352,6 +352,7 @@
   <tr><td>The next kinds</td><td>Later, in this order: Claude on Microsoft Foundry, Vertex, Bedrock's Mantle endpoint.</td></tr>
   <tr><td>Currencies</td><td>One per company; a second is refused.</td></tr>
   <tr><td>Compatible servers without the Responses API</td><td>They serve Peter only, not Codex teammates, and the form says so.</td></tr>
+  <tr><td>Where Peter's brain is picked</td><td>On his page under Teammates, as every teammate's is: his engine there is what he and the department leads plan with (Automatic, the Claude Code CLI, the Codex CLI, the Anthropic API, or no model). Settings has no Peter tab. Decided 2026-10-23.</td></tr>
 </table></div>
 
 <h2 id="decisions">Decisions needed before M0</h2>

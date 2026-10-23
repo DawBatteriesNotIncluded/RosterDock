@@ -1,7 +1,9 @@
-// Settings > Models: the company's own model accounts. What this board offers, each provider with where it
-// is reached, where its key comes from (never the key) and the models it serves, and a form per kind to add
-// one. A key pasted here goes write-only into the company's secrets (PUT /secrets/:name) before the provider
-// is saved with that name; it is the only value this page ever takes, and it is never shown again.
+// Settings > Models: what the company thinks with. This board's own models first (the Claude Code and Codex
+// CLIs and the Anthropic API key, each with whether it works where the board runs), then the company's own
+// model accounts: each provider with where it is reached, where its key comes from (never the key) and the
+// models it serves, and a form per kind to add one. A key pasted here goes write-only into the company's
+// secrets (PUT /secrets/:name) before the provider is saved with that name; it is the only value this page
+// ever takes, and it is never shown again.
 import { Trash2 } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import type {
@@ -38,6 +40,7 @@ import type {
   ModelPrice,
   ModelProvider,
   ModelProviders,
+  PlannerInfo,
 } from "../api/types.ts";
 import { Button, Field, Pill, Segs, Tip } from "../components/ui.tsx";
 import { actorInfo, relativeTime, toMinor } from "../lib/format.ts";
@@ -68,6 +71,9 @@ export interface ModelsPanelProps {
   /** List prices for one provider's Claude models: Anthropic's at the list, Bedrock's as estimates. */
   fillListPrices(providerId: string): Promise<ListPricesResult>;
   initialPrices?: ModelPrice[];
+  /** This board's own models: each CLI and the API key, and whether it works where the board runs. */
+  loadBoardModels(refresh?: boolean): Promise<Pick<PlannerInfo, "options">>;
+  initialBoardModels?: Pick<PlannerInfo, "options">;
 }
 
 /** A provider's short name from what people call it: acme-azure from "Acme Azure (prod)". */
@@ -136,8 +142,8 @@ export function whereLine(p: Pick<ModelProvider, "kind" | "endpoint" | "region">
  */
 export function boardLine(board: boolean): string {
   return board
-    ? "This board's own models: available"
-    : "This board's own models: not lent. Once teammates think with your providers, each will need one.";
+    ? "Your operator lends these to every company."
+    : "Not lent by your operator. Once teammates think with your providers, each will need one.";
 }
 
 /** The last check, in a sentence; nothing checked yet says so. */
@@ -367,6 +373,74 @@ export async function submitForm(
   return deps.create(input);
 }
 
+/**
+ * This board's own models: the Claude Code and Codex CLIs and the Anthropic API key, each with whether it works
+ * where the board runs. Teammates run on the CLIs on the workers; Peter plans with one of these on the board.
+ */
+function BoardModelsCard(p: {
+  /** Whether the operator lends them to every company. */
+  lent: boolean;
+  load: ModelsPanelProps["loadBoardModels"];
+  initial?: Pick<PlannerInfo, "options">;
+}) {
+  const [options, setOptions] = useState<PlannerInfo["options"] | null>(p.initial?.options ?? null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ask = async (refresh: boolean) => {
+    setBusy(true);
+    try {
+      setOptions((await p.load(refresh)).options);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => {
+    // Loaded once; Check again asks the CLIs anew.
+    if (!p.initial) void ask(false);
+  }, []);
+  return (
+    <div className="card flex flex-col gap-2 px-[18px] py-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold">This board&apos;s own models</span>
+        <Button size="sm" className="ml-auto" disabled={busy} onClick={() => void ask(true)}>
+          Check again
+        </Button>
+      </div>
+      <span className="text-[13px]">{boardLine(p.lent)}</span>
+      <span className="hint">
+        A teammate on the Claude Code CLI or the Codex CLI runs it on the board&apos;s workers, signed in by
+        your operator. Peter plans on the board itself, with one of these signed in where it runs. Pick each
+        brain on the teammate&apos;s page under Teammates, Peter&apos;s included.
+      </span>
+      {options === null ? (
+        <span className="hint">{error ?? "Asking the board what it has…"}</span>
+      ) : (
+        <table className="text-[13px]" style={{ borderCollapse: "collapse" }}>
+          <tbody>
+            {options.map((o) => (
+              <tr key={o.kind} style={{ borderTop: "1px solid var(--border)" }}>
+                <td className="py-1 pr-3 font-semibold whitespace-nowrap">{o.label}</td>
+                <td className="py-1 pr-3 whitespace-nowrap">
+                  <Pill tone="muted">{o.available ? "works here" : "not available"}</Pill>
+                </td>
+                <td className="hint py-1">{o.detail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {options !== null && error ? (
+        <span className="text-[13px]" style={{ color: "var(--bad)" }}>
+          {error}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 /** What a person calls a family. */
 function familyName(f: ModelFamily): string {
   return f === "other" ? "Another family" : FAMILY_LABELS[f];
@@ -397,10 +471,10 @@ function AddProviderForm(p: {
   const canPaste = p.features.oauth;
   const shared = p.features.sharedEnvNames ?? [];
   const saved = p.secrets ?? [];
-  // How a key may be given here: pasted only with a secret store; a saved secret only when there is one.
+  // How a key may be given here: pasted only with a secret store; a saved secret only when there is one to pick.
   const choicesFor = (kind: ProviderKind): { value: CredentialChoice; label: string }[] => [
     ...(canPaste ? [{ value: "paste" as const, label: "Paste a key" }] : []),
-    ...(canPaste || saved.length ? [{ value: "saved" as const, label: "Use a saved secret" }] : []),
+    ...(saved.length ? [{ value: "saved" as const, label: "Use a saved secret" }] : []),
     ...(shared.length ? [{ value: "shared" as const, label: "Use a name your operator shares" }] : []),
     ...(kind === "openai_compatible" ? [{ value: "none" as const, label: "No key" }] : []),
   ];
@@ -412,7 +486,7 @@ function AddProviderForm(p: {
     endpoint: "",
     region: "",
     authHeader: "authorization",
-    how: choicesFor(firstKind)[0]?.value ?? "saved",
+    how: "paste",
     value: "",
     picked: "",
   };
@@ -422,13 +496,17 @@ function AddProviderForm(p: {
   const [refusal, setRefusal] = useState<string | null>(null);
   const taken = { providers: p.providers, secrets: p.secrets, shared };
   const choices = choicesFor(f.kind);
-  const noKey = !choices.length;
-  const problem = noKey ? "missing" : formProblem(f, taken);
+  // Always one of this kind's ways, never a way it does not offer (another kind's, or a saved secret before the
+  // list loads); null when the board offers none, and then no picker shows, only why.
+  const how = choices.find((c) => c.value === f.how)?.value ?? choices[0]?.value ?? null;
+  const given: ProviderForm | null = how ? { ...f, how } : null;
+  const problem = given ? formProblem(given, taken) : "missing";
   const secretName = formSecretName(f);
   const turnedOff = PROVIDER_KINDS.filter((k) => !p.offered.includes(k));
   const save = async () => {
+    if (!given) return;
     setBusy(true);
-    const why = await p.onSubmit(f, taken);
+    const why = await p.onSubmit(given, taken);
     setBusy(false);
     setRefusal(why);
     if (why === null) setForm({ ...blank, kind: f.kind });
@@ -439,15 +517,7 @@ function AddProviderForm(p: {
       <Segs
         label="Kind"
         value={f.kind}
-        onChange={(k) =>
-          set({
-            kind: k,
-            picked: "",
-            ...(choicesFor(k).some((c) => c.value === f.how)
-              ? {}
-              : { how: choicesFor(k)[0]?.value ?? "saved" }),
-          })
-        }
+        onChange={(k) => set({ kind: k, picked: "" })}
         options={PROVIDER_KINDS.filter((k) => p.offered.includes(k)).map((k) => ({
           value: k,
           label: PROVIDER_KIND_LABELS[k],
@@ -505,7 +575,7 @@ function AddProviderForm(p: {
             />
           </Field>
         ) : null}
-        {f.kind === "openai_compatible" && f.how !== "none" ? (
+        {f.kind === "openai_compatible" && how !== "none" ? (
           <Field label="Key goes in">
             <select
               aria-label="Key goes in"
@@ -521,85 +591,105 @@ function AddProviderForm(p: {
           </Field>
         ) : null}
       </div>
-      <div className="flex flex-wrap items-end gap-3">
-        <Field label={f.kind === "bedrock" ? "Bedrock API key" : "Key"}>
-          <select
-            aria-label="How the key is given"
-            value={f.how}
-            onChange={(e) => set({ how: e.target.value as CredentialChoice, picked: "", value: "" })}
-          >
-            {choices.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        {f.how === "paste" ? (
-          <Field
-            label={`Value for ${secretName}`}
-            hint="Goes into this company's secrets under that name and is never shown again"
-          >
-            <input
-              aria-label={`Value for ${secretName}`}
-              type="password"
-              autoComplete="off"
-              className="mono"
-              value={f.value}
-              onChange={(e) => set({ value: e.target.value })}
-              placeholder="paste the key"
-              style={{ width: 260 }}
-            />
-          </Field>
-        ) : f.how === "saved" ? (
-          <Field label="Secret" {...(canPaste ? { hint: "Set under Settings > Connections > Secrets" } : {})}>
-            <select aria-label="Secret" value={f.picked} onChange={(e) => set({ picked: e.target.value })}>
-              <option value="">Pick one</option>
-              {(p.secrets ?? []).map((s) => (
-                <option key={s.name} value={s.name}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-        ) : f.how === "shared" ? (
-          <Field label="Name">
+      {how ? (
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label={f.kind === "bedrock" ? "Bedrock API key" : "Key"}>
             <select
-              aria-label="Shared name"
-              value={f.picked}
-              onChange={(e) => set({ picked: e.target.value })}
+              aria-label="How the key is given"
+              value={how}
+              onChange={(e) => set({ how: e.target.value as CredentialChoice, picked: "", value: "" })}
             >
-              <option value="">Pick one</option>
-              {shared.map((n) => (
-                <option key={n} value={n}>
-                  {n}
+              {choices.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
                 </option>
               ))}
             </select>
           </Field>
-        ) : null}
-        <Button variant="primary" disabled={problem !== null || busy} onClick={() => void save()}>
-          Add provider
-        </Button>
-      </div>
+          {how === "paste" ? (
+            <Field
+              label={`Value for ${secretName}`}
+              hint="Goes into this company's secrets under that name and is never shown again"
+            >
+              <input
+                aria-label={`Value for ${secretName}`}
+                type="password"
+                autoComplete="off"
+                className="mono"
+                value={f.value}
+                onChange={(e) => set({ value: e.target.value })}
+                placeholder="paste the key"
+                style={{ width: 260 }}
+              />
+            </Field>
+          ) : how === "saved" ? (
+            <Field
+              label="Secret"
+              {...(canPaste ? { hint: "Set under Settings > Connections > Secrets" } : {})}
+            >
+              <select aria-label="Secret" value={f.picked} onChange={(e) => set({ picked: e.target.value })}>
+                <option value="">Pick one</option>
+                {saved.map((s) => (
+                  <option key={s.name} value={s.name}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : how === "shared" ? (
+            <Field label="Shared name">
+              <select
+                aria-label="Shared name"
+                value={f.picked}
+                onChange={(e) => set({ picked: e.target.value })}
+              >
+                <option value="">Pick one</option>
+                {shared.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : null}
+          <Button variant="primary" disabled={problem !== null || busy} onClick={() => void save()}>
+            Add provider
+          </Button>
+        </div>
+      ) : (
+        // No way to give this kind a key here: say so where the key would go, never a picker with nothing in it.
+        <div className="note">
+          <span>
+            This board keeps no company secrets, and its operator shares no key names, so there is no key to
+            give a provider here yet.
+          </span>
+          <span className="hint">
+            Ask your operator to turn on a secret store for companies, or to share a key&apos;s name with
+            them.
+            {p.offered.includes("openai_compatible")
+              ? " An OpenAI-compatible server that takes no key can be added now."
+              : ""}
+          </span>
+        </div>
+      )}
       {problem && problem !== "missing" ? <span className="hint">{problem}</span> : null}
       {refusal ? (
         <span className="text-[13px]" style={{ color: "var(--bad)" }}>
           {refusal}
         </span>
       ) : null}
-      {!canPaste ? (
+      {!canPaste && how ? (
         <span className="hint">
-          {noKey
-            ? "This board keeps no company secrets, and its operator shares no key names, so there is no key to give a provider here yet. "
-            : "This board keeps no company secrets, so a key cannot be pasted here: use a name your operator shares. "}
+          {choices.some((c) => c.value !== "none")
+            ? "This board keeps no company secrets, so a key cannot be pasted here: use a name your operator shares. "
+            : "This board keeps no company secrets, and its operator shares no key names: only a server that takes no key can be added here. "}
           Ask your operator to turn on a secret store for companies, or to share a key&apos;s name with them.
         </span>
       ) : null}
-      {p.secretsFailed && f.how === "paste" ? (
+      {p.secretsFailed && how === "paste" ? (
         <span className="hint">
-          This company&apos;s secrets could not be read, so a key cannot be pasted now. Reload the page, or
-          use a saved secret.
+          This company&apos;s secrets could not be read, so a key cannot be pasted now, nor a saved one
+          picked. Reload the page to read them again.
         </span>
       ) : null}
     </div>
@@ -1267,6 +1357,11 @@ export function ModelsPanel(p: ModelsPanelProps) {
   const archived = info.providers.filter((v) => v.archivedAt);
   return (
     <>
+      <BoardModelsCard
+        lent={info.offered.board}
+        load={p.loadBoardModels}
+        {...(p.initialBoardModels ? { initial: p.initialBoardModels } : {})}
+      />
       <div className="card flex flex-col gap-2 px-[18px] py-4">
         <span className="font-semibold">Your model providers</span>
         <span className="hint">
@@ -1285,7 +1380,6 @@ export function ModelsPanel(p: ModelsPanelProps) {
             <span className="hint">This board's operator offers no providers.</span>
           )}
         </div>
-        <span className="text-[13px]">{boardLine(info.offered.board)}</span>
         {error ? (
           <span className="text-[13px]" style={{ color: "var(--bad)" }}>
             {error}
