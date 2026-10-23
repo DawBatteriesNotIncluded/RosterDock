@@ -274,6 +274,30 @@ describe("a provider's schema", () => {
       expect(labelLooksLikeKey(label), label).toBe(false);
   });
 
+  it("knows a key whose dashes and underscores break it up, and a value given to a secret's name", () => {
+    // Built here, so the repository holds no string a secret scanner would stop a push for.
+    const b64url = ["mR7xQ2pL9vN4kT8wZ1s", "J5bH3cY6dG0aF8eK2uB", "4iO6x"];
+    const together = ["tgp", "v1", b64url.join("-")].join("_");
+    const bare = `${b64url[0]}-${b64url[1]!.slice(0, 12)}`; // 32 characters, a dash in them
+    for (const key of [together, `pa-${b64url.join("_")}`, bare]) {
+      expect(labelLooksLikeKey(`Acme ${key}`), key).toBe(true);
+      expect(nameLooksLikeKey(key.replace(/-/g, "_")), key).toBe(true);
+    }
+    expect(labelLooksLikeKey("Acme OPENAI_API_KEY=abc123xyz789")).toBe(true);
+    expect(labelLooksLikeKey("Acme password=hunter2xyz")).toBe(true);
+    // Long names joined by dashes or underscores read as words.
+    for (const label of [
+      "Meta-Llama-3.1-405B-Instruct-Turbo",
+      "mistralai-Mixtral-8x22B-Instruct-v0-1",
+      "NousResearch-Hermes-3-Llama-3.1-70B-FP8",
+      "Together-AI-Production-Key-2025-Q3",
+      "Llama-3.3-Nemotron-Super-49B-v1.5-FP8",
+    ])
+      expect(labelLooksLikeKey(label), label).toBe(false);
+    for (const name of ["githubPersonalAccessToken_forProdDeploy", "Acme_OpenAI_Production_Key_EU_West"])
+      expect(nameLooksLikeKey(name), name).toBe(false);
+  });
+
   it("says why a model id will not do, as the board would", () => {
     expect(modelIdProblem("anthropic", "claude", "claude-opus-5.5", ["claude-opus-5-5"])).toBe(
       "This model is on the list already.",

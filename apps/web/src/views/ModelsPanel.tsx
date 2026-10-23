@@ -23,6 +23,7 @@ import {
   labelLooksLikeKey,
   modelIdProblem,
   MAX_PROVIDER_LABEL,
+  nameLooksLikeKey,
   PROVIDER_KIND_LABELS,
   PROVIDER_KINDS,
   providerNameRefusal,
@@ -229,6 +230,15 @@ export interface ProviderForm {
   picked: string;
 }
 
+/** Whether text holds twelve characters or more of a key in a row, letters and digits only, in either case. */
+export function holdsPartOf(text: string, key: string): boolean {
+  const flat = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const t = flat(text);
+  const k = flat(key);
+  for (let i = 0; i + 12 <= k.length; i++) if (t.includes(k.slice(i, i + 12))) return true;
+  return false;
+}
+
 /** The provider's name: as typed, or made from the label. */
 export function formName(f: Pick<ProviderForm, "name" | "label">): string {
   if (f.name !== null) return f.name.trim();
@@ -292,6 +302,12 @@ export function formProblem(
   const name = formName(f);
   if (label && labelLooksLikeKey(label))
     return "That label looks like a key. The key goes in its own field below.";
+  // As typed, before any rule on its case: a key keeps its case here, and its case is what gives it away.
+  const typed = f.name?.trim() ?? "";
+  if (typed && (labelLooksLikeKey(typed) || nameLooksLikeKey(typed.replace(/-/g, "_"))))
+    return "That name looks like a key. The key goes in its own field below.";
+  if (f.how === "paste" && (holdsPartOf(label, f.value) || holdsPartOf(name, f.value)))
+    return "The label or the name holds part of the key. The key goes in its own field below, and nowhere else.";
   if (label.length > MAX_PROVIDER_LABEL) return `A label is ${MAX_PROVIDER_LABEL} characters at most.`;
   const nameRefusal = name ? providerNameRefusal(name) : null;
   if (nameRefusal) return `The name: ${nameRefusal}.`;
@@ -449,9 +465,10 @@ function AddProviderForm(p: {
           <input
             aria-label="Name"
             className="mono"
-            value={formName(f)}
-            // Once typed, the name is the person's, cleared or not.
-            onChange={(e) => set({ name: e.target.value.toLowerCase() })}
+            value={f.name ?? formName(f)}
+            // Once typed, the name is the person's, cleared or not, and kept as typed: the form says what will
+            // not do, and a key pasted here keeps the case that gives it away.
+            onChange={(e) => set({ name: e.target.value })}
             style={{ width: 180 }}
           />
         </Field>
@@ -567,10 +584,9 @@ function AddProviderForm(p: {
       {!canPaste ? (
         <span className="hint">
           {noKey
-            ? "This board keeps no company secrets, and its operator shares no names, so there is no key to give a provider here yet. "
+            ? "This board keeps no company secrets, and its operator shares no key names, so there is no key to give a provider here yet. "
             : "This board keeps no company secrets, so a key cannot be pasted here: use a name your operator shares. "}
-          An operator turns a secret store on (board.oauth.enabled on the chart), or shares a name with every
-          company (board.sharedEnvNames).
+          Ask your operator to turn on a secret store for companies, or to share a key&apos;s name with them.
         </span>
       ) : null}
       {p.secretsFailed && f.how === "paste" ? (
@@ -666,11 +682,20 @@ function AddModelForm(p: {
 }
 
 /** What removing a provider takes and what it leaves, said before it goes. */
-export function removeLine(v: Pick<ModelProvider, "label" | "credentials" | "kind">): string {
-  const key = v.credentials[credentialRole(v.kind)];
-  return `Remove ${v.label}? Its settings, its list of models and its prices go, for good.${
-    key ? ` Its key stays in this company's secrets as ${key}.` : ""
-  } Archive it instead to keep it all, unused.`;
+export function removeLine(
+  v: Pick<ModelProvider, "label" | "credentials" | "credentialStates" | "kind">,
+): string {
+  const role = credentialRole(v.kind);
+  const key = v.credentials[role];
+  const state = v.credentialStates[role]?.state;
+  const kept = !key
+    ? ""
+    : state === "shared"
+      ? ` Its key, ${key}, is one your operator shares, and stays theirs.`
+      : state === "set"
+        ? ` Its key stays in this company's secrets as ${key}.`
+        : "";
+  return `Remove ${v.label}? Its settings, its list of models and its prices go, for good.${kept} Archive it instead to keep it all, unused.`;
 }
 
 /** A provider's settings, changed: its label, where it is reached, and its key's name or value. */
@@ -765,6 +790,10 @@ function EditProvider(p: {
               value={name}
               onChange={(e) => setName(e.target.value)}
             >
+              {/* A provider with no key yet shows that, never a name it does not have. */}
+              {!keyName ? (
+                <option value="">{v.kind === "openai_compatible" ? "No key" : "Pick one"}</option>
+              ) : null}
               {names.map((n) => (
                 <option key={n} value={n}>
                   {n}
@@ -1155,7 +1184,11 @@ export function ModelsPanel(p: ModelsPanelProps) {
         e.type.startsWith("model_provider.") || e.type.startsWith("secret.") || e.type === "company.updated",
     )?.seq ?? 0;
   useEffect(() => {
-    void reload().catch((err: unknown) => setError((err as Error).message));
+    // What the top card says is about the last load: one that worked clears it.
+    void reload().then(
+      () => setError(null),
+      (err: unknown) => setError((err as Error).message),
+    );
     // A list that cannot be read keeps the one before, never an empty one that would hide what is taken.
     if (p.canEdit)
       void p.loadSecrets().then(
