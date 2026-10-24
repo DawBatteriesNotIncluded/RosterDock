@@ -141,6 +141,24 @@ const prices: ModelPrice[] = [
   price({ id: "pr1" }),
   price({ id: "pr2", model: "qwen3-coder", providerId: null, inputPerMillion: 10, outputPerMillion: 20 }),
 ];
+// What the board itself has, as GET /planner says it: each CLI's sign-in where the board runs, and the API key.
+const boardModels = {
+  options: [
+    {
+      kind: "claude_cli" as const,
+      label: "Claude Code CLI",
+      available: true,
+      detail: "signed in (claude.ai, max)",
+    },
+    { kind: "codex_cli" as const, label: "Codex CLI", available: true, detail: "signed in using ChatGPT" },
+    {
+      kind: "api" as const,
+      label: "Anthropic API",
+      available: false,
+      detail: "no ANTHROPIC_API_KEY on the board",
+    },
+  ],
+};
 const panel = (over: Partial<ModelsPanelProps> = {}) =>
   renderToString(
     <TooltipProvider>
@@ -163,6 +181,8 @@ const panel = (over: Partial<ModelsPanelProps> = {}) =>
         deletePrice={async () => undefined}
         fillListPrices={async () => ({ added: [], unknown: [] })}
         initialPrices={prices}
+        loadBoardModels={async () => boardModels}
+        initialBoardModels={boardModels}
         {...over}
       />
     </TooltipProvider>,
@@ -191,9 +211,9 @@ describe("Settings > Models", () => {
     expect(engineLine("bedrock", "other")).toBe("No engine here runs it");
     expect(whereLine({ kind: "anthropic", endpoint: null, region: null })).toBe("api.anthropic.com");
     expect(whereLine({ kind: "bedrock", endpoint: null, region: "eu-west-1" })).toBe("Bedrock in eu-west-1");
-    expect(boardLine(true)).toBe("This board's own models: available");
+    expect(boardLine(true)).toBe("Your operator lends these to every company.");
     expect(boardLine(false)).toBe(
-      "This board's own models: not lent. Once teammates think with your providers, each will need one.",
+      "Not lent by your operator. Once teammates think with your providers, each will need one.",
     );
     expect(checkLine({ lastCheck: null })).toBe("Not checked yet");
   });
@@ -456,7 +476,7 @@ describe("Settings > Models", () => {
     expect(html).toContain("Runs on Claude Code");
     expect(html).toContain('<span class="mono">http://vllm.ai.svc.cluster.local:8000/v1</span> · no key');
     expect(html).toContain("Runs on Codex");
-    expect(html).toContain("This board&#x27;s own models: not lent");
+    expect(html).toContain("Not lent by your operator");
     expect(html).toContain("Teammates do not think with them yet");
     // Archived, of a kind no longer offered, and its key not set.
     expect(html).toContain("Archived");
@@ -505,16 +525,27 @@ describe("Settings > Models", () => {
     // The name a key goes under follows the provider's name as it is typed.
     expect(html).toContain("Value for MODELS_PROVIDER_KEY");
     expect(html).toContain("Paste a key");
+    // A saved secret is offered only when there is one to pick, never a list with nothing in it.
+    expect(html).not.toContain("Use a saved secret");
+    expect(
+      panel({ initialSecrets: [{ name: "MODELS_OLD_KEY", updatedAt: "", updatedBy: daniel }] }),
+    ).toContain("Use a saved secret");
     // Without a store, no key is pasted here: a saved or shared name only.
     const storeless = panel({ features: { oauth: false, objectStore: false } });
     expect(passwords(storeless)).toBe(0);
     expect(storeless).not.toContain("Paste a key");
-    // And it says so, with what an operator can do, instead of a picker with nothing in it.
+    // And it says so where the key would go, with what an operator can do, instead of a picker with nothing in
+    // it: no way to give a key, no picker of secrets, and nothing to press.
     expect(storeless).not.toContain("Use a saved secret");
+    expect(storeless).not.toContain('aria-label="How the key is given"');
+    expect(storeless).not.toContain('aria-label="Secret"');
+    expect(storeless).not.toContain(">Add provider<");
     expect(storeless).toContain("This board keeps no company secrets, and its operator shares no key names");
     // In a company's words: the chart's settings are the operator's.
     expect(storeless).toContain("Ask your operator to turn on a secret store for companies");
     expect(storeless).not.toContain("board.oauth.enabled");
+    // A server that takes no key needs neither, and the note says so while the kind offers one.
+    expect(storeless).toContain("An OpenAI-compatible server that takes no key can be added now.");
     const sharing = panel({
       features: { oauth: false, objectStore: false, sharedEnvNames: ["SHARED_MODELS_KEY"] },
     });
@@ -525,6 +556,26 @@ describe("Settings > Models", () => {
     expect(viewer).not.toContain("<input");
     expect(viewer).not.toContain("Add a provider");
     expect(viewer).toContain("Acme Anthropic");
+  });
+
+  it("lists this board's own models first: each CLI and the API key, and whether it works where the board runs", () => {
+    const html = panel();
+    expect(html.indexOf("This board&#x27;s own models")).toBeGreaterThan(-1);
+    expect(html.indexOf("This board&#x27;s own models")).toBeLessThan(html.indexOf("Your model providers"));
+    expect(html).toContain("Claude Code CLI");
+    expect(html).toContain("signed in (claude.ai, max)");
+    expect(html).toContain("Codex CLI");
+    expect(html).toContain("signed in using ChatGPT");
+    expect(html).toContain("no ANTHROPIC_API_KEY on the board");
+    expect(html.match(/>works here</g)).toHaveLength(2);
+    expect(html.match(/>not available</g)).toHaveLength(1);
+    expect(html).toContain("Check again");
+    // Where each brain is picked: every teammate's page, Peter's too.
+    expect(html).toContain(
+      "Pick each brain on the teammate&#x27;s page under Teammates, Peter&#x27;s included.",
+    );
+    // A viewer sees them too: they are the board's, not the company's to change.
+    expect(panel({ canEdit: false })).toContain("signed in using ChatGPT");
   });
 
   it("says what removing takes and leaves, and never makes a name from a label that looks like a key", () => {

@@ -1,10 +1,11 @@
-import type { ToolMode, UpdateTeammateInput } from "@rosterdock/shared";
+import type { PlannerKind, PlannerSettings, ToolMode, UpdateTeammateInput } from "@rosterdock/shared";
 import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { CompanyData, Inbox, Teammate, ToolboxEntry } from "../api/types.ts";
+import type { CompanyData, Inbox, PlannerInfo, Teammate, ToolboxEntry } from "../api/types.ts";
 import { Avatar, Button, Dot, Empty, Field, Tip, Topbar } from "../components/ui.tsx";
 import { cn } from "../lib/cn.ts";
 import { driftLine, engineChoices, relativeTime, standingDrift, teammateStatus } from "../lib/format.ts";
+import { companyManager } from "./office/layout.ts";
 import { ConnectionGrant, type Grant } from "./ToolboxEditor.tsx";
 
 export interface TeammatesViewProps {
@@ -15,6 +16,11 @@ export interface TeammatesViewProps {
   onSave(id: string, input: UpdateTeammateInput): Promise<void>;
   /** The teammate's inbox: what is addressed to them, new since their last run. */
   loadInbox(teammateId: string): Promise<Inbox>;
+  /** What Peter can plan with on this board and the company's choice; `refresh` asks the CLIs again. */
+  loadPlanner(refresh?: boolean): Promise<PlannerInfo>;
+  /** Saves what Peter, and the department leads with him, plan with: the company's choice. */
+  savePlanner(choice: PlannerSettings): Promise<void>;
+  initialPlanner?: PlannerInfo;
 }
 
 /** The effort levels a person picks from; "" is the engine's own default. */
@@ -26,6 +32,80 @@ export const EFFORT_CHOICES: [string, string][] = [
   ["xhigh", "Extra high"],
   ["max", "Max"],
 ];
+
+/** Peter's brains by name, for his picker before the board has said which work here. */
+const PLANNER_LABEL: Record<PlannerKind, string> = {
+  claude_cli: "Claude Code CLI",
+  codex_cli: "Codex CLI",
+  api: "Anthropic API",
+};
+
+/**
+ * Peter's engine picker: Automatic, every brain the board offers him (one that does not work here says so), and
+ * no model. Peter plans on the board, not on a worker, so his engines are what the board itself can reach.
+ */
+export function plannerChoices(
+  info: Pick<PlannerInfo, "options"> | null,
+  current: PlannerSettings["via"],
+): [PlannerSettings["via"], string][] {
+  const options = info?.options ?? [];
+  // Before the board answers, the saved choice is still offered, so the picker shows it.
+  const saved =
+    current !== "auto" && current !== "none" && !options.some((o) => o.kind === current)
+      ? [[current, PLANNER_LABEL[current]] as [PlannerKind, string]]
+      : [];
+  return [
+    ["auto", "Automatic"],
+    ...options.map((o): [PlannerKind, string] => [
+      o.kind,
+      o.available ? o.label : `${o.label} (not available here)`,
+    ]),
+    ...saved,
+    ["none", "No model (plans by role)"],
+  ];
+}
+
+/** What the chosen engine comes to, under Peter's picker. */
+export function plannerHint(info: Pick<PlannerInfo, "options"> | null, via: PlannerSettings["via"]): string {
+  if (via === "auto")
+    return "The first that works here: the Claude Code CLI, then the Codex CLI, then an API key.";
+  if (via === "none")
+    return "Peter splits every goal by role (research, requirements, build) and asks no questions.";
+  return info?.options.find((o) => o.kind === via)?.detail ?? "Asking the board whether it works here…";
+}
+
+/** What Peter plans with right now, in a sentence. */
+export function plannerLine(info: Pick<PlannerInfo, "effective" | "options" | "choice">): string {
+  const label = info.options.find((o) => o.kind === info.effective)?.label;
+  if (label)
+    return `Peter plans with the ${label}${info.choice.via === "auto" ? ", chosen automatically" : ""}.`;
+  if (info.choice.via === "none") return "Peter plans by role, without a model.";
+  if (info.choice.via === "auto") return "Nothing works on this board yet, so Peter plans by role.";
+  const chosen = info.options.find((o) => o.kind === info.choice.via)?.label ?? info.choice.via;
+  return `The ${chosen} does not work on this board, so Peter plans by role until it does.`;
+}
+
+/** Peter's choice as Save sends it: a model only with the Codex CLI, the one brain that takes it from here. */
+export function plannerChoice(p: PlannerSettings): PlannerSettings {
+  const model = p.model?.trim();
+  return { via: p.via, ...(p.via === "codex_cli" && model ? { model } : {}) };
+}
+
+const PLANNER_VIAS: readonly string[] = ["auto", "claude_cli", "codex_cli", "api", "none"];
+
+/**
+ * The company's choice of Peter's brain from its settings (`settings.planner`), as the board reads it:
+ * Automatic when there is none. At hand with the company, before the board has asked its CLIs anything.
+ */
+export function plannerOf(settings: Record<string, unknown>): PlannerSettings {
+  const p = (settings.planner ?? {}) as { via?: unknown; model?: unknown };
+  const via = typeof p.via === "string" && PLANNER_VIAS.includes(p.via) ? p.via : "auto";
+  return plannerChoice({
+    via: via as PlannerSettings["via"],
+    ...(typeof p.model === "string" ? { model: p.model } : {}),
+  });
+}
+
 function InboxPanel({ t, load }: { t: Teammate; load: TeammatesViewProps["loadInbox"] }) {
   const [inbox, setInbox] = useState<Inbox | null>(null);
   useEffect(() => {
@@ -144,46 +224,93 @@ export function refreshed(s: EditorState, t: Teammate): EditorState {
   return now.savedAt === s.savedAt && now.saved === s.saved ? s : now;
 }
 
+/** Peter's brain, for his editor alone: what the board offers him and the company's choice. */
+interface PlannerAccess {
+  load: TeammatesViewProps["loadPlanner"];
+  save: TeammatesViewProps["savePlanner"];
+  initial?: PlannerInfo;
+}
+
 function Editor({
   t,
   data,
   onSave,
   loadInbox,
+  planner,
 }: {
   t: Teammate;
   data: CompanyData;
   onSave: TeammatesViewProps["onSave"];
   loadInbox: TeammatesViewProps["loadInbox"];
+  /** Only for the company's project manager: he plans on the board, so his engine is the company's choice. */
+  planner: PlannerAccess | null;
 }) {
   const [state, setState] = useState(() => editorState(t));
   useEffect(() => setState((s) => refreshed(s, t)), [t]);
   const { form, toolbox, picked } = state.draft;
   const setForm = (next: TeammateDraft["form"]) =>
     setState((s) => ({ ...s, draft: { ...s.draft, form: next } }));
+  // Peter's engine as the company saved it and as picked. The draft follows a save landing, here or in another
+  // browser, and keeps a Codex model typed while another engine is picked; Save sends it only with the Codex
+  // CLI. What each engine comes to here (signed in or not) waits on the board asking its CLIs.
+  const savedPlan = JSON.stringify(plannerOf(data.company.settings));
+  const [plan, setPlan] = useState<PlannerSettings>(() => JSON.parse(savedPlan) as PlannerSettings);
+  useEffect(() => setPlan(JSON.parse(savedPlan) as PlannerSettings), [savedPlan]);
+  const [info, setInfo] = useState<PlannerInfo | null>(planner?.initial ?? null);
+  const [unasked, setUnasked] = useState(false);
+  const ask = () =>
+    planner?.load().then(
+      (next) => {
+        setInfo(next);
+        setUnasked(false);
+      },
+      () => setUnasked(true),
+    );
+  useEffect(() => {
+    if (planner && !planner.initial) void ask();
+  }, []);
+  const planDirty = !!planner && JSON.stringify(plannerChoice(plan)) !== savedPlan;
   const [busy, setBusy] = useState(false);
-  const dirty = draftDirty(state);
+  const dirty = draftDirty(state) || planDirty;
   const st = teammateStatus(t, data.tasks);
   const drift = standingDrift(t, data.events);
   const save = async () => {
     setBusy(true);
     try {
-      await onSave(t.id, {
-        name: form.name,
-        role: form.role,
-        engine: form.engine as UpdateTeammateInput["engine"],
-        model: form.model,
-        effort: (form.effort || null) as UpdateTeammateInput["effort"],
-        personaMd: form.personaMd,
-        playbooks: form.playbooks
-          .split(/\n\s*---\s*\n/)
-          .map((s) => s.trim())
-          .filter(Boolean),
-        toolbox: toolboxLines(state.draft),
-      });
+      // What he plans with now follows from the board once the choice is saved.
+      if (planner && planDirty) await planner.save(plannerChoice(plan)).then(ask);
+      if (draftDirty(state))
+        await onSave(t.id, {
+          name: form.name,
+          role: form.role,
+          engine: form.engine as UpdateTeammateInput["engine"],
+          model: form.model,
+          effort: (form.effort || null) as UpdateTeammateInput["effort"],
+          personaMd: form.personaMd,
+          playbooks: form.playbooks
+            .split(/\n\s*---\s*\n/)
+            .map((s) => s.trim())
+            .filter(Boolean),
+          toolbox: toolboxLines(state.draft),
+        });
     } finally {
       setBusy(false);
     }
   };
+  const effortField = (on: string) => (
+    <Field
+      label="Effort"
+      hint={`How hard the model thinks on each ${on}. Higher is slower and costs more; Default is the engine's own.`}
+    >
+      <select value={form.effort} onChange={(e) => setForm({ ...form, effort: e.target.value })}>
+        {EFFORT_CHOICES.map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
   return (
     <div className="editor">
       <div className="row">
@@ -221,39 +348,83 @@ function Editor({
       </div>
       <InboxPanel t={t} load={loadInbox} />
       <span className="eyebrow">Brain</span>
-      <div className="grid2">
-        <Field label="Engine">
-          <select value={form.engine} onChange={(e) => setForm({ ...form, engine: e.target.value })}>
-            {engineChoices(form.engine).map(([k, l]) => (
-              <option key={k} value={k}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field
-          label="Model"
-          hint="Set per teammate. A reasoning-heavy profile on a trivial task burns tokens."
-        >
-          <input
-            value={form.model}
-            onChange={(e) => setForm({ ...form, model: e.target.value })}
-            className="mono"
-          />
-        </Field>
-        <Field
-          label="Effort"
-          hint="How hard the model thinks on each run. Higher is slower and costs more; Default is the engine's own."
-        >
-          <select value={form.effort} onChange={(e) => setForm({ ...form, effort: e.target.value })}>
-            {EFFORT_CHOICES.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
+      {planner ? (
+        <>
+          <div className="grid2">
+            <Field label="Engine" hint={plannerHint(info, plan.via)}>
+              <select
+                value={plan.via}
+                onChange={(e) => setPlan({ ...plan, via: e.target.value as PlannerSettings["via"] })}
+              >
+                {plannerChoices(info, plan.via).map(([via, label]) => (
+                  <option key={via} value={via}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            {plan.via === "codex_cli" ? (
+              <Field label="Model" hint="Empty takes Codex's own default.">
+                <input
+                  value={plan.model ?? ""}
+                  placeholder="Codex's default"
+                  onChange={(e) => setPlan({ ...plan, model: e.target.value })}
+                  className="mono"
+                />
+              </Field>
+            ) : (
+              <Field
+                label="Model"
+                hint={
+                  plan.via === "none"
+                    ? "Kept for when he plans with a model again."
+                    : "The Claude model he plans with."
+                }
+              >
+                <input
+                  value={form.model}
+                  onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  className="mono"
+                />
+              </Field>
+            )}
+            {effortField("plan")}
+          </div>
+          <span className="hint">
+            {info
+              ? plannerLine(info)
+              : unasked
+                ? "The board did not say what it has; reload to ask again."
+                : "Asking the board what it has…"}{" "}
+            Peter plans on the board, not on a worker: with a model CLI signed in where the board runs, on its
+            own plan, or the Anthropic API with the board&apos;s key. The department leads plan with the same
+            engine.
+          </span>
+        </>
+      ) : (
+        <div className="grid2">
+          <Field label="Engine">
+            <select value={form.engine} onChange={(e) => setForm({ ...form, engine: e.target.value })}>
+              {engineChoices(form.engine).map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            label="Model"
+            hint="Set per teammate. A reasoning-heavy profile on a trivial task burns tokens."
+          >
+            <input
+              value={form.model}
+              onChange={(e) => setForm({ ...form, model: e.target.value })}
+              className="mono"
+            />
+          </Field>
+          {effortField("run")}
+        </div>
+      )}
       <span className="eyebrow">Persona</span>
       <Field label="Job description" hint="Names only: never paste credential values here.">
         <textarea value={form.personaMd} onChange={(e) => setForm({ ...form, personaMd: e.target.value })} />
@@ -316,6 +487,7 @@ export function TeammatesView(p: TeammatesViewProps) {
   }));
   const seated = new Set(grouped.flatMap((g) => g.mates.map((m) => m.id)));
   const unseated = data.teammates.filter((t) => !seated.has(t.id));
+  const managerId = companyManager(data.teammates);
   const row = (t: Teammate) => (
     <button
       key={t.id}
@@ -359,7 +531,22 @@ export function TeammatesView(p: TeammatesViewProps) {
             {data.teammates.length === 0 ? <Empty>No teammates yet.</Empty> : null}
           </div>
           {selected ? (
-            <Editor key={selected.id} t={selected} data={data} onSave={p.onSave} loadInbox={p.loadInbox} />
+            <Editor
+              key={selected.id}
+              t={selected}
+              data={data}
+              onSave={p.onSave}
+              loadInbox={p.loadInbox}
+              planner={
+                selected.id === managerId
+                  ? {
+                      load: p.loadPlanner,
+                      save: p.savePlanner,
+                      ...(p.initialPlanner ? { initial: p.initialPlanner } : {}),
+                    }
+                  : null
+              }
+            />
           ) : (
             <Empty>Hire a teammate from a template to start.</Empty>
           )}

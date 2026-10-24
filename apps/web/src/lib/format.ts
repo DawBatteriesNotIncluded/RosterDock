@@ -97,12 +97,20 @@ export const ENGINE_LABEL: Record<string, string> = {
 /** Engines a person can pick. OpenCode has no worker yet (docs/backlog.md): its label stays for display only. */
 export const PICKABLE_ENGINES = ["claude_code", "codex", "stub"];
 
+/** What a picker calls an engine: the worker runs Claude Code and Codex as their CLIs, as Peter's picker says. */
+const ENGINE_CHOICE_LABEL: Record<string, string> = {
+  claude_code: "Claude Code CLI",
+  codex: "Codex CLI",
+};
+
 /** An engine picker's choices: the pickable engines, and a teammate's own when it runs on another. */
 export function engineChoices(current: string): [string, string][] {
   const ids = PICKABLE_ENGINES.includes(current) ? PICKABLE_ENGINES : [...PICKABLE_ENGINES, current];
   return ids.map((id) => [
     id,
-    PICKABLE_ENGINES.includes(id) ? (ENGINE_LABEL[id] ?? id) : `${ENGINE_LABEL[id] ?? id} (not available)`,
+    PICKABLE_ENGINES.includes(id)
+      ? (ENGINE_CHOICE_LABEL[id] ?? ENGINE_LABEL[id] ?? id)
+      : `${ENGINE_LABEL[id] ?? id} (not available)`,
   ]);
 }
 

@@ -1,9 +1,10 @@
 // How Peter thinks, per company. The board can offer three brains for his
 // planning calls: the Claude Code CLI and the Codex CLI on its own machine,
 // each on its own sign-in, and the Anthropic API with the board's key. A
-// company picks one in Settings (`settings.planner`), or none; `auto`, the
-// default, takes the first that works here in that order, so a board started
-// where a CLI is signed in plans with it and nothing has to be set. Whether a
+// company picks one as Peter's engine, on his page under Teammates
+// (`settings.planner`), or none; `auto`, the default, takes the first that
+// works here in that order, so a board started where a CLI is signed in
+// plans with it and nothing has to be set. Whether a
 // CLI works is asked of the CLI itself (`claude auth status`, `codex login
 // status`), at most once a minute. A company whose choice does not work here
 // still plans: the call fails with the reason and Peter plans by role.

@@ -1,6 +1,6 @@
-// Settings, one tab at a time: prices and budgets, the company's model providers, how Peter thinks,
-// connections (with the secrets note and the client policies), notifications,
-// drift, templates.
+// Settings, one tab at a time: prices and budgets, the models the company thinks with (the board's own and
+// its providers), connections (with the secrets note and the client policies), notifications, drift,
+// templates. Peter's brain is on his page under Teammates, like every teammate's.
 // Secrets never appear here; the platform knows them by name only.
 import { Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -9,7 +9,6 @@ import type {
   DriftSettingsInput,
   ModelPriceInput,
   NotifySettingsInput,
-  PlannerSettings,
 } from "@rosterdock/shared";
 import type {
   Budget,
@@ -18,7 +17,6 @@ import type {
   CompanyData,
   ListPricesResult,
   ModelPrice,
-  PlannerInfo,
   Project,
   StylePackInfo,
   TemplatesImportReport,
@@ -49,7 +47,7 @@ export interface SettingsViewProps {
   deleteBudget(id: string): Promise<void>;
   initialPrices?: ModelPrice[];
   initialBudgets?: Budget[];
-  /** The company's own model providers (Settings > Models). */
+  /** The board's own models and the company's own model providers (Settings > Models). */
   models: Omit<ModelsPanelProps, "data" | "canEdit">;
   // Governed tools (M5)
   connections: Omit<ConnectionsPanelProps, "connections" | "canEdit">;
@@ -59,10 +57,6 @@ export interface SettingsViewProps {
   testNotify(): Promise<{ sent: boolean; target: string | null; error: string | null }>;
   /** What counts as drift for this company's teammates; empty fields take the board's defaults. */
   saveDriftSettings(drift: DriftSettingsInput): Promise<void>;
-  /** How Peter thinks for the company; `refresh` asks the board's CLIs again. */
-  loadPlanner(refresh?: boolean): Promise<PlannerInfo>;
-  savePlanner(choice: PlannerSettings): Promise<void>;
-  initialPlanner?: PlannerInfo;
   /** Style packs: other people's published rules for how teammates write, switched per company. */
   loadStyles(): Promise<StylePackInfo[]>;
   setStyle(pack: string, input: { enabled: boolean; level?: string }): Promise<StylePackInfo[]>;
@@ -75,7 +69,6 @@ export interface SettingsViewProps {
 export const SETTINGS_TABS: { value: SettingsTab; label: string }[] = [
   { value: "prices", label: "Prices and budgets" },
   { value: "models", label: "Models" },
-  { value: "peter", label: "Peter" },
   { value: "style", label: "Style" },
   { value: "connections", label: "Connections" },
   { value: "notifications", label: "Notifications" },
@@ -309,126 +302,6 @@ function DriftCard(p: {
         {p.canEdit ? (
           <Button variant="primary" disabled={busy || !dirty} onClick={() => void save()}>
             Save thresholds
-          </Button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-/** What Peter plans with right now, in a sentence. */
-export function plannerLine(info: Pick<PlannerInfo, "effective" | "options" | "choice">): string {
-  const label = info.options.find((o) => o.kind === info.effective)?.label;
-  if (label)
-    return `Peter plans with the ${label}${info.choice.via === "auto" ? ", chosen automatically" : ""}.`;
-  if (info.choice.via === "none") return "Peter plans by role, without a model.";
-  if (info.choice.via === "auto") return "Nothing works on this board yet, so Peter plans by role.";
-  const chosen = info.options.find((o) => o.kind === info.choice.via)?.label ?? info.choice.via;
-  return `The ${chosen} does not work on this board, so Peter plans by role until it does.`;
-}
-
-const PLANNER_CHOICE_HINT: Record<string, string> = {
-  auto: "The first that works here: the Claude Code CLI, then the Codex CLI, then an API key.",
-  none: "Peter splits every goal by role (research, requirements, build) and asks no questions.",
-};
-
-function PeterCard(p: {
-  canEdit: boolean;
-  load(refresh?: boolean): Promise<PlannerInfo>;
-  onSave(choice: PlannerSettings): Promise<void>;
-  initial?: PlannerInfo;
-}) {
-  const [info, setInfo] = useState<PlannerInfo | null>(p.initial ?? null);
-  const [busy, setBusy] = useState(false);
-  const [form, setForm, dirty] = useMirroredForm<PlannerSettings>(info?.choice ?? { via: "auto" });
-  const act = async (fn: () => Promise<void>) => {
-    setBusy(true);
-    try {
-      await fn();
-    } finally {
-      setBusy(false);
-    }
-  };
-  useEffect(() => {
-    if (!p.initial) void p.load().then(setInfo);
-    // Loaded once; "Check again" asks the CLIs anew.
-  }, []);
-  const choices: { via: PlannerSettings["via"]; label: string; option?: PlannerInfo["options"][number] }[] = [
-    { via: "auto", label: "Automatic" },
-    ...(info?.options ?? []).map((o) => ({ via: o.kind, label: o.label, option: o })),
-    { via: "none", label: "No model" },
-  ];
-  return (
-    <div className="card flex flex-col gap-3 px-[18px] py-4">
-      <div className="flex flex-col gap-0.5">
-        <span className="font-semibold">How Peter thinks</span>
-        <span className="hint">
-          Peter and the department leads use a model to plan goals, re-plan work that failed and design
-          departments. It can be a model CLI signed in where the board runs, on its own plan, or the Anthropic
-          API with the board's key. Teammates keep their own brains.
-        </span>
-      </div>
-      {info ? <span>{plannerLine(info)}</span> : <span className="hint">Asking the board what it has…</span>}
-      <div className="flex flex-col gap-2" role="radiogroup" aria-label="How Peter thinks">
-        {choices.map((c) => (
-          <label key={c.via} className="flex items-start gap-2">
-            <input
-              type="radio"
-              name="planner"
-              value={c.via}
-              checked={form.via === c.via}
-              disabled={!p.canEdit}
-              onChange={() =>
-                setForm({ via: c.via, ...(c.via === "codex_cli" && form.model ? { model: form.model } : {}) })
-              }
-            />
-            <span className="flex flex-col">
-              <span className="flex items-center gap-2">
-                {c.label}
-                {c.option ? (
-                  <Pill tone="muted">{c.option.available ? "works here" : "not available"}</Pill>
-                ) : null}
-              </span>
-              <span className="hint">{c.option ? c.option.detail : PLANNER_CHOICE_HINT[c.via]}</span>
-            </span>
-          </label>
-        ))}
-      </div>
-      {form.via === "codex_cli" ? (
-        <Field label="Codex model" hint="Empty takes Codex's own default.">
-          <input
-            value={form.model ?? ""}
-            placeholder="Codex's default"
-            disabled={!p.canEdit}
-            onChange={(e) =>
-              setForm(
-                e.target.value.trim() ? { via: "codex_cli", model: e.target.value } : { via: "codex_cli" },
-              )
-            }
-            className="mono"
-            style={{ width: 240 }}
-          />
-        </Field>
-      ) : null}
-      <div className="flex gap-2">
-        <Button disabled={busy} onClick={() => void act(async () => setInfo(await p.load(true)))}>
-          Check again
-        </Button>
-        {p.canEdit ? (
-          <Button
-            variant="primary"
-            disabled={busy || !dirty}
-            onClick={() =>
-              void act(async () => {
-                await p.onSave({
-                  via: form.via,
-                  ...(form.model?.trim() ? { model: form.model.trim() } : {}),
-                });
-                setInfo(await p.load());
-              })
-            }
-          >
-            Save
           </Button>
         ) : null}
       </div>
@@ -1096,14 +969,6 @@ export function SettingsView(p: SettingsViewProps) {
                   load={p.loadStyles}
                   onSet={p.setStyle}
                   {...(p.initialStyles ? { initial: p.initialStyles } : {})}
-                />
-              ) : null}
-              {p.tab === "peter" ? (
-                <PeterCard
-                  canEdit={p.canEdit}
-                  load={p.loadPlanner}
-                  onSave={p.savePlanner}
-                  {...(p.initialPlanner ? { initial: p.initialPlanner } : {})}
                 />
               ) : null}
               {p.tab === "connections" ? (

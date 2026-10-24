@@ -154,7 +154,8 @@ board:
   # private ranges and the rest of the cluster included. Off: connections authenticate by env var NAME only.
   oauth:
     enabled: false
-  # Model CLIs Peter may plan with where the board runs (Settings > Peter; Automatic takes the first signed in).
+  # Model CLIs Peter may plan with where the board runs (his engine on his page under Teammates; Automatic takes
+  # the first signed in; Settings > Models says which are).
   # The image carries them when built with WITH_MODEL_CLIS=1. Their credentials, by NAME from plannerSecret
   # (CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`, OPENAI_API_KEY for Codex), reach only the CLI the board
   # starts. Empty: none.

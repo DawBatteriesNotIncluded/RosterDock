@@ -243,7 +243,8 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
   const spans: SpanSink | null = config.otlp
     ? otlpSink(config.otlp, opts.otlpFetch ?? ((input, init) => fetch(input, init)), { warn })
     : null;
-  // Peter's brains: each company's choice in Settings, or the first that works here (planners.ts).
+  // Peter's brains: each company's choice (his engine, on his page under Teammates), or the first that works
+  // here (planners.ts).
   const claudeTarget = config.peterClaudeBin
     ? {
         bin: config.peterClaudeBin,

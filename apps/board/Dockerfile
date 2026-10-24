@@ -11,7 +11,7 @@ COPY apps/board apps/board
 RUN pnpm --filter @rosterdock/shared build && pnpm --filter @rosterdock/board build
 
 FROM node:22-alpine
-# The model CLIs Peter may plan with (Settings > Peter), when the image is built for it:
+# The model CLIs Peter may plan with (his engine, on his page under Teammates), when the image is built for it:
 #   docker build --build-arg WITH_MODEL_CLIS=1 ...
 # Their sign-in arrives by name from the cluster secret (the chart's board.plannerEnvNames). Never in a
 # published image: Claude Code's licence does not allow passing it on. Pinned to the versions the planner

@@ -3,7 +3,7 @@
 import { blockerFor, EVENT_TYPES } from "@rosterdock/shared";
 import { blockerLine, blockerNeedsYou } from "../src/lib/format.ts";
 import { renderToString } from "react-dom/server";
-import type { Approval, CompanyData } from "../src/api/types.ts";
+import type { Approval, CompanyData, PlannerInfo } from "../src/api/types.ts";
 import { describe, expect, it } from "vitest";
 import { Shell } from "../src/components/Shell.tsx";
 import { Avatar, elapsedLabel, Thinking, Topbar } from "../src/components/ui.tsx";
@@ -86,7 +86,6 @@ import {
   importSummary,
   listPricesLine,
   notifyFromForm,
-  plannerLine,
   styleSource,
   scopeName,
   SETTINGS_TABS,
@@ -102,6 +101,11 @@ import {
   draftDirty,
   editorState,
   EFFORT_CHOICES,
+  plannerChoice,
+  plannerChoices,
+  plannerHint,
+  plannerLine,
+  plannerOf,
   refreshed,
   TeammatesView,
   toolboxLines,
@@ -412,17 +416,135 @@ describe("views render with sample data", () => {
         onHire={noop}
         onSave={asyncNoop}
         loadInbox={async () => ({ since: null, unread: 0, items: [] })}
+        loadPlanner={async () => plannerFixture}
+        savePlanner={asyncNoop}
       />,
     );
     expect(html).toContain("Cody");
     expect(html).toContain("Handle: @cody");
     expect(html).toContain("senior n8n automation engineer");
-    expect(html).toContain("Claude Code");
     expect(html).toContain("Building · Map VMS sub-workflow calls");
+    // A worker's engines, by the CLIs it runs; Peter's choices are his alone.
+    expect(html).toContain('<option value="claude_code" selected="">Claude Code CLI</option>');
+    expect(html).toContain('<option value="codex">Codex CLI</option>');
+    expect(html).toContain('<option value="stub">Stub (no model)</option>');
+    expect(html).not.toContain("Automatic");
     // Effort beside the model: the engine's default unless one is picked.
     expect(html).toContain("Effort");
+    expect(html).toContain("How hard the model thinks on each run.");
     for (const [, label] of EFFORT_CHOICES) expect(html).toContain(label);
     expect(EFFORT_CHOICES.map(([v]) => v)).toEqual(["", "low", "medium", "high", "xhigh", "max"]);
+  });
+
+  it("Peter's brain is on his page, where everyone's is: what he plans with, from what the board offers", () => {
+    const peter = fixture.teammates[0]!;
+    // The company's choice is in its settings; the board says what each engine comes to here.
+    const page = (planner: PlannerInfo | null) =>
+      render(
+        <TeammatesView
+          data={{
+            ...fixture,
+            company: {
+              ...fixture.company,
+              settings: { ...fixture.company.settings, planner: planner?.choice },
+            },
+          }}
+          selectedId={peter.id}
+          onSelect={noop}
+          onHire={noop}
+          onSave={asyncNoop}
+          loadInbox={async () => ({ since: null, unread: 0, items: [] })}
+          loadPlanner={async () => planner ?? plannerFixture}
+          savePlanner={asyncNoop}
+          {...(planner ? { initialPlanner: planner } : {})}
+        />,
+      );
+    const html = page(plannerFixture);
+    // Engine, model and effort, as for every teammate; his engines are what the board itself reaches.
+    expect(html).toContain("Brain");
+    expect(html).toContain('<option value="auto" selected="">Automatic</option>');
+    expect(html).toContain('<option value="claude_cli">Claude Code CLI</option>');
+    expect(html).toContain('<option value="codex_cli">Codex CLI (not available here)</option>');
+    expect(html).toContain('<option value="api">Anthropic API (not available here)</option>');
+    expect(html).toContain('<option value="none">No model (plans by role)</option>');
+    expect(html).not.toContain('<option value="claude_code"');
+    expect(html).toContain(
+      "The first that works here: the Claude Code CLI, then the Codex CLI, then an API key.",
+    );
+    expect(html).toContain("Peter plans with the Claude Code CLI, chosen automatically.");
+    expect(html).toContain("The department leads plan with the same engine.");
+    // On Claude his model is his own row's; on the Codex CLI it is the company's Codex model.
+    expect(html).toContain(`value="${peter.model}"`);
+    expect(html).toContain("How hard the model thinks on each plan.");
+    const onCodex = page({
+      ...plannerFixture,
+      choice: { via: "codex_cli", model: "gpt-5.5-codex" },
+      effective: null,
+    });
+    expect(onCodex).toContain(
+      '<option value="codex_cli" selected="">Codex CLI (not available here)</option>',
+    );
+    expect(onCodex).toContain('value="gpt-5.5-codex"');
+    expect(onCodex).not.toContain(`value="${peter.model}"`);
+    expect(onCodex).toContain("installed, not signed in: run codex login where the board runs");
+    expect(onCodex).toContain(
+      "The Codex CLI does not work on this board, so Peter plans by role until it does.",
+    );
+    // Before the board answers, the company's choice shows at once, and what it comes to is being asked.
+    const asking = render(
+      <TeammatesView
+        data={{
+          ...fixture,
+          company: {
+            ...fixture.company,
+            settings: { planner: { via: "codex_cli", model: "gpt-5.5-codex" } },
+          },
+        }}
+        selectedId={peter.id}
+        onSelect={noop}
+        onHire={noop}
+        onSave={asyncNoop}
+        loadInbox={async () => ({ since: null, unread: 0, items: [] })}
+        loadPlanner={() => new Promise<PlannerInfo>(noop)}
+        savePlanner={asyncNoop}
+      />,
+    );
+    expect(asking).toContain('<option value="codex_cli" selected="">Codex CLI</option>');
+    expect(asking).toContain('value="gpt-5.5-codex"');
+    expect(asking).toContain("Asking the board whether it works here…");
+    expect(asking).toContain("Asking the board what it has…");
+    expect(plannerChoices(null, "codex_cli").map(([v]) => v)).toEqual(["auto", "codex_cli", "none"]);
+    // The settings as the board reads them: Automatic without a choice, or with one it does not know.
+    expect(plannerOf({})).toEqual({ via: "auto" });
+    expect(plannerOf({ planner: { via: "bogus", model: "x" } })).toEqual({ via: "auto" });
+    expect(plannerOf({ planner: { via: "codex_cli", model: "gpt-5.5" } })).toEqual({
+      via: "codex_cli",
+      model: "gpt-5.5",
+    });
+    expect(plannerOf({ planner: { via: "api", model: "gpt-5.5" } })).toEqual({ via: "api" });
+    expect(plannerChoices(plannerFixture, "auto").map(([v]) => v)).toEqual([
+      "auto",
+      "claude_cli",
+      "codex_cli",
+      "api",
+      "none",
+    ]);
+    expect(plannerHint(null, "api")).toBe("Asking the board whether it works here…");
+    expect(plannerHint(plannerFixture, "claude_cli")).toBe("signed in (claude.ai, max)");
+    // Save sends a model with the Codex CLI only; one typed and cleared is Codex's own default.
+    expect(plannerChoice({ via: "claude_cli", model: "gpt-5.5" })).toEqual({ via: "claude_cli" });
+    expect(plannerChoice({ via: "codex_cli", model: " gpt-5.5 " })).toEqual({
+      via: "codex_cli",
+      model: "gpt-5.5",
+    });
+    expect(plannerChoice({ via: "codex_cli", model: " " })).toEqual({ via: "codex_cli" });
+    // What he plans with now, in a sentence.
+    expect(plannerLine({ ...plannerFixture, effective: null, choice: { via: "none" } })).toBe(
+      "Peter plans by role, without a model.",
+    );
+    expect(plannerLine({ ...plannerFixture, effective: null, choice: { via: "auto" } })).toBe(
+      "Nothing works on this board yet, so Peter plans by role.",
+    );
   });
 
   it("offers only the engines a worker can run; a teammate already on OpenCode sees it as not available", () => {
@@ -449,7 +571,7 @@ describe("views render with sample data", () => {
       />,
     );
     expect(hire).not.toContain("OpenCode");
-    expect(hire).toContain('<option value="claude_code" selected="">Claude Code</option>');
+    expect(hire).toContain('<option value="claude_code" selected="">Claude Code CLI</option>');
     const onOpenCode = { ...fixture.teammates[1]!, engine: "opencode" };
     const editor = render(
       <TeammatesView
@@ -462,6 +584,8 @@ describe("views render with sample data", () => {
         onHire={noop}
         onSave={asyncNoop}
         loadInbox={async () => ({ since: null, unread: 0, items: [] })}
+        loadPlanner={async () => plannerFixture}
+        savePlanner={asyncNoop}
       />,
     );
     expect(editor).toContain("OpenCode (not available)");
@@ -976,6 +1100,8 @@ describe("views render with sample data", () => {
         onHire={noop}
         onSave={asyncNoop}
         loadInbox={async () => ({ since: null, unread: 0, items: [] })}
+        loadPlanner={async () => plannerFixture}
+        savePlanner={asyncNoop}
       />,
     );
     expect(html).toContain("Toolbox");
@@ -2069,6 +2195,8 @@ describe("pure helpers", () => {
         deletePrice: asyncNoop,
         fillListPrices: async () => ({ added: [], unknown: [] }),
         initialPrices: priceFixture,
+        loadBoardModels: async () => plannerFixture,
+        initialBoardModels: plannerFixture,
       },
       connections: {
         loadCatalog: async () => [],
@@ -2085,9 +2213,6 @@ describe("pure helpers", () => {
       saveClientPolicy: asyncNoop,
       saveNotifySettings: asyncNoop,
       saveDriftSettings: asyncNoop,
-      loadPlanner: async () => plannerFixture,
-      savePlanner: asyncNoop,
-      initialPlanner: plannerFixture,
       loadStyles: async () => stylesFixture,
       setStyle: async () => stylesFixture,
       initialStyles: stylesFixture,
@@ -2115,10 +2240,10 @@ describe("pure helpers", () => {
     expect(first).toContain('aria-label="Currency"');
     expect(first).toContain("The first price sets the company&#x27;s one currency");
     for (const t of SETTINGS_TABS) expect(prices).toContain(t.label);
+    // Peter's brain is on his page under Teammates, like everyone's: Settings has no tab of his.
     expect(SETTINGS_TABS.map((t) => t.value)).toEqual([
       "prices",
       "models",
-      "peter",
       "style",
       "connections",
       "notifications",
@@ -2162,21 +2287,18 @@ describe("pure helpers", () => {
     expect(render(<SettingsView {...props} canEdit={false} tab="style" onTab={noop} />)).not.toContain(
       "Turn on",
     );
-    // How Peter thinks: every brain the board offers, whether it works here, and what he plans with now.
-    const peter = render(<SettingsView {...props} canEdit tab="peter" onTab={noop} />);
-    expect(peter).toContain("How Peter thinks");
-    expect(peter).toContain("Peter plans with the Claude Code CLI, chosen automatically.");
-    expect(peter).toContain("signed in (claude.ai, max)");
-    expect(peter).toContain("installed, not signed in: run codex login where the board runs");
-    expect(peter).toContain("No model");
-    expect(plannerLine({ ...plannerFixture, effective: null, choice: { via: "none" } })).toBe(
-      "Peter plans by role, without a model.",
-    );
+    // Models: this board's own, each CLI and the API key with whether it works where the board runs.
+    const models = render(<SettingsView {...props} canEdit tab="models" onTab={noop} />);
+    expect(models).toContain("This board&#x27;s own models");
+    expect(models).toContain("Claude Code CLI");
+    expect(models).toContain("signed in (claude.ai, max)");
+    expect(models).toContain("Codex CLI");
+    expect(models).toContain("installed, not signed in: run codex login where the board runs");
+    expect(models).toContain("no ANTHROPIC_API_KEY on the board");
+    expect(models).toContain("Check again");
+    expect(editor).not.toContain("How Peter thinks");
     expect(plannerLine({ ...plannerFixture, effective: null, choice: { via: "codex_cli" } })).toBe(
       "The Codex CLI does not work on this board, so Peter plans by role until it does.",
-    );
-    expect(plannerLine({ ...plannerFixture, effective: null, choice: { via: "auto" } })).toBe(
-      "Nothing works on this board yet, so Peter plans by role.",
     );
     expect(editor).toContain("SMTP URL env var NAME");
     expect(
