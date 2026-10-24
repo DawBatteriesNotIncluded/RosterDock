@@ -225,15 +225,18 @@ describe("runRepoTests", () => {
    * A Node that stands in for a test runner: it starts one that holds its output open, as a worker or a server
    * would, and then waits, or with `exit` ends at once and leaves it running. `stubborn`: the one it starts
    * writes its output elsewhere and lives through SIGTERM, as a server started `> log 2>&1 &` that handles it.
+   * It runs as a package manager is run, `node` by name from `root`, where `script` and `pidFile` are names: on
+   * Windows the command goes through cmd, which splits a path with a space, and Node's own path has one where
+   * Node installs by default (C:\Program Files\nodejs).
    */
   async function holder(
     name: string,
     { exit, stubborn = false }: { exit?: number; stubborn?: boolean } = {},
   ): Promise<{ script: string; pidFile: string; held(): number; started(): Promise<void> }> {
-    const script = path.join(root, `${name}.cjs`);
-    const pidFile = path.join(root, `${name}.pid`);
+    const script = `${name}.cjs`;
+    const pidFile = `${name}.pid`;
     await writeFile(
-      script,
+      path.join(root, script),
       [
         'const { spawn } = require("node:child_process");',
         'const fs = require("node:fs");',
@@ -260,13 +263,13 @@ describe("runRepoTests", () => {
       ].join("\n"),
     );
     const held = () => {
-      const pid = Number(readFileSync(pidFile, "utf8"));
+      const pid = Number(readFileSync(path.join(root, pidFile), "utf8"));
       // Never 0 or less: process.kill(0) is this process on Windows, and its whole group elsewhere.
       if (!Number.isInteger(pid) || pid <= 0) throw new Error(`${pidFile} holds no process id`);
       return pid;
     };
     const started = async () => {
-      while (!existsSync(pidFile)) await new Promise((r) => setTimeout(r, 50));
+      while (!existsSync(path.join(root, pidFile))) await new Promise((r) => setTimeout(r, 50));
     };
     return { script, pidFile, held, started };
   }
@@ -292,7 +295,7 @@ describe("runRepoTests", () => {
   it("ends a command past its time limit, and every process it started, though one holds its output open", async () => {
     const h = await holder("held-open");
     const started = Date.now();
-    const res = await execCommand(process.execPath, [h.script, h.pidFile], {
+    const res = await execCommand("node", [h.script, h.pidFile], {
       cwd: root,
       env: testEnvironment(process.env),
       timeoutMs: STARTS_WITHIN_MS,
@@ -306,7 +309,7 @@ describe("runRepoTests", () => {
     // A test script that passes and leaves its server running: the server holds the output open.
     const h = await holder("left-running", { exit: 7 });
     const started = Date.now();
-    const res = await execCommand(process.execPath, [h.script, h.pidFile], {
+    const res = await execCommand("node", [h.script, h.pidFile], {
       cwd: root,
       env: testEnvironment(process.env),
       timeoutMs: 60_000,
@@ -319,7 +322,7 @@ describe("runRepoTests", () => {
   it("ends a process the command left that outlives SIGTERM and holds no output, at the time limit or when it ends", async () => {
     for (const exit of [undefined, 0]) {
       const h = await holder(`stubborn-${exit ?? "limit"}`, { exit, stubborn: true });
-      const res = await execCommand(process.execPath, [h.script, h.pidFile], {
+      const res = await execCommand("node", [h.script, h.pidFile], {
         cwd: root,
         env: testEnvironment(process.env),
         timeoutMs: exit === undefined ? STARTS_WITHIN_MS : 60_000,
@@ -335,7 +338,7 @@ describe("runRepoTests", () => {
     "sends a group's SIGKILL at once when the worker exits before its grace is over",
     async () => {
       const h = await holder("stubborn-worker-exits", { exit: 0, stubborn: true });
-      await execCommand(process.execPath, [h.script, h.pidFile], {
+      await execCommand("node", [h.script, h.pidFile], {
         cwd: root,
         env: testEnvironment(process.env),
         timeoutMs: 60_000,
@@ -352,7 +355,7 @@ describe("runRepoTests", () => {
     const h = await holder("stopped");
     const stop = new AbortController();
     void h.started().then(() => stop.abort());
-    const res = await execCommand(process.execPath, [h.script, h.pidFile], {
+    const res = await execCommand("node", [h.script, h.pidFile], {
       cwd: root,
       env: testEnvironment(process.env),
       timeoutMs: 60_000,
@@ -362,7 +365,7 @@ describe("runRepoTests", () => {
     expect(await ended(h.held())).toBe(true);
     // Already stopped: nothing starts.
     expect(
-      await execCommand(process.execPath, [h.script, path.join(root, "never.pid")], {
+      await execCommand("node", [h.script, "never.pid"], {
         cwd: root,
         env: testEnvironment(process.env),
         timeoutMs: 60_000,
