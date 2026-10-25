@@ -306,6 +306,26 @@ change and remove providers; everyone in the company sees them by name.
   Removing asks first, and says the key stays in the company's secrets; Archive keeps everything. Without a
   secret store a company pastes no key: it names one you share, and the page says so. With no name shared
   either, the form says so where the key would go, and adds only a compatible server that takes no key.
+- Check, on a provider's card (`POST /api/companies/:companyId/model-providers/:providerId/check`, owners
+  and admins), asks the provider which models its key reaches, with one call that spends no tokens: for an
+  Anthropic provider today, `GET https://api.anthropic.com/v1/models`. The other kinds get theirs once their
+  answers are recorded for the board's tests (`docs/plan.html`, Company model providers): OpenAI's and a
+  compatible server's `/models`, an Azure resource's `/openai/v1/models`, Bedrock's system inference profiles
+  and on-demand foundation models in the region; until then the board does not call them (409), and their
+  cards say Check is not available yet. The board makes the call itself, with the key resolved for the company (its own secret,
+  then a name you share) and sent only in the header its kind takes, through the check a connection's address
+  gets: a name that has moved to a private address you do not list is refused at the call, a redirect is not
+  followed, and the answer is capped. Your own Anthropic settings where the board runs (`ANTHROPIC_BASE_URL`,
+  `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_CUSTOM_HEADERS`, `ANTHROPIC_LOG`) never apply to a company's key. A key
+  the provider refuses is said in the board's words, never in the provider's, which can name part of the key;
+  a secret that is not one line of printable text is not sent, and the check names only its name.
+  The card says when it was checked and what it found, marks a model on the list that the key does not
+  reach, and offers the models it reaches when one is added; Check itself adds no model and takes none off.
+  A change to where a provider is reached (its address, region, header or key's name) clears its last check,
+  and a check that finds the provider changed while it was made is not kept (409, check again).
+  An Azure resource lists the models it offers, not its deployments, so nothing is offered there. The
+  provider's hosts are public, on 443: with `networkPolicy.enabled`, a private server's port goes in
+  `networkPolicy.board.egressPorts` (11434 for Ollama), as a listed destination's does.
 - `board.modelProviders` (`ROSTERDOCK_MODEL_PROVIDERS`) lists the kinds a company may add: `anthropic`,
   `openai`, `azure_openai`, `bedrock`, `openai_compatible`, and `board`, which lends the board's own models to
   every company. Empty: all of them. `[board]` alone: no company providers. The board does not start on an

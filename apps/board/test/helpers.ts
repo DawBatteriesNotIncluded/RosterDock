@@ -194,6 +194,7 @@ export async function startTestBoard(
     egressResolve?: Resolve;
     smtp?: SmtpOptions;
     env?: NodeJS.ProcessEnv;
+    providerFetch?: typeof fetch;
   } = {},
 ): Promise<TestBoard> {
   const testDb = await createTestDb();
@@ -248,6 +249,9 @@ export async function startTestBoard(
     ...(opts.otlpFetch ? { otlpFetch: opts.otlpFetch } : {}),
     // Nor the webhook: a board without a recording fetch posts to one that records nothing.
     notifyFetch: opts.notifyFetch ?? (async () => new Response("ok", { status: 200 })),
+    // Nor a company's model provider: a check a test does not replay reaches one that answers nothing.
+    providerFetch:
+      opts.providerFetch ?? (async () => new Response("no model provider in this test", { status: 503 })),
   });
   await migrate(board.db);
   await board.app.ready();

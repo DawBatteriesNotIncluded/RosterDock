@@ -94,6 +94,7 @@ export const EVENT_TYPES = [
   "model_provider.updated",
   "model_provider.archived",
   "model_provider.deleted",
+  "model_provider.checked",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 

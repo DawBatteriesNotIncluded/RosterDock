@@ -132,6 +132,11 @@ export interface BuildOptions {
   egressResolve?: Resolve;
   /** The fetch the Kubernetes secret store reaches the API server with; tests use a fake. Default: global fetch. */
   secretsFetch?: typeof fetch;
+  /**
+   * What a company's model providers are called with (Check), under the egress check (egressResolve); tests
+   * replay recorded answers. Default: the board's pinned transport.
+   */
+  providerFetch?: typeof fetch;
 }
 
 export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Promise<BoardApp> {
@@ -353,7 +358,12 @@ export async function buildApp(config: BoardConfig, opts: BuildOptions = {}): Pr
     operator,
   });
   registerSecretRoutes(app, db, secrets, config.sharedEnvNames);
-  registerProviderRoutes(app, { db, operator, policy: config.modelProviders, egress });
+  registerProviderRoutes(app, {
+    db,
+    operator,
+    policy: config.modelProviders,
+    egress: reach(opts.providerFetch),
+  });
   // What this board can do beyond the basics, for the web to show the right controls. Names only; what the
   // operator lets connections reach goes to the people who manage connections somewhere. The private
   // destinations the operator gave one company alone go to that company's owners and admins only, when the

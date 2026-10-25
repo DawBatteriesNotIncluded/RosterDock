@@ -577,6 +577,7 @@ export function App() {
         create: (input) => run(() => client.createModelProvider(cid, input), `${input.label} added.`),
         update: (id, input) => run(() => client.updateModelProvider(cid, id, input)),
         remove: (id) => run(() => client.deleteModelProvider(cid, id), "Provider removed."),
+        check: (id) => run(() => client.checkModelProvider(cid, id)),
         loadPrices: () => client.prices(cid),
         savePrice: (input) => run(() => client.savePrice(cid, input), "Price saved."),
         deletePrice: (id) => run(() => client.deletePrice(cid, id), "Price removed."),

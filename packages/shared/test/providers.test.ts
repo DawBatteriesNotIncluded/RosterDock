@@ -8,6 +8,7 @@ import {
   providerNameRefusal,
   compatibleEndpoint,
   engineFor,
+  listedFamily,
   ModelProviderSchema,
   parseModelProviders,
   PROVIDER_KINDS,
@@ -57,6 +58,26 @@ describe("engineFor", () => {
     expect(engineFor("anthropic", "openai")).toBeNull();
     expect(engineFor("openai", "claude")).toBeNull();
     expect(engineFor("azure_openai", "claude")).toBeNull();
+  });
+});
+
+describe("listedFamily", () => {
+  it("guesses whose a model a check listed is, from the kind and the id, for a person to confirm", () => {
+    expect(listedFamily("anthropic", "claude-opus-5-5")).toBe("claude");
+    expect(listedFamily("openai", "text-embedding-3-small")).toBe("openai");
+    // Bedrock says whose in the id; a bare openai.* id is Mantle's, which no engine here reaches.
+    expect(listedFamily("bedrock", "us.anthropic.claude-opus-4-5-20251101-v1:0")).toBe("claude");
+    expect(listedFamily("bedrock", "anthropic.claude-3-haiku-20240307-v1:0")).toBe("claude");
+    expect(listedFamily("bedrock", "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0")).toBe("claude");
+    expect(listedFamily("bedrock", "global.openai.gpt-oss-120b-1:0")).toBe("openai");
+    expect(listedFamily("bedrock", "openai.gpt-oss-120b-1:0")).toBe("other");
+    expect(listedFamily("bedrock", "meta.llama3-70b-instruct-v1:0")).toBe("other");
+    // Anyone else's by the id's name, within the families the kind serves.
+    expect(listedFamily("openai_compatible", "claude-sonnet-5-5")).toBe("claude");
+    expect(listedFamily("openai_compatible", "gpt-5.1-codex")).toBe("openai");
+    expect(listedFamily("openai_compatible", "llama3.2:latest")).toBe("other");
+    expect(listedFamily("azure_openai", "gpt-4o-2024-08-06")).toBe("openai");
+    expect(listedFamily("azure_openai", "claude-sonnet-5-5")).toBe("other");
   });
 });
 

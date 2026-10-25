@@ -1,6 +1,7 @@
 // How the board reaches a destination a company chose: a connection's MCP
 // server or OpenAPI service, the OAuth endpoints its server names, a webhook or
-// an SMTP server named in Settings, and a style pack's file. Before anything is
+// an SMTP server named in Settings, a style pack's file, and a model provider
+// the company keeps (its Check, providers/check.ts). Before anything is
 // sent, every hop's name is resolved and every address it gets checked
 // (address.ts reachableAddresses): public, or private where the operator lists
 // it (ROSTERDOCK_PRIVATE_DESTINATIONS). The board's own transport then connects

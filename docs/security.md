@@ -34,8 +34,13 @@ model output on their cluster.
   given a value, `OPENAI_API_KEY=…`, among them), a run of hex such as a 32-character Azure key, or a long run
   in mixed case that reads as random; a label refuses the same. A
   refusal never repeats what was sent. An endpoint a company gives is checked as a connection's URL is (What a
-  company's connections reach). Owners and admins manage providers (`model.manage`). Nothing resolves a
-  provider's names yet: teammates still think with the board's own models.
+  company's connections reach). Owners and admins manage providers (`model.manage`). Only Check resolves a
+  provider's key yet, on the board: the value is read from the company's secrets (or a name the operator
+  shares) for that one call, sent only in its kind's header to the provider's host, checked again by the
+  address guard with no redirect followed, and never kept, logged or put in an event; the board's own
+  Anthropic settings (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_CUSTOM_HEADERS`) are not
+  read for it. What a provider answers to a refused key, which can name part of the key, is never kept or
+  shown: the board says it in its own words. Teammates still think with the board's own models.
 
 - **External writes are propose, approve, execute.** A teammate proposes the exact payload; the board
   stores it with its sha256; a person approves; the executor re-hashes the stored payload and sends those
