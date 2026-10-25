@@ -307,10 +307,12 @@ change and remove providers; everyone in the company sees them by name.
   secret store a company pastes no key: it names one you share, and the page says so. With no name shared
   either, the form says so where the key would go, and adds only a compatible server that takes no key.
 - Check, on a provider's card (`POST /api/companies/:companyId/model-providers/:providerId/check`, owners
-  and admins), asks the provider which models its key reaches, with one call that spends no tokens:
-  Anthropic's and OpenAI's `/v1/models`, an Azure resource's `/openai/v1/models`, Bedrock's system inference
-  profiles and on-demand foundation models in the region (`bedrock.<region>.amazonaws.com`), a compatible
-  server's `/models`. The board makes the call itself, with the key resolved for the company (its own secret,
+  and admins), asks the provider which models its key reaches, with one call that spends no tokens: for an
+  Anthropic provider today, `GET https://api.anthropic.com/v1/models`. The other kinds get theirs once their
+  answers are recorded for the board's tests (`docs/plan.html`, Company model providers): OpenAI's and a
+  compatible server's `/models`, an Azure resource's `/openai/v1/models`, Bedrock's system inference profiles
+  and on-demand foundation models in the region; until then the board does not call them (409), and their
+  cards say Check is not available yet. The board makes the call itself, with the key resolved for the company (its own secret,
   then a name you share) and sent only in the header its kind takes, through the check a connection's address
   gets: a name that has moved to a private address you do not list is refused at the call, a redirect is not
   followed, and the answer is capped. Your own Anthropic settings where the board runs (`ANTHROPIC_BASE_URL`,

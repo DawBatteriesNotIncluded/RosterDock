@@ -10,11 +10,12 @@ says what. How to upgrade is in `docs/operator.md`; how a release is cut, in `do
 
 ### Added
 
-- Check, on a company's model provider (Settings > Models): whether its key works and which models it
-  reaches, with one call to the provider that spends no tokens, for every kind. The card marks a model the
-  key does not reach and offers the models it reaches when one is added; a refused key is said in the board's
-  words. The board resolves the key for that call only, sends it through the address guard, and reads none of
-  its own Anthropic settings for it (`docs/operator.md`, Company model providers).
+- Check, on a company's Anthropic provider (Settings > Models): whether its key works and which models it
+  reaches, with one call to the provider that spends no tokens. The card marks a model the key does not reach
+  and offers the models it reaches when one is added; a refused key is said in the board's words. The board
+  resolves the key for that call only, sends it through the address guard, and reads none of its own
+  Anthropic settings for it. The other kinds get their Check once their answers are recorded; until then
+  their cards say it is not available yet (`docs/operator.md`, Company model providers).
 
 ## 0.1.0 (2026-10-23)
 

@@ -67,6 +67,13 @@ export function engineFor(kind: ProviderKind, family: ModelFamily): Engine | nul
 }
 
 /**
+ * The kinds whose Check the board offers: those whose answers to it were recorded from the real service, and
+ * are replayed in the board's tests (apps/board/test/fixtures/providers). Another kind's Check waits for its
+ * recording (docs/plan.html, Company model providers): the board does not call it, and the web offers none.
+ */
+export const CHECKABLE_KINDS: readonly ProviderKind[] = ["anthropic"];
+
+/**
  * A model a provider's Check found the key reaches, kept on the row for a person to add from: Check itself adds
  * none. The family is the board's guess from the kind and the id, for the person to confirm.
  */

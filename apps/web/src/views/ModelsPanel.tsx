@@ -18,6 +18,7 @@ import type {
 } from "@rosterdock/shared";
 import {
   azureEndpoint,
+  CHECKABLE_KINDS,
   BEDROCK_REGION_RE,
   COMPATIBLE_AUTH_HEADERS,
   compatibleEndpoint,
@@ -159,7 +160,10 @@ export function checkLine(
   now: number = Date.now(),
 ): string {
   const c = p.lastCheck;
-  if (!c) return "Not checked yet";
+  if (!c)
+    return p.kind && !CHECKABLE_KINDS.includes(p.kind)
+      ? `Check isn't available for ${PROVIDER_KIND_LABELS[p.kind]} providers yet`
+      : "Not checked yet";
   const when = `Checked ${relativeTime(c.at, now)}`;
   if (!c.ok) return `${when}: ${c.detail ?? "no answer"}`;
   const models = `${c.listed} model${c.listed === 1 ? "" : "s"}`;
@@ -1169,7 +1173,7 @@ function ProviderCard(p: {
         ) : null}
         {p.canEdit ? (
           <span className="ml-auto flex items-center gap-2">
-            {!v.archivedAt && v.offered ? (
+            {!v.archivedAt && v.offered && CHECKABLE_KINDS.includes(v.kind) ? (
               <Button
                 size="sm"
                 aria-label={`Check ${v.label}`}

@@ -664,8 +664,14 @@ describe("Settings > Models", () => {
     });
     const html = panel({ initial: { ...providers, providers: [shown, ...providers.providers.slice(1)] } });
     expect(html).toContain('aria-label="Check Acme Anthropic"');
-    expect(html).toContain('aria-label="Check Local vLLM"');
-    // Not an archived provider, nor one of a kind no longer offered.
+    // Not a kind whose Check is not recorded yet: it says so instead. Nor an archived provider, or one of a kind
+    // no longer offered.
+    expect(html).not.toContain('aria-label="Check Local vLLM"');
+    expect(html).toContain("Check isn&#x27;t available for OpenAI-compatible providers yet");
+    expect(checkLine({ kind: "bedrock", lastCheck: null })).toBe(
+      "Check isn't available for Amazon Bedrock providers yet",
+    );
+    expect(checkLine({ kind: "anthropic", lastCheck: null })).toBe("Not checked yet");
     expect(html).not.toContain('aria-label="Check Old Bedrock"');
     expect(html).toContain("Checked 2 min ago: key works, reaches 2 models");
     expect(html.match(/ · not among the models the key reaches/g)).toHaveLength(1);

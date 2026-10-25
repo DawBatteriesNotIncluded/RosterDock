@@ -26,7 +26,15 @@ number in an ARN (zeroed); the organisation or person owning an OpenAI fine-tune
 Azure resource's name (`acme.openai.azure.com`) and a compatible server's host (`llm.internal.test`, which
 the suite resolves to a private address the operator lists).
 
-Recordings: not made yet. The suite's checks of each kind fail until they are.
+Recordings:
+
+- `anthropic-models.json` and `anthropic-refused.json`: recorded 2026-10-25 by the owner with their own
+  account, through the Anthropic SDK 0.135.0 (`anthropic-version: 2023-06-01`). Thirteen models, all
+  `active`, from Claude Haiku 5.5 to Claude Haiku 4.5, in one page; a wrong key refused with 401
+  `authentication_error`.
+- OpenAI, Azure OpenAI, Amazon Bedrock and OpenAI-compatible: not recorded yet. The board offers no Check for
+  a kind until it is (`CHECKABLE_KINDS` in `packages/shared/src/provider-kinds.ts`); adding its two files
+  and the kind to that list is what turns it on, and the suite then replays them.
 
 Record again, from `apps/board`, one kind at a time, with the key in your own shell or typed when asked (it
 is not shown and not saved):

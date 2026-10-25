@@ -7,13 +7,17 @@
 // board's own words, never a provider's or a library's: what a provider answers to a refused key (OpenAI's
 // names part of the key) is never kept, logged or shown, nor an error that could quote what was sent. The
 // models the key reaches are kept on the row for a person to add from; Check itself adds no model to the
-// provider's list and takes none off.
+// provider's list and takes none off. The board calls only the kinds whose answers are recorded and replayed
+// in its tests (CHECKABLE_KINDS); the others' listers wait here for their recordings, which the recorder
+// (scripts/record-provider-checks.mts) makes with them.
 
 import Anthropic from "@anthropic-ai/sdk";
 import {
+  CHECKABLE_KINDS,
   labelLooksLikeKey,
   listedFamily,
   MAX_PROVIDER_LABEL,
+  PROVIDER_KIND_LABELS,
   type ActorRef,
   type CompatibleAuthHeader,
   type ListedModel,
@@ -329,7 +333,8 @@ function checkFetch(egress: Egress, companyId: string): typeof globalThis.fetch 
 
 /**
  * Check a provider: list the models its key reaches and keep the outcome on the row, with an event. A
- * provider archived, or of a kind the operator no longer offers, is not called.
+ * provider archived, of a kind the operator no longer offers, or of a kind whose Check is not recorded yet, is
+ * not called.
  */
 export async function checkProvider(
   deps: ProviderDeps,
@@ -341,6 +346,9 @@ export async function checkProvider(
   if (row.archived_at) throw conflict(`${row.label} is archived: bring it back to check it`);
   const refusal = kindRefusal(deps.policy, row.kind);
   if (refusal) throw new HttpError(403, refusal);
+  // A kind whose answers are not recorded yet is not called: its adapter is untested against the real service.
+  if (!CHECKABLE_KINDS.includes(row.kind))
+    throw conflict(`Check isn't available for ${PROVIDER_KIND_LABELS[row.kind]} providers yet`);
   const started = Date.now();
   let check: ProviderCheck;
   try {

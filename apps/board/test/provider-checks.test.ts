@@ -1,13 +1,20 @@
-// Check, for every kind of model provider: the board lists the models a company's key reaches with one call
-// that spends nothing, replayed from what each service answered when the owner recorded it with their own
-// accounts (scripts/record-provider-checks.mts, fixtures/providers): a key that works, and a wrong one. The key
-// is resolved from the company's secrets and goes only in its kind's header; a refusal is said in the board's
-// words, never the provider's; an address that turned private since the provider was saved is refused before
-// anything is sent; and the operator's own Anthropic settings never reach a company's request. No network.
+// Check, for each kind of model provider whose answers are recorded (CHECKABLE_KINDS): the board lists the
+// models a company's key reaches with one call that spends nothing, replayed from what the service answered
+// when the owner recorded it with their own account (scripts/record-provider-checks.mts, fixtures/providers): a
+// key that works, and a wrong one. The key is resolved from the company's secrets and goes only in its kind's
+// header; a refusal is said in the board's words, never the provider's; an address that turned private since
+// the provider was saved is refused before anything is sent; the operator's own Anthropic settings never reach
+// a company's request; and a kind not recorded yet is not called at all. No network.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseModelProviders, PROVIDER_KINDS, type ProviderKind } from "@rosterdock/shared";
+import {
+  CHECKABLE_KINDS,
+  parseModelProviders,
+  PROVIDER_KIND_LABELS,
+  PROVIDER_KINDS,
+  type ProviderKind,
+} from "@rosterdock/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { companyAnthropic } from "../src/providers/anthropic.js";
 import { MAX_LISTED, statusWords } from "../src/providers/check.js";
@@ -148,7 +155,7 @@ const checks = async (api: { get(url: string): Promise<{ body: unknown }> }, bas
   );
 
 describe("checking a model provider", () => {
-  it.each(PROVIDER_KINDS)(
+  it.each([...CHECKABLE_KINDS])(
     "%s: a key that works lists the models it reaches; a wrong one is refused in the board's words",
     async (kind) => {
       const works = recording(`${kind}-models.json`);
@@ -270,27 +277,23 @@ describe("checking a model provider", () => {
     const { api, base } = await seedCompany(board, "check-lines@example.com");
     const pem = "-----BEGIN DATA-----\r\nline-one-of-a-secret-0000\r\nline-two-of-a-secret-0000";
     expect((await api.put(`${base}/secrets/MODELS_PEM_KEY`, { value: pem })).status).toBe(200);
-    const kinds = [
-      { kind: "anthropic", name: "pem-a", credentials: { apiKey: "MODELS_PEM_KEY" } },
-      { kind: "openai", name: "pem-o", credentials: { apiKey: "MODELS_PEM_KEY" } },
-      { kind: "bedrock", name: "pem-b", region: "us-east-1", credentials: { bearerToken: "MODELS_PEM_KEY" } },
-    ];
+    const created = await api.post(`${base}/model-providers`, {
+      kind: "anthropic",
+      name: "pem",
+      label: "Pem",
+      credentials: { apiKey: "MODELS_PEM_KEY" },
+    });
+    expect(created.status).toBe(201);
     current = replay();
-    for (const body of kinds) {
-      const created = await api.post(`${base}/model-providers`, { ...body, label: `Pem ${body.name}` });
-      expect(created.status).toBe(201);
-      const checked = await api.post(`${base}/model-providers/${created.body.id}/check`, {});
-      expect(checked.body.lastCheck).toMatchObject({
-        ok: false,
-        detail:
-          "MODELS_PEM_KEY holds something that is not a key: a key is one line of printable text, with no line break in it",
-      });
-    }
+    const checked = await api.post(`${base}/model-providers/${created.body.id}/check`, {});
+    expect(checked.body.lastCheck).toMatchObject({
+      ok: false,
+      detail:
+        "MODELS_PEM_KEY holds something that is not a key: a key is one line of printable text, with no line break in it",
+    });
     expect(current.sent).toEqual([]);
-    const events = ((await api.get(`${base}/events?limit=100`)).body as Ev[]).filter(
-      (e) => e.type === "model_provider.checked",
-    );
-    expect(events).toHaveLength(3);
+    const events = await checks(api, base, created.body.id);
+    expect(events).toHaveLength(1);
     const everything = JSON.stringify([events, (await api.get(`${base}/model-providers`)).body]);
     expect(everything).not.toContain("line-one-of-a-secret");
     expect(everything).not.toContain("line-two-of-a-secret");
@@ -300,7 +303,7 @@ describe("checking a model provider", () => {
     const { api, base } = await seedCompany(board, "check-errors@example.com");
     await api.put(`${base}/secrets/MODELS_ERRORS_KEY`, { value: KEY });
     const created = await api.post(`${base}/model-providers`, {
-      kind: "openai",
+      kind: "anthropic",
       name: "errors",
       label: "Errors",
       credentials: { apiKey: "MODELS_ERRORS_KEY" },
@@ -314,7 +317,7 @@ describe("checking a model provider", () => {
     expect((await api.post(`${base}/model-providers/${id}/check`, {})).body.lastCheck.detail).toBe(
       "the provider's address refused the connection",
     );
-    current = failing(new TypeError(`Headers.append: "Bearer ${KEY}" is an invalid header value.`));
+    current = failing(new TypeError(`Headers.append: "${KEY}" is an invalid header value.`));
     const quoted = await api.post(`${base}/model-providers/${id}/check`, {});
     expect(quoted.body.lastCheck.detail).toBe("the call to the provider failed before it answered");
     expect(JSON.stringify([quoted.body, await checks(api, base, id)])).not.toContain(KEY);
@@ -323,17 +326,17 @@ describe("checking a model provider", () => {
   it("keeps no check made with settings that changed while it was made", async () => {
     const { api, base } = await seedCompany(board, "check-moved@example.com");
     await api.put(`${base}/secrets/MODELS_MOVED_KEY`, { value: KEY });
+    await api.put(`${base}/secrets/MODELS_MOVED_OTHER_KEY`, { value: KEY });
     const created = await api.post(`${base}/model-providers`, {
-      kind: "openai_compatible",
+      kind: "anthropic",
       name: "moved",
       label: "Moved",
-      endpoint: "https://router-a.example.test/v1",
       credentials: { apiKey: "MODELS_MOVED_KEY" },
     });
     const id = created.body.id as string;
     // A check made with an unset key leaves a check behind; a change of label keeps it.
     const unset = await api.post(`${base}/model-providers`, {
-      kind: "openai",
+      kind: "anthropic",
       name: "stale",
       label: "Stale",
       credentials: { apiKey: "MODELS_STALE_KEY" },
@@ -350,10 +353,12 @@ describe("checking a model provider", () => {
     });
     expect(rekeyed.body.lastCheck).toBeNull();
 
-    // The provider moves to another server while its check is under way: that check is not kept.
+    // The provider moves to another key while its check is under way: that check is not kept.
     current = {
       fetch: async () => {
-        await api.patch(`${base}/model-providers/${id}`, { endpoint: "https://router-b.example.test/v1" });
+        await api.patch(`${base}/model-providers/${id}`, {
+          credentials: { apiKey: "MODELS_MOVED_OTHER_KEY" },
+        });
         throw Object.assign(new Error("connect ECONNREFUSED 93.184.215.14:443"), { code: "ECONNREFUSED" });
       },
       sent: [],
@@ -363,7 +368,7 @@ describe("checking a model provider", () => {
     expect(raced.status).toBe(409);
     expect(raced.body.error).toBe("Moved changed while it was being checked: check it again");
     const after = await api.get(`${base}/model-providers/${id}`);
-    expect(after.body).toMatchObject({ endpoint: "https://router-b.example.test/v1", lastCheck: null });
+    expect(after.body).toMatchObject({ credentials: { apiKey: "MODELS_MOVED_OTHER_KEY" }, lastCheck: null });
     expect(await checks(api, base, id)).toEqual([]);
   });
 
@@ -400,7 +405,7 @@ describe("checking a model provider", () => {
   it("sends nothing for a key the company has not set, and says which name", async () => {
     const { api, base } = await seedCompany(board, "check-unset@example.com");
     const created = await api.post(`${base}/model-providers`, {
-      kind: "openai",
+      kind: "anthropic",
       name: "unset",
       label: "Unset key",
       credentials: { apiKey: "MODELS_UNSET_KEY" },
@@ -417,29 +422,57 @@ describe("checking a model provider", () => {
 
   it("refuses an address that turned private after the provider was saved, before anything is sent", async () => {
     const { api, base } = await seedCompany(board, "check-private@example.com");
-    await api.put(`${base}/secrets/MODELS_ROUTER_KEY`, { value: KEY });
-    const router = await api.post(`${base}/model-providers`, {
-      kind: "openai_compatible",
-      name: "router",
-      label: "Router",
-      endpoint: "https://router.rebind.test/v1",
-      credentials: { apiKey: "MODELS_ROUTER_KEY" },
+    await api.put(`${base}/secrets/MODELS_PRIVATE_KEY`, { value: KEY });
+    const created = await api.post(`${base}/model-providers`, {
+      kind: "anthropic",
+      name: "private",
+      label: "Private",
+      credentials: { apiKey: "MODELS_PRIVATE_KEY" },
     });
-    const azure = await api.post(`${base}/model-providers`, {
-      kind: "azure_openai",
-      name: "acme-azure",
-      label: "Acme Azure",
-      endpoint: "https://rebind.openai.azure.com",
-      credentials: { apiKey: "MODELS_ROUTER_KEY" },
-    });
-    expect([router.status, azure.status]).toEqual([201, 201]);
-    nowPrivate.add("router.rebind.test");
-    nowPrivate.add("rebind.openai.azure.com");
-    current = replay();
-    for (const id of [router.body.id, azure.body.id]) {
-      const checked = await api.post(`${base}/model-providers/${id}/check`, {});
+    expect(created.status).toBe(201);
+    // Even Anthropic's own host is checked at the call: one that answers with a private address is not reached.
+    nowPrivate.add("api.anthropic.com");
+    try {
+      current = replay();
+      const checked = await api.post(`${base}/model-providers/${created.body.id}/check`, {});
       expect(checked.body.lastCheck.ok).toBe(false);
-      expect(checked.body.lastCheck.detail).toMatch(/^refused: /);
+      expect(checked.body.lastCheck.detail).toMatch(/^refused: api\.anthropic\.com resolves to /);
+      expect(current.sent).toEqual([]);
+    } finally {
+      nowPrivate.delete("api.anthropic.com");
+    }
+  });
+
+  it("calls no kind whose answers are not recorded yet: it says so, sends nothing and keeps nothing", async () => {
+    const { api, base } = await seedCompany(board, "check-unrecorded@example.com");
+    await api.put(`${base}/secrets/MODELS_UNRECORDED_KEY`, { value: KEY });
+    const bodies: Record<ProviderKind, Record<string, unknown>> = {
+      anthropic: { credentials: { apiKey: "MODELS_UNRECORDED_KEY" } },
+      openai: { credentials: { apiKey: "MODELS_UNRECORDED_KEY" } },
+      azure_openai: {
+        endpoint: "https://acme.openai.azure.com",
+        credentials: { apiKey: "MODELS_UNRECORDED_KEY" },
+      },
+      bedrock: { region: "us-east-1", credentials: { bearerToken: "MODELS_UNRECORDED_KEY" } },
+      openai_compatible: {
+        endpoint: "https://llm.example.test/v1",
+        credentials: { apiKey: "MODELS_UNRECORDED_KEY" },
+      },
+    };
+    const unrecorded = PROVIDER_KINDS.filter((k) => !CHECKABLE_KINDS.includes(k));
+    expect(unrecorded.length).toBeGreaterThan(0);
+    current = replay();
+    for (const kind of unrecorded) {
+      const name = `unrecorded-${kind.replace("_", "-")}`;
+      const created = await api.post(`${base}/model-providers`, { kind, name, label: name, ...bodies[kind] });
+      expect(created.status, kind).toBe(201);
+      const refused = await api.post(`${base}/model-providers/${created.body.id}/check`, {});
+      expect(refused.status, kind).toBe(409);
+      expect(refused.body.error).toBe(
+        `Check isn't available for ${PROVIDER_KIND_LABELS[kind]} providers yet`,
+      );
+      expect((await api.get(`${base}/model-providers/${created.body.id}`)).body.lastCheck).toBeNull();
+      expect(await checks(api, base, created.body.id)).toEqual([]);
     }
     expect(current.sent).toEqual([]);
   });
@@ -447,7 +480,7 @@ describe("checking a model provider", () => {
   it("is for owners and admins, on a provider in use, of a kind the operator offers", async () => {
     const { api, base } = await seedCompany(board, "check-who@example.com");
     const created = await api.post(`${base}/model-providers`, {
-      kind: "openai",
+      kind: "anthropic",
       name: "who",
       label: "Who",
       credentials: { apiKey: "MODELS_WHO_KEY" },
@@ -462,20 +495,20 @@ describe("checking a model provider", () => {
 
     // A provider kept from before the operator stopped offering its kind is not called.
     const narrow = await startTestBoard(
-      { modelProviders: parseModelProviders("anthropic,board") },
+      { modelProviders: parseModelProviders("openai,board") },
       { providerFetch: (input, init) => current.fetch(input, init) },
     );
     try {
       const n = await seedCompany(narrow, "check-narrow@example.com");
       const kept = await narrow.db.query<{ id: string }>(
         `INSERT INTO model_providers (company_id, name, label, kind, credentials, created_by_kind, created_by_id)
-         VALUES ($1, 'kept', 'Kept', 'openai', '{"apiKey":"MODELS_KEPT_KEY"}', 'user', $2) RETURNING id`,
+         VALUES ($1, 'kept', 'Kept', 'anthropic', '{"apiKey":"MODELS_KEPT_KEY"}', 'user', $2) RETURNING id`,
         [n.companyId, n.owner.userId],
       );
       current = replay();
       const refused = await n.api.post(`${n.base}/model-providers/${kept.rows[0]!.id}/check`, {});
       expect(refused.status).toBe(403);
-      expect(refused.body.error).toContain("does not offer OpenAI providers");
+      expect(refused.body.error).toContain("does not offer Anthropic providers");
       expect(current.sent).toEqual([]);
     } finally {
       await narrow.destroy();
