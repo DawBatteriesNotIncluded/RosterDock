@@ -14,7 +14,7 @@ import { needsYouText } from "../src/notify/notify.js";
 import { executePullRequest } from "../src/reviews/outcomes.js";
 import { approveReview, vetoReview } from "../src/reviews/service.js";
 import { oneScanAtATime } from "../src/reviews/service.js";
-import { fakeGitHub } from "./github-fake.js";
+import { fakeGitHub, type RecordedRequest } from "./github-fake.js";
 import { fakeGitLab } from "./gitlab-fake.js";
 import {
   addProject,
@@ -1654,6 +1654,109 @@ describe("reviews", () => {
       "POST /projects/acme%2Fgtm-automations/merge_requests/17/notes",
       "PUT /projects/acme%2Fgtm-automations/merge_requests/17",
     ]);
+  });
+
+  it("never asks GitHub or GitLab to merge: it writes only its own branch, and opens, comments on and closes its own pull request", async () => {
+    const { api, base } = await seedCompany(board, "rv-merge@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    // The whole life of a change on one host: approved, vetoed, approved again over the branch the first
+    // round left there, vetoed again. Returns the board's branch; fake.requests holds what it sent.
+    const lifeCycle = async (fake: typeof github | typeof gitlab, name: string, repoUrl: string) => {
+      const project = (
+        await api.post(`${base}/projects`, { name, client: "Globex", repoUrl, defaultBranch: "main" })
+      ).body;
+      const task = (
+        await api.post(`${base}/tasks`, {
+          projectId: project.id,
+          title: "Map VMS sub-workflow calls",
+          assignee: { kind: "teammate", id: cody.id },
+        })
+      ).body;
+      await completeTaskRun(api, base, task.id, TEXT_DIFF, { baseSha: BASE_SHA });
+      const review = (await api.get(`${base}/tasks/${task.id}/review`)).body;
+      fake.requests.length = 0;
+      for (const branchLeft of [false, true]) {
+        fake.branchExists = branchLeft;
+        try {
+          const approved = await api.post(`${base}/reviews/${review.id}/approve`, {});
+          expect(approved.body.pullRequests[0]).toMatchObject({ status: "opened", error: null });
+        } finally {
+          fake.branchExists = false;
+        }
+        const vetoed = await api.post(`${base}/reviews/${review.id}/veto`, { note: "Not yet." });
+        expect(vetoed.body.pullRequests[0]).toMatchObject({ status: "closed", error: null });
+      }
+      return `rosterdock/task-${task.number}`;
+    };
+    const ghHead = await lifeCycle(github, "gtm-automations", "https://github.com/acme/gtm-automations.git");
+    const glHead = await lifeCycle(gitlab, "gtm-automations-gl", "https://gitlab.com/acme/gtm-automations");
+
+    // Every kind of request the board sent: none merges or turns on a merge, none goes to GraphQL, and the
+    // only branch any of them writes is the board's own.
+    const shape = (r: RecordedRequest) =>
+      `${r.method} ${r.path
+        .replace(/\/contents\/[^?]+/, "/contents/<file>")
+        .replace(/\/files\/[^/]+\/raw/, "/files/<file>/raw")
+        .replace(/[0-9a-f]{40}/g, "<sha>")}`;
+    const gh = "/repos/acme/gtm-automations";
+    expect(new Set(github.requests.map(shape))).toEqual(
+      new Set([
+        `GET ${gh}/git/commits/<sha>`,
+        `GET ${gh}/contents/<file>?ref=<sha>`,
+        `POST ${gh}/git/blobs`,
+        `POST ${gh}/git/trees`,
+        `POST ${gh}/git/commits`,
+        `POST ${gh}/git/refs`,
+        `PATCH ${gh}/git/refs/heads/${ghHead}`,
+        `POST ${gh}/pulls`,
+        `POST ${gh}/issues/42/comments`,
+        `PATCH ${gh}/pulls/42`,
+      ]),
+    );
+    const gl = "/projects/acme%2Fgtm-automations";
+    expect(new Set(gitlab.requests.map(shape))).toEqual(
+      new Set([
+        `GET ${gl}/repository/commits/<sha>`,
+        `GET ${gl}/repository/files/<file>/raw?ref=<sha>`,
+        `DELETE ${gl}/repository/branches/${encodeURIComponent(glHead)}`,
+        `POST ${gl}/repository/commits`,
+        `POST ${gl}/merge_requests`,
+        `POST ${gl}/merge_requests/17/notes`,
+        `PUT ${gl}/merge_requests/17`,
+      ]),
+    );
+    // What they carried, the same in both rounds: a commit whose one parent is the base, on the board's
+    // branch; a pull request from that branch into the base, with nothing that would merge it; a close.
+    const sent = (fake: typeof github | typeof gitlab, request: string) =>
+      fake.requests.filter((r) => shape(r) === request).map((r) => r.body);
+    const eachRound = (body: unknown) => [body, body];
+    expect(sent(github, `POST ${gh}/git/commits`)).toEqual(
+      eachRound({ message: expect.any(String), tree: expect.any(String), parents: [BASE_SHA] }),
+    );
+    expect(sent(github, `POST ${gh}/git/refs`)).toEqual(
+      eachRound({ ref: `refs/heads/${ghHead}`, sha: expect.any(String) }),
+    );
+    expect(sent(github, `POST ${gh}/pulls`)).toEqual(
+      eachRound({ title: expect.any(String), head: ghHead, base: "main", body: expect.any(String) }),
+    );
+    expect(sent(github, `PATCH ${gh}/pulls/42`)).toEqual(eachRound({ state: "closed" }));
+    expect(sent(gitlab, `POST ${gl}/repository/commits`)).toEqual(
+      eachRound({
+        branch: glHead,
+        start_sha: BASE_SHA,
+        commit_message: expect.any(String),
+        actions: expect.any(Array),
+      }),
+    );
+    expect(sent(gitlab, `POST ${gl}/merge_requests`)).toEqual(
+      eachRound({
+        source_branch: glHead,
+        target_branch: "main",
+        title: expect.any(String),
+        description: expect.any(String),
+      }),
+    );
+    expect(sent(gitlab, `PUT ${gl}/merge_requests/17`)).toEqual(eachRound({ state_event: "close" }));
   });
 
   it("a run with no diff still opens a review with no files, and secret-shaped diffs fail the check", async () => {

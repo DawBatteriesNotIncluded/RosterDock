@@ -38,11 +38,11 @@ runs them all against a local Postgres, with no model, git host or MCP server.
   approves it, and the board sends exactly those bytes, bound by their sha256. A payload that changed after
   it was proposed sends nothing. Tests: [`approvals.test.ts`](apps/board/test/approvals.test.ts)
   "sends exactly the bound bytes", "a payload that drifted after proposal sends nothing".
-- **The merge is yours.** An approved review opens a pull request (a merge request on GitLab) with exactly
-  the files the review showed, on the commit the run started from. The board's [git code](apps/board/src/git)
-  opens and closes pull requests and has no call that merges. Tests:
-  [`reviews.test.ts`](apps/board/test/reviews.test.ts) "only from the files the review showed",
-  "only on the commit the run's clone was at".
+- **The merge is yours.** An approved review opens a pull request (a merge request on GitLab) from a branch
+  of the board's own, with exactly the files the review showed, on the commit the run started from. The
+  board's [git code](apps/board/src/git) writes no other branch and has no call that merges. Tests:
+  [`reviews.test.ts`](apps/board/test/reviews.test.ts) "never asks GitHub or GitLab to merge",
+  "only from the files the review showed", "only on the commit the run's clone was at".
 - **Policy only narrows.** A teammate's toolbox is the ceiling: connections in a mode (`read`, `ask` or
   `off`), optionally only some of their tools. A department's or a client's policy can take access away,
   never add it. Tests: [`broker.test.ts`](apps/board/test/broker.test.ts) "policy only narrows";
