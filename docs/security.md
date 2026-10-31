@@ -303,6 +303,9 @@ their own, each with its own database and workers.
   each attempt. A run whose changes stand on another commit (it checked out another ref, or committed) fails at
   the read-back, and a pull request on any other base is refused, so it never carries commits its review did not
   show. A run an older worker did reported none, and its pull request is refused.
+- A pull request goes from the board's own branch, `rosterdock/task-N`, into the project's default branch, and
+  the board's own branches are the only ones it writes. No default branch is under `rosterdock/`: a project,
+  or a goal that opens one, is refused one, and a project saved with one before gets no pull request into it.
 - A run delivers files, never links. The worker reads a declared output, a changed file, the handover and
   `blocked.md` only as a regular file inside the run's directory, reached without a symbolic link. A link
   (`report.md -> /proc/self/environ`, a linked directory on the way) or a path out of the directory is never

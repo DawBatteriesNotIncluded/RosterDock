@@ -7,6 +7,7 @@
 
 import {
   type AssignReviewerInput,
+  boardBranch,
   diffStats,
   DiffError,
   parseUnifiedDiff,
@@ -999,7 +1000,7 @@ async function proposePullRequest(
     path: repo.path,
     baseSha: review.base_sha,
     baseBranch: project.default_branch,
-    headBranch: `rosterdock/task-${task.number}`,
+    headBranch: boardBranch(task.number),
     title: changeTitle(task),
     commitMessage: `${changeTitle(task)}\n\nReview ${review.id} round ${review.round}.`,
     body,
