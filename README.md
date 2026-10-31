@@ -1,28 +1,114 @@
 # RosterDock
 
-AI teammates on your own Kubernetes cluster: a manager who plans, reviews that decide, a person approving
-every live write.
+**AI teammates on a board that sends no live write and merges no code without your sign-off.**
 
 [![CI](https://github.com/DawBatteriesNotIncluded/RosterDock/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DawBatteriesNotIncluded/RosterDock/actions/workflows/ci.yml)
 [![Licence: Apache 2.0](https://img.shields.io/badge/licence-Apache_2.0-6b675f)](LICENSE)
 
-RosterDock is a self-hosted platform for departments of AI teammates, each a brain, a persona and a governed
-toolbox, working a shared kanban. It is for teams that want agents doing real work with a manager, reviews
-and an audit trail, on infrastructure they control.
+<!-- The office GIF goes here: docs/images/office.gif, about 15 seconds of a live run in which a goal goes in,
+Peter splits it into tasks, teammates sit down at their desks to work and one walks to the owner's room
+when it needs an approval. Until it is recorded the still below stands in; then change its path, alt text
+and caption. -->
 
-- Only an approved review marks work Done, and a person can veto any review.
-- A write to a live system runs only after a person approves its exact payload, bound by its sha256.
-- Your cluster and your Postgres, with every credential referenced by name.
-- Peter, the project-manager teammate, plans, chases and re-plans for Claude Code and Codex teammates in one
-  company.
+![The Office view of the RosterDock company: the owner's room where approvals wait, reception, a kitchen, a
+lounge and the four department rooms (Engineering, Issues & PRs, Docs, Release & Security) with teammates
+at their desks and each room's write policy on its name plate](docs/images/office.png)
+
+_[The company that works this repository](#built-by-a-rosterdock-company), at a quiet moment: teammates with
+nothing on take a break in the kitchen or the lounge, Peter among them._
+
+RosterDock is a self-hosted platform for departments of AI teammates, each a brain, a persona and a governed
+toolbox, working a shared kanban. Peter, the project-manager teammate, plans, chases and re-plans; Claude
+Code and Codex teammates do the work. It is for teams that want agents doing real work with a manager,
+reviews and an audit trail, on infrastructure they control.
 
 [Quick start](#quick-start-free-on-one-machine) · [Install on Kubernetes](docs/install.md) ·
 [Security](docs/security.md) · [Demo companies](#demo-companies) · [Contributing](CONTRIBUTING.md)
 
-![The board of the Lighthouse demo company, with teammates' tasks in columns](docs/images/board.png)
+## The rules, and the tests that hold them
 
-_Lighthouse, an invented demo company, on the stub engine: tasks to do, running, waiting on a teammate, in
-review and done._
+These hold at the board, for everything a person or a teammate does through its API and its broker. Each
+names the tests that hold it, and `pnpm test` runs them all against a local Postgres, with no model, git host
+or MCP server. What they do not reach is in the [security guide](docs/security.md): code a teammate's run
+executes on the shared workers, which
+[is no boundary between companies](docs/security.md#companies-on-one-board), and operator settings such as
+dev sign-in or stdio servers.
+
+- **Only an approved review marks a task Done.** Nobody can move a task to Done, the owner included. An owner
+  or admin can veto an approval, which sends the task back to In review. Tests:
+  [`tasks.test.ts`](apps/board/test/tasks.test.ts) "never to Done";
+  [`reviews.test.ts`](apps/board/test/reviews.test.ts) "a veto undoes it".
+- **A write to a live system waits for a person.** A teammate proposes the exact payload, an owner or admin
+  approves it, and the board sends exactly those bytes, bound by their sha256. A payload that changed after
+  it was proposed sends nothing. A tool's call is a write unless the connector's catalog, a person, or a
+  reading name (`get_`, `list_`, `search_` and the like) makes it a read
+  ([how](docs/security.md#workers-run-model-output)). Tests:
+  [`approvals.test.ts`](apps/board/test/approvals.test.ts) "sends exactly the bound bytes",
+  "a payload that drifted after proposal sends nothing".
+- **The merge is yours.** An approved review opens a pull request (a merge request on GitLab) from a branch
+  under `rosterdock/`, with exactly the files the review showed, on the commit the run started from. No
+  project's default branch may be one of those, and the board's [git code](apps/board/src/git) writes no
+  other branch and has no call that merges. Tests: [`reviews.test.ts`](apps/board/test/reviews.test.ts)
+  "never asks GitHub or GitLab to merge", "never opens a pull request into one of the board's own branches",
+  "only from the files the review showed", "only on the commit the run's clone was at".
+- **Policy only narrows.** A teammate's toolbox is the ceiling: connections in a mode (`read`, `ask` or
+  `off`), optionally only some of their tools. A department's or a client's policy can take access away,
+  never add it. Tests: [`broker.test.ts`](apps/board/test/broker.test.ts) "policy only narrows";
+  [`policy.test.ts`](packages/shared/test/policy.test.ts) "the toolbox is the ceiling".
+- **Teammates pass the same checks as people, with less power.** One role matrix decides what every person
+  and teammate may do, checked on every company route and on every board tool a teammate calls, and a
+  teammate cannot create a company, hire a teammate, change the org chart or decide an approval. Tests:
+  [`companies.test.ts`](apps/board/test/companies.test.ts) "teammates act as themselves";
+  [`roles.test.ts`](packages/shared/test/roles.test.ts) "never on the org chart".
+- **Every change is guarded and recorded.** Every company route declares the permission it needs, the guard
+  refuses one that declares none, and a change that appends nothing to the company's event stream is rolled
+  back. Tests: [`events.test.ts`](apps/board/test/events.test.ts)
+  "every company route refuses someone outside the company",
+  "fails closed on a company route that declares no permission",
+  "rolls back a change that appends no event", "declares a permission action".
+- **A credential is a name, never a value.** A key where a name belongs is refused at the write boundary. A
+  value set in Settings goes into the secret store, and its row, its event and every Settings response keep
+  only the name. Tests: [`companies.test.ts`](apps/board/test/companies.test.ts)
+  "rejects raw secret material"; [`company-secrets.test.ts`](apps/board/test/company-secrets.test.ts)
+  "no response carries it".
+- **Each company is sealed off on the board.** Every company route refuses someone outside the company, and
+  a company's secrets never reach another company's connections. Tests:
+  [`companies.test.ts`](apps/board/test/companies.test.ts) "non-members are refused";
+  [`events.test.ts`](apps/board/test/events.test.ts)
+  "every company route refuses someone outside the company";
+  [`company-secrets.test.ts`](apps/board/test/company-secrets.test.ts)
+  "another company's connection never sees the value".
+
+## Built by a RosterDock company
+
+A RosterDock company on the maintainer's board (Engineering, Issues & PRs, Docs, Release & Security, and
+Peter) takes tasks in this repository. A reviewer teammate reviews each change, the board opens the pull
+request with the reviewed diff's sha256 in it, and a person merges it:
+[every pull request the board has opened](https://github.com/DawBatteriesNotIncluded/RosterDock/pulls?q=is%3Apr+author%3ADawBatteriesNotIncluded+head%3Arosterdock%2Ftask+%22Merging+needs+a+person%22+in%3Abody).
+Most of the history is still the maintainer's.
+
+## RosterDock or Paperclip?
+
+[Paperclip](https://github.com/paperclipai/paperclip) runs a company of AI agents too, and it is the bigger
+project. Choose it for breadth: many agent runtimes (OpenClaw, Claude Code, Codex, Cursor, Gemini CLI and
+more), routines on a schedule or a webhook, plugins, and a one-command start on a laptop.
+
+Choose RosterDock when the rules matter more than breadth:
+
+- **It runs on your cluster.** A Helm chart installs a stateless board and workers that can scale with the
+  queue, behind network policies and your OpenID Connect sign-in. Paperclip has no chart of its own; its
+  Kubernetes support is a plugin that runs agents in sandboxes.
+- **An approval is for one call.** Paperclip also binds an approval to the call's arguments, and the approver
+  can mark it Always allowed, or an operator promote it later, into a trust rule, so matching calls run
+  without asking. Here an approval sends one call and the next waits again; a tool runs without asking only
+  when it counts as a read.
+- **Done means reviewed.** Work reaches Done only through an approved review, with comments on the diff's
+  hunks and checks (a secret scan, the repository's tests, cited sources) run on it.
+- **No telemetry of its own.** RosterDock's code sends no telemetry, and its traces go only to a collector you
+  set; the Claude Code and Codex engines it runs keep their vendors' defaults. Paperclip's anonymous usage
+  telemetry is on unless you turn it off.
+
+_Compared in October 2026 from Paperclip's README and docs; corrections are welcome._
 
 ## Status
 
@@ -152,22 +238,9 @@ throwaway install. Guides: [install](docs/install.md), [operator](docs/operator.
 [Lighthouse](deploy/demo/lighthouse/README.md) launches a product, and [Cirrus](deploy/demo/cirrus/README.md),
 a telecoms company, recovers from a bad week. Both are invented; their guides set them up and give costs.
 
-## How this repository is worked
+![The board of the Lighthouse demo company, with teammates' tasks in columns](docs/images/board.png)
 
-A RosterDock company on the maintainer's board (Engineering, Issues & PRs, Docs, Release & Security, and
-Peter) takes tasks here. A reviewer teammate reviews each change it makes, the board opens the pull request
-and a person merges ([#7](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/7),
-[#8](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/8),
-[#14](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/14),
-[#15](https://github.com/DawBatteriesNotIncluded/RosterDock/pull/15)). Most of the history is the
-maintainer's.
-
-![The Office view of the RosterDock company: the owner's room where approvals wait, reception, a kitchen, a
-lounge and the four department rooms (Engineering, Issues & PRs, Docs, Release & Security) with teammates
-at their desks and each room's write policy on its name plate](docs/images/office.png)
-
-_The company that works this repository, at a quiet moment: teammates with nothing on take a break in the
-kitchen or the lounge, Peter among them._
+_Lighthouse on the stub engine: tasks to do, running, waiting on a teammate, in review and done._
 
 ## Contributing
 

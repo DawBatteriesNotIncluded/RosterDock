@@ -1,5 +1,8 @@
 import http from "node:http";
+import Fastify from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { registerGuard } from "../src/auth/guard.js";
+import { mutate } from "../src/mutate.js";
 import { addProject, seedCompany, startTestBoard, type TestBoard } from "./helpers.js";
 
 let board: TestBoard;
@@ -97,10 +100,16 @@ describe("event stream", () => {
 
 describe("every mutating company route", () => {
   it("declares a permission action (the guard fails closed otherwise)", async () => {
-    const routes = board.app.printRoutes({ commonPrefix: false }).split("\n");
-    // Fastify's route tree print is for humans; assert through behaviour instead:
-    // a mutating company route without config.action would 500 for an owner.
-    const { api, base } = await seedCompany(board, "g1@example.com");
+    // A mutating company route without config.action would 500 for an owner; each change appends an event.
+    const { api, base, companyId } = await seedCompany(board, "g1@example.com");
+    const events = async () =>
+      Number(
+        (
+          await board.db.query<{ n: string }>("SELECT count(*) AS n FROM events WHERE company_id = $1", [
+            companyId,
+          ])
+        ).rows[0]!.n,
+      );
     const project = await addProject(api, base);
     const task = (await api.post(`${base}/tasks`, { projectId: project.id, title: "x" })).body;
     const probes: [string, string, unknown][] = [
@@ -114,8 +123,8 @@ describe("every mutating company route", () => {
       ["POST", `${base}/tasks/${task.id}/move`, { status: "doing" }],
       ["POST", `${base}/tasks/${task.id}/messages`, { body: "hello" }],
     ];
-    const before = (await api.get(`${base}/events`)).body.length;
     for (const [method, url, body] of probes) {
+      const before = await events();
       const res = await board.app.inject({
         method: method as "POST",
         url,
@@ -123,11 +132,68 @@ describe("every mutating company route", () => {
         payload: body,
       });
       expect(res.statusCode, `${method} ${url}`).toBeLessThan(300);
+      expect(await events(), `${method} ${url} appended an event`).toBeGreaterThan(before);
     }
-    const after = (await api.get(`${base}/events`)).body.length;
-    // Each probe appended at least one event.
-    expect(after - before).toBeGreaterThanOrEqual(probes.length);
-    expect(routes.length).toBeGreaterThan(0);
+  });
+
+  it("every company route refuses someone outside the company, at the guard", async () => {
+    const { companyId } = await seedCompany(board, "g-owner@example.com");
+    const outsider = await board.login("g-outsider@example.com", "Mallory");
+    // Every route the board serves, read from Fastify's printed tree. The count keeps a change in the print's
+    // format from passing with no routes at all.
+    const stack: string[] = [];
+    const routes: { method: string; url: string }[] = [];
+    for (const line of board.app.printRoutes({ commonPrefix: false }).split("\n")) {
+      const m = /^([│ ]*)[├└]── (\S+) \(([A-Z, ]+)\)$/.exec(line);
+      if (!m) continue;
+      stack.length = m[1]!.length / 4;
+      stack.push(m[2]!);
+      for (const method of m[3]!.split(", ")) routes.push({ method, url: stack.join("") });
+    }
+    const company = routes.filter((r) => r.url.includes("/:companyId") && r.method !== "HEAD");
+    expect(company.length).toBeGreaterThan(100);
+    for (const { method, url } of company) {
+      const res = await board.app.inject({
+        method: method as "GET",
+        url: url.replace(":companyId", companyId).replace(/:\w+/g, "00000000-0000-4000-8000-000000000000"),
+        headers: { authorization: `Bearer ${outsider.token}` },
+        ...(method === "GET" || method === "DELETE" ? {} : { payload: {} }),
+      });
+      expect([res.statusCode, JSON.parse(res.body).error], `${method} ${url}`).toEqual([
+        403,
+        "not a member of this company",
+      ]);
+    }
+  });
+
+  it("fails closed on a company route that declares no permission", async () => {
+    const app = Fastify();
+    registerGuard(app, board.db);
+    app.get("/api/companies/:companyId/unguarded", async () => ({ ok: true }));
+    app.post("/api/companies/:companyId/unguarded", async () => ({ ok: true }));
+    for (const method of ["GET", "POST"] as const) {
+      const res = await app.inject({
+        method,
+        url: "/api/companies/c-1/unguarded",
+        ...(method === "POST" ? { payload: {} } : {}),
+      });
+      expect(res.statusCode, method).toBe(500);
+      expect(res.body, method).toMatch(/missing a permission action/);
+    }
+    await app.close();
+  });
+
+  it("rolls back a change that appends no event", async () => {
+    const { owner, api, base, companyId } = await seedCompany(board, "g-rollback@example.com");
+    const name = (await api.get(base)).body.name;
+    await expect(
+      mutate(board.db, companyId, { kind: "user", id: owner.userId }, async (ctx) => {
+        await ctx.client.query("UPDATE companies SET name = 'Renamed with no event' WHERE id = $1", [
+          companyId,
+        ]);
+      }),
+    ).rejects.toThrow("mutation committed no event");
+    expect((await api.get(base)).body.name).toBe(name);
   });
 
   it("ends open streams when the board shuts down, so shutting down does not wait on a browser tab", async () => {
