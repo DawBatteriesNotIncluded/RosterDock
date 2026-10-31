@@ -442,6 +442,23 @@ describe("a company's destination through the egress", () => {
   });
 });
 
+/**
+ * `fn` with the event loop kept busy until it settles, so a timer runs once it is due. An idle loop runs one
+ * within a millisecond on Linux, and on Windows only at the system clock's next tick, 15.6 ms.
+ */
+async function awake<T>(fn: () => Promise<T>): Promise<T> {
+  let on = true;
+  const spin = () => {
+    if (on) setImmediate(spin);
+  };
+  spin();
+  try {
+    return await fn();
+  } finally {
+    on = false;
+  }
+}
+
 describe("the pinned transport for a company's destinations", () => {
   let server: http.Server;
   let port = 0;
@@ -766,10 +783,16 @@ describe("the pinned transport for a company's destinations", () => {
   it("ends an MCP call whose stream the SDK resumes empty again and again, after 2000 requests", async () => {
     seen.length = 0;
     const started = Date.now();
+    // Before each resume the SDK waits out the server's retry, 0 ms, on a timer: on an idle Windows loop a
+    // clock tick, so 2000 resumes took some 30 s there, past the call's timeout and vitest's. Kept awake, the
+    // loop runs each timer once it is due, on Linux as on Windows, and the 15 s below measures the board's
+    // transport and budget, not the clock.
     await expect(
-      discoverTools(
-        { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-empty` },
-        { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
+      awake(() =>
+        discoverTools(
+          { transport: "http", url: `http://mcp.cluster.test:${port}/mcp-empty` },
+          { egress: boardEgress(parsePrivateDestinations("*.cluster.test"), toServer), timeoutMs: 20_000 },
+        ),
       ),
     ).rejects.toThrow(
       `mcp.cluster.test:${port} got more than 2000 requests for one call, too many requests; the board read no further`,
