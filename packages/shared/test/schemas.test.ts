@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  boardBranch,
   CreateDepartmentSchema,
   CreateGoalSchema,
   CreateProjectSchema,
   CreateTaskSchema,
   extractMentions,
   handleFor,
+  isBoardBranch,
   MoveTaskSchema,
   CreateTeammateSchema,
   ModelPriceInputSchema,
@@ -80,6 +82,31 @@ describe("request schemas", () => {
     expect(
       CreateProjectSchema.safeParse({ name: "App", repoUrl: "ssh://git@example.com/acme/app.git" }).success,
     ).toBe(true);
+  });
+
+  it("a default branch is never rosterdock or under rosterdock/, where the board writes its own branches", () => {
+    const repoUrl = "https://github.com/acme/app";
+    // `rosterdock` itself too: git cannot hold it beside the board's `rosterdock/task-N`.
+    for (const defaultBranch of [
+      boardBranch(1),
+      " Rosterdock/next ",
+      "refs/heads/rosterdock/task-2",
+      "rosterdock",
+      "refs/heads/RosterDock",
+    ]) {
+      expect(
+        CreateProjectSchema.safeParse({ name: "App", repoUrl, defaultBranch }).error?.issues[0]?.message,
+      ).toBe(
+        "a default branch is never rosterdock or under rosterdock/: the board writes its own branches there",
+      );
+      expect(UpdateProjectSchema.safeParse({ defaultBranch }).success).toBe(false);
+      expect(CreateGoalSchema.safeParse({ text: "Fix the export", repoUrl, defaultBranch }).success).toBe(
+        false,
+      );
+    }
+    for (const defaultBranch of ["main", "release/rosterdock", "rosterdocks", "rosterdock-next"])
+      expect(CreateProjectSchema.parse({ name: "App", defaultBranch }).defaultBranch).toBe(defaultBranch);
+    expect(isBoardBranch(boardBranch(12))).toBe(true);
   });
 
   it("accepts a user or a teammate as assignee", () => {

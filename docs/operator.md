@@ -84,8 +84,9 @@ titled `Task 12: <the task's title>`. Its body names the round, the reviewer who
 the diff's sha256. The board never writes a bare `#12`: the git host would link that to the repository's
 own issue or pull request 12. Only build work on a project with a repository opens one; research documents
 stay on the board. **New goal** puts a goal in a project that exists, or opens one on the repository URL and
-branch you give it, and Peter plans changes to code only on a project that has one. A task filed into a
-project after the goal that opened it closed is work outside that goal.
+branch you give it (never `rosterdock` or one under it, where the board's own branches are), and Peter plans
+changes to code only on a project that has one. A task filed into a project after the goal that opened it
+closed is work outside that goal.
 
 A write a person rejects leaves its task Blocked on the rejection, with the note: nothing waits for a decision
 any more. Peter (or the department's lead) re-plans a teammate's task without that write, unless its goal was
