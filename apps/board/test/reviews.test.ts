@@ -796,7 +796,8 @@ describe("reviews", () => {
     const { api, base } = await seedCompany(board, "rv-own-branch@example.com");
     const cody = await addTeammate(api, base, "Cody");
     const repo = { client: "Globex", repoUrl: "https://github.com/acme/gtm-automations.git" };
-    const rule = "a default branch is never under rosterdock/: the board writes its own branches there";
+    const rule =
+      "a default branch is never rosterdock or under rosterdock/: the board writes its own branches there";
     const refused = await api.post(`${base}/projects`, {
       name: "gtm-automations",
       ...repo,
@@ -840,7 +841,7 @@ describe("reviews", () => {
       baseBranch: "rosterdock/task-1",
       headBranch: "rosterdock/task-1",
       error:
-        "the pull request would go into rosterdock/task-1, one of the board's own branches: give the project another default branch",
+        "the pull request would go into rosterdock/task-1, one of the board's own branches: give the project another default branch, then veto the approval and request changes, for a round on that branch",
     });
     expect(github.requests).toEqual([]);
   });

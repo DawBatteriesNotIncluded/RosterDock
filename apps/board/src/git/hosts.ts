@@ -75,7 +75,7 @@ export async function openChange(
 ): Promise<OpenedPullRequest> {
   if (isBoardBranch(plan.baseBranch))
     throw new Error(
-      `the ${changeNoun(provider)} would go into ${plan.baseBranch}, one of the board's own branches: give the project another default branch`,
+      `the ${changeNoun(provider)} would go into ${plan.baseBranch}, one of the board's own branches: give the project another default branch, then veto the approval and request changes, for a round on that branch`,
     );
   if (provider === "gitlab") {
     if (!hosts.gitlab) throw new Error("no GitLab is configured on the board (ROSTERDOCK_GITLAB_TOKEN)");
