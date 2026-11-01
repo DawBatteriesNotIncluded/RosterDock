@@ -2,7 +2,7 @@
 // GitLab (a merge request). A project's repository URL says which; the same
 // plan, the same sha256-bound payload and the same outcome row serve both.
 
-import type { DiffFile } from "@rosterdock/shared";
+import { isBoardBranch, type DiffFile } from "@rosterdock/shared";
 import {
   closePullRequest,
   openPullRequest,
@@ -63,13 +63,20 @@ export function changeNoun(provider: string): string {
   return provider === "gitlab" ? "merge request" : "pull request";
 }
 
-/** Open the change on the host the row names. */
+/**
+ * Open the change on the host the row names. Never into one of the board's own branches, which the board
+ * would write: a project saved before they were refused as a default branch may still name one.
+ */
 export async function openChange(
   hosts: GitHosts,
   provider: string,
   path: string,
   plan: ChangePlan,
 ): Promise<OpenedPullRequest> {
+  if (isBoardBranch(plan.baseBranch))
+    throw new Error(
+      `the ${changeNoun(provider)} would go into ${plan.baseBranch}, one of the board's own branches: give the project another default branch`,
+    );
   if (provider === "gitlab") {
     if (!hosts.gitlab) throw new Error("no GitLab is configured on the board (ROSTERDOCK_GITLAB_TOKEN)");
     return openMergeRequest(hosts.gitlab, { ...plan, project: path });

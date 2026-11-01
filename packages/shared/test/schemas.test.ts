@@ -82,6 +82,21 @@ describe("request schemas", () => {
     ).toBe(true);
   });
 
+  it("a default branch is never under rosterdock/, where the board writes its own branches", () => {
+    const repoUrl = "https://github.com/acme/app";
+    for (const defaultBranch of ["rosterdock/task-1", " Rosterdock/next ", "refs/heads/rosterdock/task-2"]) {
+      expect(
+        CreateProjectSchema.safeParse({ name: "App", repoUrl, defaultBranch }).error?.issues[0]?.message,
+      ).toBe("a default branch is never under rosterdock/: the board writes its own branches there");
+      expect(UpdateProjectSchema.safeParse({ defaultBranch }).success).toBe(false);
+      expect(CreateGoalSchema.safeParse({ text: "Fix the export", repoUrl, defaultBranch }).success).toBe(
+        false,
+      );
+    }
+    for (const defaultBranch of ["main", "release/rosterdock", "rosterdock", "rosterdock-next"])
+      expect(CreateProjectSchema.parse({ name: "App", defaultBranch }).defaultBranch).toBe(defaultBranch);
+  });
+
   it("accepts a user or a teammate as assignee", () => {
     expect(
       CreateTaskSchema.safeParse({ projectId: id, title: "T", assignee: { kind: "user", id } }).success,

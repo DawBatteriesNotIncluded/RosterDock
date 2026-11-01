@@ -792,6 +792,59 @@ describe("reviews", () => {
     expect(github.requests).toEqual([]);
   });
 
+  it("never opens a pull request into one of the board's own branches: such a default branch is refused, and one saved before opens nothing", async () => {
+    const { api, base } = await seedCompany(board, "rv-own-branch@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const repo = { client: "Globex", repoUrl: "https://github.com/acme/gtm-automations.git" };
+    const rule = "a default branch is never under rosterdock/: the board writes its own branches there";
+    const refused = await api.post(`${base}/projects`, {
+      name: "gtm-automations",
+      ...repo,
+      defaultBranch: "rosterdock/task-1",
+    });
+    expect(refused.status).toBe(400);
+    expect(JSON.stringify(refused.body)).toContain(rule);
+    const project = (
+      await api.post(`${base}/projects`, { name: "gtm-automations", ...repo, defaultBranch: "main" })
+    ).body;
+    const moved = await api.patch(`${base}/projects/${project.id}`, { defaultBranch: "rosterdock/task-1" });
+    expect(moved.status).toBe(400);
+    expect(JSON.stringify(moved.body)).toContain(rule);
+    const goal = await api.post(`${base}/goals`, {
+      text: "Map the VMS calls",
+      repoUrl: repo.repoUrl,
+      defaultBranch: "rosterdock/task-1",
+    });
+    expect(goal.status).toBe(400);
+    expect(JSON.stringify(goal.body)).toContain(rule);
+
+    // A project saved before the rule, whose default branch is the very branch the board writes for task 1:
+    // the board would have moved it to the change, with nobody merging. It sends nothing.
+    await board.db.query("UPDATE projects SET default_branch = 'rosterdock/task-1' WHERE id = $1", [
+      project.id,
+    ]);
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "Map VMS sub-workflow calls",
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    await completeTaskRun(api, base, task.id, TEXT_DIFF, { baseSha: BASE_SHA });
+    const review = (await api.get(`${base}/tasks/${task.id}/review`)).body;
+    github.requests.length = 0;
+    const approved = await api.post(`${base}/reviews/${review.id}/approve`, {});
+    expect(approved.body.taskStatus).toBe("done");
+    expect(approved.body.pullRequests[0]).toMatchObject({
+      status: "failed",
+      baseBranch: "rosterdock/task-1",
+      headBranch: "rosterdock/task-1",
+      error:
+        "the pull request would go into rosterdock/task-1, one of the board's own branches: give the project another default branch",
+    });
+    expect(github.requests).toEqual([]);
+  });
+
   it("opens a pull request only from the files the review showed, as its diff still reads them", async () => {
     const { api, base } = await seedCompany(board, "rv-reread@example.com");
     const cody = await addTeammate(api, base, "Cody");
