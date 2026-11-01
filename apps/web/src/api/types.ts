@@ -384,6 +384,8 @@ export interface CatalogEntry {
   authEnvExample?: string;
   /** "oauth": the server authorises by OAuth only. */
   auth?: "oauth";
+  /** With "oauth", for a server that registers no clients: a person brings a client id; a NAME example for its secret. */
+  clientSecretEnvExample?: string;
   docsUrl?: string;
   reads: string[];
   writes: string[];

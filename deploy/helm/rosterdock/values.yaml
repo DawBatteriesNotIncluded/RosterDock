@@ -34,7 +34,7 @@ board:
   # Governed tools. Connection credentials are env var NAMES on connections. A company's names resolve
   # from its own secrets (set in Settings with oauth.enabled below) and from the names listed in
   # sharedEnvNames, never from anything else on the board (its database URL, its worker token).
-  # connectionsSecret puts credentials on the board pod, one key per name (HUBSPOT_MCP_TOKEN...); a key
+  # connectionsSecret puts credentials on the board pod, one key per name (N8N_MCP_TOKEN...); a key
   # reaches companies only when sharedEnvNames lists it. Empty: none.
   connectionsSecret:
     name: ""

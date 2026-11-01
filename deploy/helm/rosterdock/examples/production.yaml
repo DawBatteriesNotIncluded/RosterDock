@@ -16,10 +16,10 @@ board:
   modelSecret:
     name: rosterdock-model # ANTHROPIC_API_KEY
   connectionsSecret:
-    name: rosterdock-connections # one key per connection credential NAME (HUBSPOT_MCP_TOKEN, ...)
+    name: rosterdock-connections # one key per connection credential NAME (N8N_MCP_TOKEN, ...)
   # The keys above every company may name; any company's owners and admins can use them. A credential for
   # one company goes in that company's secrets instead (Settings, with oauth.enabled).
-  sharedEnvNames: [HUBSPOT_MCP_TOKEN]
+  sharedEnvNames: [N8N_MCP_TOKEN]
   # oauth: { enabled: true } # connections may authorise by OAuth; the board then keeps tokens in its own Secrets
   notifySecret:
     name: rosterdock-notify # ROSTERDOCK_NOTIFY_WEBHOOK_URL

@@ -432,9 +432,12 @@ their own, each with its own database and workers.
   while the operator lists a range it could resolve into). The row changes first, with its event, to the new issuer
   and no authorisation; then the store loses the kept tokens, and the client secret too if the issuer
   changed. Every store entry names the issuer it came from, and only the row's issuer's entry is sent or
-  refreshed, so a refresh that lands late never hands one server's tokens or secret to another. A client id
-  a person gave is never carried to another issuer: Authorise refuses, and the connection is added again
-  with a client id registered there. An authorisation in progress is bound to the issuer it was started
+  refreshed, so a refresh that lands late never hands one server's tokens or secret to another. The board
+  registers itself as a client where the authorization server takes registrations; one that takes none
+  (HubSpot's, which the catalog's entry says) needs the client id of an app a person made there, with the
+  board's `<public URL>/api/oauth/callback` as its redirect URL, and that app's secret by name: a company
+  secret or a name the board shares, never a value. A client id a person gave is never carried to another
+  issuer: Authorise refuses, and the connection is added again with a client id registered there. An authorisation in progress is bound to the issuer it was started
   at: a person who comes back after the connection moved is refused and asked to authorise again, and the
   code and its PKCE verifier never go to the new server. Which authorization server it names stays the
   server's choice, and a person consents on that server's page before any token is issued.

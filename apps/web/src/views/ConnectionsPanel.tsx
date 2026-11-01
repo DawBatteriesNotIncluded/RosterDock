@@ -211,6 +211,13 @@ export function consentUrl(url: string): string {
   return parsed.toString();
 }
 
+/** The OAuth client id's hint: a server that registers no clients takes the id of an app a person made there. */
+export function clientIdHint(entry: CatalogEntry | undefined): string {
+  return entry?.clientSecretEnvExample
+    ? `Required: ${entry.name} registers no clients. Make an app there with this board's /api/oauth/callback as its redirect URL, and give its client id`
+    : "Empty: the board registers itself with the server";
+}
+
 /** What the operator's list is, for a person to read; the company's own entries say so. */
 function listedPhrase(listed: readonly string[], own: readonly string[] = []): string {
   return listed.length
@@ -300,6 +307,7 @@ function AddMcpForm({
     setUrl(e.urlExample ?? "");
     setCommand(e.commandExample ?? "");
     setAuthEnvName(e.authEnvExample ?? "");
+    setClientSecretEnvName(e.clientSecretEnvExample ?? "");
     setAuth(e.auth === "oauth" ? "oauth" : "name");
   };
   const submit = async (ev: FormEvent) => {
@@ -427,11 +435,11 @@ function AddMcpForm({
       ) : null}
       {byOAuth ? (
         <>
-          <Field label="Client id" hint="Empty: the board registers itself with the server">
+          <Field label="Client id" hint={clientIdHint(picked)}>
             <input
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
-              placeholder="optional"
+              placeholder={picked?.clientSecretEnvExample ? "required" : "optional"}
               className="mono"
               style={{ width: 200 }}
             />
@@ -461,7 +469,7 @@ function AddMcpForm({
           <input
             value={authEnvName}
             onChange={(e) => setAuthEnvName(e.target.value)}
-            placeholder="HUBSPOT_MCP_TOKEN"
+            placeholder="N8N_MCP_TOKEN"
             className="mono"
             style={{ width: 200 }}
           />
@@ -834,7 +842,7 @@ function SecretsSection({
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="HUBSPOT_MCP_TOKEN"
+              placeholder="N8N_MCP_TOKEN"
               className="mono"
               style={{ width: 220 }}
             />

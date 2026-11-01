@@ -47,9 +47,29 @@ describe("connections", () => {
     expect(ids).toEqual(
       expect.arrayContaining(["hubspot", "slack", "xero", "n8n", "gong", "notion", "github"]),
     );
+    // HubSpot authorises by OAuth only and registers no clients: a person brings an app's client id, and
+    // its secret by name.
     const hubspot = res.body.find((e: { id: string }) => e.id === "hubspot");
-    expect(hubspot.authEnvExample).toBe("HUBSPOT_MCP_TOKEN");
+    expect(hubspot).toMatchObject({
+      auth: "oauth",
+      urlExample: "https://mcp.hubspot.com/",
+      clientSecretEnvExample: "HUBSPOT_MCP_CLIENT_SECRET",
+    });
+    expect(hubspot.authEnvExample).toBeUndefined();
+    expect(hubspot.reads).toContain("search_crm_objects");
     expect(hubspot.writes).toContain("manage_crm_objects");
+    // n8n's instance-level server sits on the editor's port and takes a personal access token by name.
+    // Running a workflow writes.
+    const n8n = res.body.find((e: { id: string }) => e.id === "n8n");
+    expect(n8n).toMatchObject({
+      urlExample: "http://localhost:5678/mcp-server/http",
+      authEnvExample: "N8N_MCP_TOKEN",
+    });
+    expect(n8n.auth).toBeUndefined();
+    expect(n8n.reads).toEqual(expect.arrayContaining(["search_workflows", "get_workflow_details"]));
+    expect(n8n.writes).toEqual(
+      expect.arrayContaining(["create_workflow_from_code", "publish_workflow", "execute_workflow"]),
+    );
     // Notion authorises by OAuth only: no token to name, and the Add flow starts at OAuth.
     const notion = res.body.find((e: { id: string }) => e.id === "notion");
     expect(notion).toMatchObject({

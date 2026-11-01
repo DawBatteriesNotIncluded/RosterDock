@@ -116,7 +116,7 @@ secret store; the chart only ever holds the name and the key.
 | `rosterdock-model`       | `ANTHROPIC_API_KEY`                                                                                          | board; Peter plans with it. Optional                                                                                                                   |
 | `rosterdock-oidc`        | `ROSTERDOCK_OIDC_CLIENT_SECRET`                                                                              | board; sign-in through your identity provider (below)                                                                                                  |
 | `rosterdock-storage`     | `S3_ACCESS_KEY`, `S3_SECRET_KEY`                                                                             | board. Optional                                                                                                                                        |
-| `rosterdock-connections` | one key per connection credential NAME (`HUBSPOT_MCP_TOKEN`…)                                                | board; a key reaches companies only when `board.sharedEnvNames` lists it. Optional                                                                     |
+| `rosterdock-connections` | one key per connection credential NAME (`N8N_MCP_TOKEN`…)                                                    | board; a key reaches companies only when `board.sharedEnvNames` lists it. Optional                                                                     |
 | `rosterdock-notify`      | `ROSTERDOCK_NOTIFY_WEBHOOK_URL`                                                                              | board; needs-you notifications. Optional                                                                                                               |
 | `rosterdock-github`      | `ROSTERDOCK_GITHUB_TOKEN`                                                                                    | board; opens pull requests after a review. Optional                                                                                                    |
 | `rosterdock-gitlab`      | `ROSTERDOCK_GITLAB_TOKEN`                                                                                    | board; opens merge requests on GitLab projects. Optional                                                                                               |
@@ -133,7 +133,7 @@ kubectl -n rosterdock create secret generic rosterdock-engines --from-literal=AN
 kubectl -n rosterdock create secret generic rosterdock-model --from-literal=ANTHROPIC_API_KEY='...'
 kubectl -n rosterdock create secret generic rosterdock-oidc --from-literal=ROSTERDOCK_OIDC_CLIENT_SECRET='...'
 kubectl -n rosterdock create secret generic rosterdock-storage --from-literal=S3_ACCESS_KEY='...' --from-literal=S3_SECRET_KEY='...'
-kubectl -n rosterdock create secret generic rosterdock-connections --from-literal=HUBSPOT_MCP_TOKEN='...'
+kubectl -n rosterdock create secret generic rosterdock-connections --from-literal=N8N_MCP_TOKEN='...'
 kubectl -n rosterdock create secret generic rosterdock-notify --from-literal=ROSTERDOCK_NOTIFY_WEBHOOK_URL='https://hooks.slack.com/services/...'
 kubectl -n rosterdock create secret generic rosterdock-github --from-literal=ROSTERDOCK_GITHUB_TOKEN='...'
 ```

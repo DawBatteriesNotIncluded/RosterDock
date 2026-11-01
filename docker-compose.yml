@@ -56,7 +56,7 @@ services:
       # Governed tools: a company keeps its connection credentials in Settings > Connections > Secrets (the
       # store below). A value set here reaches companies only when its name is listed here, and an unlisted
       # name set here is the board's own, which a connection may not name. To share one value with every
-      # company, set it and list it, e.g. HUBSPOT_MCP_TOKEN: ${HUBSPOT_MCP_TOKEN} and this: HUBSPOT_MCP_TOKEN.
+      # company, set it and list it, e.g. N8N_MCP_TOKEN: ${N8N_MCP_TOKEN} and this: N8N_MCP_TOKEN.
       ROSTERDOCK_SHARED_ENV_NAMES: ${ROSTERDOCK_SHARED_ENV_NAMES:-}
       # Needs-you notifications: a webhook URL (a Slack incoming webhook works as is); empty means none.
       ROSTERDOCK_NOTIFY_WEBHOOK_URL: ${ROSTERDOCK_NOTIFY_WEBHOOK_URL:-}
