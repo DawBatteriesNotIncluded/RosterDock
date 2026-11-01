@@ -19,6 +19,8 @@ export interface CatalogEntry {
   authEnvExample?: string;
   /** "oauth": the server authorises by OAuth only, so the Add flow starts there and needs the board's secret store. */
   auth?: "oauth";
+  /** With "oauth", for a server that registers no clients: a person brings the client id of an app made there, and this is an env var NAME example for its secret, never a value. */
+  clientSecretEnvExample?: string;
   docsUrl?: string;
   /** Tools known to read; anything else on the server is a write unless its name reads as one or a person says so. */
   reads: string[];
@@ -41,9 +43,11 @@ export const CONNECTOR_CATALOG: CatalogEntry[] = [
     category: "CRM",
     kind: "mcp",
     transport: "http",
-    urlExample: "https://mcp.hubspot.com/mcp",
-    authEnvExample: "HUBSPOT_MCP_TOKEN",
-    docsUrl: "https://developers.hubspot.com",
+    urlExample: "https://mcp.hubspot.com/",
+    auth: "oauth",
+    clientSecretEnvExample: "HUBSPOT_MCP_CLIENT_SECRET",
+    docsUrl:
+      "https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server",
     reads: ["search_crm_objects", "get_crm_objects", "query_crm_data", "get_properties", "search_owners"],
     writes: ["manage_crm_objects", "manage_segment", "manage_marketing_email", "manage_campaign_objects"],
   },
@@ -76,22 +80,31 @@ export const CONNECTOR_CATALOG: CatalogEntry[] = [
   {
     id: "n8n",
     name: "n8n",
-    description: "Workflow automation: inspect workflows; creating, updating or activating one asks.",
+    description:
+      "Workflow automation: search workflows and their runs; building, publishing, running or archiving one asks.",
     category: "Automation",
     kind: "mcp",
     transport: "http",
-    urlExample: "http://localhost:3001/mcp",
+    urlExample: "http://localhost:5678/mcp-server/http",
     authEnvExample: "N8N_MCP_TOKEN",
-    docsUrl: "https://docs.n8n.io",
-    reads: ["list_workflows", "get_workflow", "get_workflow_details", "list_executions", "get_execution"],
+    docsUrl: "https://docs.n8n.io/connect/connect-to-n8n-mcp-server/",
+    reads: [
+      "search_workflows",
+      "get_workflow_details",
+      "get_workflow_history",
+      "search_workflow_executions",
+      "get_workflow_execution",
+      "validate_workflow",
+    ],
     writes: [
-      "create_workflow",
+      "create_workflow_from_code",
       "update_workflow",
-      "activate_workflow",
-      "deactivate_workflow",
-      "run_workflow",
+      "publish_workflow",
+      "unpublish_workflow",
       "execute_workflow",
-      "delete_workflow",
+      "test_workflow",
+      "archive_workflow",
+      "restore_workflow_version",
     ],
   },
   {

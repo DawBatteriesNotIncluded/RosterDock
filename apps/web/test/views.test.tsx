@@ -28,6 +28,7 @@ import { messageWithIssues } from "../src/api/client.ts";
 import {
   AddWebForm,
   checkLine,
+  clientIdHint,
   confirmAsRead,
   ConnectionsPanel,
   connectionSummary,
@@ -721,8 +722,9 @@ describe("views render with sample data", () => {
         category: "CRM",
         kind: "mcp" as const,
         transport: "http" as const,
-        urlExample: "https://mcp.hubspot.com/mcp",
-        authEnvExample: "HUBSPOT_MCP_TOKEN",
+        urlExample: "https://mcp.hubspot.com/",
+        auth: "oauth" as const,
+        clientSecretEnvExample: "HUBSPOT_MCP_CLIENT_SECRET",
         reads: [],
         writes: [],
       },
@@ -783,6 +785,14 @@ describe("views render with sample data", () => {
     // A pre-registered client's secret shows by name only.
     expect(offered).toContain("secret by name: GONG_OAUTH_CLIENT_SECRET");
     expect(offered).not.toMatch(/client-secret-|given-secret/);
+    // A catalog server that registers no clients (HubSpot) asks for the client id of an app made there.
+    expect(clientIdHint(catalog[0])).toBe(
+      "Required: HubSpot registers no clients. Make an app there with this board's /api/oauth/callback as its redirect URL, and give its client id",
+    );
+    expect(clientIdHint({ ...catalog[0]!, clientSecretEnvExample: undefined })).toBe(
+      "Empty: the board registers itself with the server",
+    );
+    expect(clientIdHint(undefined)).toBe("Empty: the board registers itself with the server");
     expect(offered).toContain("Authorise again");
     // Secrets set from here: only with a store and the loader; the section, its form and the names, never a value.
     expect(html).not.toContain("Set value");
