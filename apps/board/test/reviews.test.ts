@@ -577,6 +577,63 @@ describe("reviews", () => {
     expect((await reviewer.post(`${base}/reviews/${review.id}/approve`, {})).status).toBe(409);
   });
 
+  it("the author of a later round never decides either, though the review was opened by another", async () => {
+    const { api, base } = await seedCompany(board, "rv3b@example.com");
+    const cody = await addTeammate(api, base, "Cody");
+    const verifier = await addTeammate(api, base, "Verifier", "QA reviewer");
+    const project = await addProject(api, base);
+    const task = (
+      await api.post(`${base}/tasks`, {
+        projectId: project.id,
+        title: "x",
+        assignee: { kind: "teammate", id: cody.id },
+      })
+    ).body;
+    // Round 1 is Cody's, and the Verifier reviews it.
+    await completeTaskRun(api, base, task.id, TEXT_DIFF);
+    const review = (await api.get(`${base}/tasks/${task.id}/review`)).body;
+    expect(review).toMatchObject({ round: 1, author: { name: "Cody" }, reviewer: { name: "Verifier" } });
+    for (const r of await liveRuns(api, base)) await api.post(`${base}/runs/${r.id}/stop`, {});
+
+    // A person hands the task to the Verifier and sends it back: round 2 is the Verifier's work.
+    expect(
+      (await api.patch(`${base}/tasks/${task.id}`, { assignee: { kind: "teammate", id: verifier.id } }))
+        .status,
+    ).toBe(200);
+    const sentBack = await api.post(`${base}/reviews/${review.id}/request-changes`, { summary: "Redo it." });
+    expect(sentBack.status).toBe(200);
+    const redo = await claim(sentBack.body.restarted.runId);
+    const asVerifier = board.api(redo.token);
+    await asVerifier.post(`/api/worker/runs/${sentBack.body.restarted.runId}/artifacts`, {
+      path: "changes.diff",
+      kind: "diff",
+      content: TEXT_DIFF.replace('+    "active": false,\n', ""),
+    });
+    expect(
+      (
+        await asVerifier.post(`/api/worker/runs/${sentBack.body.restarted.runId}/complete`, {
+          status: "completed",
+          summary: "Redone.",
+        })
+      ).status,
+    ).toBe(200);
+    const round2 = (await api.get(`${base}/reviews/${review.id}`)).body;
+    expect(round2).toMatchObject({ round: 2, status: "open", reviewer: { name: "Verifier" } });
+
+    // Still the assigned reviewer, the Verifier cannot approve or send back their own round.
+    const reviewRun = (await liveRuns(api, base)).find((r) => r.kind === "review")!;
+    expect(reviewRun.teammateId).toBe(verifier.id);
+    const vclient = await connect((await claim(reviewRun.id)).token);
+    const own = await vclient.callTool({ name: "board_approve", arguments: {} });
+    expect(own.isError).toBe(true);
+    expect(text(own)).toMatch(/author cannot decide/);
+    expect(text(await vclient.callTool({ name: "board_request_changes", arguments: {} }))).toMatch(
+      /author cannot decide/,
+    );
+    await vclient.close();
+    expect((await api.get(`${base}/tasks/${task.id}`)).body.status).toBe("review");
+  });
+
   it("without a reviewer teammate the review waits for a person; approve marks Done and a veto undoes it", async () => {
     const { api, base } = await seedCompany(board, "rv4@example.com");
     const cody = await addTeammate(api, base, "Cody");
