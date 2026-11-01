@@ -324,14 +324,8 @@ const repoUrl = z
       return true; // not a URL at all, which the check above reports
     }
   }, "a repository URL carries no credentials: the worker's git token is named in its environment");
-/** The branch the board opens a task's pull request from (a merge request on GitLab). */
-export const boardBranch = (taskNumber: number): string => `rosterdock/task-${taskNumber}`;
-/**
- * `rosterdock` or under `rosterdock/`, however it is written: the board's own branches, the only ones it
- * writes. `rosterdock` itself counts: git cannot hold it beside `rosterdock/task-N`.
- */
-export const isBoardBranch = (name: string): boolean =>
-  /^(refs\/heads\/)?rosterdock(\/|$)/i.test(name.trim());
+/** Under `rosterdock/`, however it is written: the board's own branches, the only ones it writes. */
+export const isBoardBranch = (name: string): boolean => /^(refs\/heads\/)?rosterdock\//i.test(name.trim());
 /** A project's default branch, where its pull requests go: never one the board writes. */
 const branch = z
   .string()
@@ -340,7 +334,7 @@ const branch = z
   .max(120)
   .refine(
     (b) => !isBoardBranch(b),
-    "a default branch is never rosterdock or under rosterdock/: the board writes its own branches there",
+    "a default branch is never under rosterdock/: the board writes its own branches there",
   );
 
 export const CreateProjectSchema = z.object({
