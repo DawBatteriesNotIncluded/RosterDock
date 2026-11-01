@@ -798,11 +798,34 @@ export async function resolveComment(
 }
 
 /**
- * Who may decide: never the author; a teammate only as the assigned reviewer;
- * a person with a deciding role (the route guard already checked the matrix).
+ * Whether the actor did the work of any round: round 1's author, kept on the review, or a teammate whose
+ * task run on the task completed, as every round's run did.
  */
-export function assertCanDecide(review: ReviewRow, actor: ActorRef, role: Role): void {
-  if (review.author_kind === actor.kind && review.author_id === actor.id)
+async function authoredARound(
+  db: Queryable,
+  review: Pick<ReviewRow, "task_id" | "author_kind" | "author_id">,
+  actor: ActorRef,
+): Promise<boolean> {
+  if (review.author_kind === actor.kind && review.author_id === actor.id) return true;
+  if (actor.kind !== "teammate") return false;
+  const res = await db.query(
+    "SELECT 1 FROM runs WHERE task_id = $1 AND kind = 'task' AND status = 'completed' AND teammate_id = $2 LIMIT 1",
+    [review.task_id, actor.id],
+  );
+  return !!res.rowCount;
+}
+
+/**
+ * Who may decide: never the author of any round; a teammate only as the assigned
+ * reviewer; a person with a deciding role (the route guard already checked the matrix).
+ */
+export async function assertCanDecide(
+  db: Queryable,
+  review: ReviewRow,
+  actor: ActorRef,
+  role: Role,
+): Promise<void> {
+  if (await authoredARound(db, review, actor))
     throw new HttpError(403, "the author cannot decide their own review");
   if (actor.kind === "teammate") {
     if (review.reviewer_kind !== "teammate" || review.reviewer_id !== actor.id)
@@ -823,7 +846,7 @@ export async function scoreReview(
 ): Promise<ReviewRow> {
   const { result } = await mutate(db, companyId, actor, async (ctx) => {
     const review = await loadReview(ctx.client, companyId, reviewId, true);
-    assertCanDecide(review, actor, role);
+    await assertCanDecide(ctx.client, review, actor, role);
     if (review.status === "approved") throw new HttpError(409, "this review is approved");
     const task = (
       await ctx.client.query<{ criteria: Criterion[] }>("SELECT criteria FROM tasks WHERE id = $1", [
@@ -894,7 +917,7 @@ export async function requestChanges(
 ): Promise<ReviewRow> {
   const { result } = await mutate(db, companyId, actor, async (ctx) => {
     const review = await loadReview(ctx.client, companyId, reviewId, true);
-    assertCanDecide(review, actor, role);
+    await assertCanDecide(ctx.client, review, actor, role);
     if (review.status !== "open")
       throw new HttpError(409, `this review is ${review.status.replace("_", " ")}`);
     const updated = (
@@ -1055,7 +1078,7 @@ export async function approveReview(
 ): Promise<{ review: ReviewRow; pullRequestId: string | null }> {
   const { result } = await mutate(db, companyId, actor, async (ctx) => {
     const review = await loadReview(ctx.client, companyId, reviewId, true);
-    assertCanDecide(review, actor, role);
+    await assertCanDecide(ctx.client, review, actor, role);
     if (review.status === "approved") throw new HttpError(409, "this review is already approved");
     const task = (
       await ctx.client.query<{ status: string; number: number; title: string }>(
