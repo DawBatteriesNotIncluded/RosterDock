@@ -43,7 +43,7 @@
 <header>
   <div class="eyebrow">Build plan · September 2026 · a dock for a roster of AI teammates</div>
   <h1>RosterDock</h1>
-  <p class="lede">RosterDock is an AI company platform. This is what we are building, why the current repo is not the base, how the new system is shaped, and the milestones that take it from an empty repository to a Helm chart a customer can install.</p>
+  <p class="lede">RosterDock is an AI company platform. This is what we are building, why the current repo is not the base, how the new system is shaped, and the milestones that take it from an empty repository to a Helm chart a customer can install. From there the plan goes on to companies that run themselves, and instances many people share.</p>
   <div class="toc">
     <a href="#what">What we are building</a><a href="#story">A day in the product</a><a href="#nouns">Core concepts</a><a href="#peter">Peter</a><a href="#borrowed">Borrowed ideas</a><a href="#rules">Rules that never soften</a><a href="#arch">Architecture</a><a href="#data">Data model</a><a href="#salvage">Salvage and drop</a><a href="#milestones">Milestones</a><a href="#providers">Model providers</a><a href="#decisions">Decisions needed</a><a href="#risks">Risks</a><a href="#start">First week</a>
   </div>
@@ -275,11 +275,11 @@
   <ul class="small">
     <li>A real goal on Claude Code to a pull request first; what it breaks becomes slices. Runs get a shell, and files with CRLF line endings, text that is not UTF-8 and file modes survive into the pull request.</li>
     <li>Pause and Resume per company. Budgets stop a run mid-way, from the usage its heartbeat reports.</li>
-    <li>Rules: enforced rules set in forms (tools, web domains, repositories and branches, paths, spend, hiring limits, firing thresholds, and approval rules that bring a person back for named changes), and guidance every teammate reads. Company, department and project levels, each only narrowing. A "Big changes need a person" starter set.</li>
+    <li>Rules: enforced rules set in forms (tools, web domains, repositories and branches, paths, spend, hiring limits, firing thresholds, and sign-off rules that bring a person back for named changes), and guidance every teammate reads. Company, department and project levels, each only narrowing. A "Big changes need a person" starter set.</li>
     <li>Tags on teammates. Reviews go to teammates tagged <code>reviewer</code>; Peter assigns by tags and load.</li>
     <li>Peter staffs the company: work goes to the teammates it has, and for a function it lacks he adds the department and hires into it, each hire with a unique name and tags. Hires stay. He fires a teammate who goes unused or misses the owner's thresholds, which keeps the company inside its limit.</li>
     <li>The board merges an approved pull request whose tests are green, on GitHub and GitLab; a veto after a merge opens a revert.</li>
-    <li>The autonomy switch: per company, off by default, the company owner's alone. With it on, no person reviews, merges or approves a live write, except where an approval rule says so. Every write keeps its hash and its record, approved by the owner who turned it on.</li>
+    <li>The autonomy switch: per company, off by default, the company owner's alone. With it on, no person reviews, merges or approves a live write, except where a sign-off rule says so. Every write keeps its hash and its record, approved by the owner who turned it on.</li>
   </ul>
   <p class="small"><strong>Demo:</strong> a company with only Peter, autonomy on, one typed goal: Peter hires the team, they build and review, the board merges; a migration waits for a person; a marketing goal adds a Marketing department; a teammate who misses expectations is fired and replaced. <strong>Done when:</strong> a goal goes from typed to merged with nobody touching it, on a team Peter chose and hired. Slices and decisions: <code>docs/m7.md</code>.</p></div>
 
@@ -409,7 +409,7 @@
   <li><strong>Protocol drift.</strong> v1 shipped three live-only bugs because tests echoed the adapter's assumptions. Adapters are tested against recorded real responses.</li>
   <li><strong>Scope creep.</strong> v1 grew 117 commits in one week and lost coherence. One milestone at a time; anything not in the current milestone goes on the list, not in the tree.</li>
   <li><strong>Docs rot.</strong> A route or concept lands with its doc line in the same commit, or it does not land.</li>
-  <li><strong>Unwatched autonomy.</strong> A company on full autonomy merges and writes with nobody watching. Enforced rules, approval rules that bring a person back for named changes, Pause, budgets that stop a run mid-way, and every write still bound to its hash and recorded (M7).</li>
+  <li><strong>Unwatched autonomy.</strong> A company on full autonomy merges and writes with nobody watching. Enforced rules, sign-off rules that bring a person back for named changes, Pause, budgets that stop a run mid-way, and every write still bound to its hash and recorded (M7).</li>
   <li><strong>Hiring sprawl.</strong> Peter hiring past need. A limit per company, firing on the owner's thresholds, and every hire and firing an event (M7).</li>
 </ul>
 
