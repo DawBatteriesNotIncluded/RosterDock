@@ -18,5 +18,6 @@ Start with the [project README](../README.md) for what RosterDock is and the fre
 - `plan.html`, the plan, and `prototype.html`, the visual spec: each is one self-contained file to open in a
   browser from a clone (GitHub shows only their source)
 - [`m0.md`](m0.md) to [`m6.md`](m6.md): the plan's milestones, each with its design notes and demo script
+- [`m7.md`](m7.md) and [`m8.md`](m8.md): the next two, planned: full autonomy, then shared instances
 - [`backlog.md`](backlog.md): what waits outside the current milestone
 - [`releasing.md`](releasing.md): how a release is cut
