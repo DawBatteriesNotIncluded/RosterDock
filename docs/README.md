@@ -20,3 +20,5 @@ Start with the [project README](../README.md) for what RosterDock is and the fre
 - [`m0.md`](m0.md) to [`m6.md`](m6.md): the plan's milestones, each with its design notes and demo script
 - [`backlog.md`](backlog.md): what waits outside the current milestone
 - [`releasing.md`](releasing.md): how a release is cut
+- [`agents/`](agents/): how the engineering agent skills are set up here: the issue tracker, the triage labels,
+  and where terms and decisions live

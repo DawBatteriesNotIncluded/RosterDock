@@ -21,6 +21,7 @@ browser). The plan changes only in that document, never in a chat message.
 | `deploy/demo`            | The demo companies' seed drives and guides (Lighthouse, Cirrus); `deploy/scripts/demo.mjs` sets one up on a board.    |
 | `deploy/scripts`         | `smoke.sh`: a throwaway install that checks the chart answers; `local-cluster.sh`: a kind cluster that stays.         |
 | `docs/`                  | Plan, prototype, the install, operator and security guides, backlog, and the milestones' design notes.                |
+| `docs/agents`            | How the engineering agent skills are set up here: the issue tracker, the triage labels and the domain docs.           |
 
 ## Commands
 
@@ -101,3 +102,22 @@ Product: RosterDock. Package scope `@rosterdock/*`. Chart `rosterdock`. Images `
 `DawBatteriesNotIncluded/RosterDock`. Until 2026-10-15 the product was Pharo (settings `PHAROS_*`); nothing
 reads the old names. Teammate names (Peter, Cody, Verifier, Ricky, Brody, Archy, Reporter, Finn) are the
 built-in personas' names and stay.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `DawBatteriesNotIncluded/RosterDock`, through the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default labels, each named for its role: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context (one vocabulary for the whole repo), kept in the plan. No skill creates `GLOSSARY.md` or
+`docs/adr/`: where `domain-modeling` or `improve-codebase-architecture` would add a term to a glossary or record an
+ADR, it adds a row to Core concepts (`docs/plan.html#nouns`) or writes the decision where its work keeps decisions
+(the current milestone's `docs/m*.md`, or the Decided table of a plan section without one). See
+`docs/agents/domain.md`.
