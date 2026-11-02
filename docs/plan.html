@@ -279,7 +279,7 @@
     <li>Tags on teammates. Reviews go to teammates tagged <code>reviewer</code>; Peter assigns by tags and load.</li>
     <li>Peter staffs the company: work goes to the teammates it has, and for a function it lacks he adds the department and hires into it, each hire with a unique name and tags. Hires stay. He fires a teammate who goes unused or misses the owner's thresholds, which keeps the company inside its limit.</li>
     <li>The board merges an approved pull request whose tests are green, on GitHub and GitLab; a veto after a merge opens a revert.</li>
-    <li>The autonomy switch: per company, off by default, the owner's alone. With it on, no person reviews, merges or approves a live write, except where an approval rule says so. Every write keeps its hash and its record, approved by the owner who turned it on.</li>
+    <li>The autonomy switch: per company, off by default, the company owner's alone. With it on, no person reviews, merges or approves a live write, except where an approval rule says so. Every write keeps its hash and its record, approved by the owner who turned it on.</li>
   </ul>
   <p class="small"><strong>Demo:</strong> a company with only Peter, autonomy on, one typed goal: Peter hires the team, they build and review, the board merges; a migration waits for a person; a marketing goal adds a Marketing department; a teammate who misses expectations is fired and replaced. <strong>Done when:</strong> a goal goes from typed to merged with nobody touching it, on a team Peter chose and hired. Slices and decisions: <code>docs/m7.md</code>.</p></div>
 
@@ -287,14 +287,14 @@
   <ul class="small">
     <li>Accounts as n8n has them: a first-run screen makes the Owner (or env vars, or a Secret on Kubernetes); Owner, Admin and Member on the instance; invites and password resets by email or by a copied link; authenticator codes the Owner can require; OpenID Connect as an option.</li>
     <li>Access per company: Owners and Admins create companies and add people with company roles, and a Member sees only their own companies. Rules at the instance above every company, and the instance's say on autonomy.</li>
-    <li>Isolation between companies: a worker database role that reaches only the queue, the endpoint seal, repository tests as another user with a fresh HOME per run, teammate tokens that can be listed and revoked, and stdio servers out of the board's process.</li>
+    <li>Isolation between companies: a worker database role that reaches only the queue, the endpoint seal, repository tests as another user, a fresh HOME and TMPDIR for every run and its process group ended with it, teammate tokens that can be listed and revoked, and stdio servers that no longer run as the board.</li>
     <li>A Docker install for real use: <code>docker compose up</code> with accounts, secrets made on first start, and a worker built on the machine with Claude Code. The chart requires OpenID Connect or an Owner from a Secret.</li>
   </ul>
   <p class="small"><strong>Demo:</strong> on a fresh machine, <code>docker compose up</code>, the Owner, a Member invited by link, two companies with different owners on their own keys, an autonomous goal in each; the Member of one sees nothing of the other. <strong>Done when:</strong> someone who is not you installs it with Docker from the docs and runs a goal. Slices and decisions: <code>docs/m8.md</code>.</p></div>
 
 <h3>After M6, in this order</h3>
 <ol>
-  <li>Land what is open: the pull requests waiting on <code>main</code>, among them slice 4 of Company model providers and two that M7 leans on (#77, the default-branch guard; #80, a teammate approving its own work on a later review round), then the UI audit and the agent-skills setup (<code>docs/agents/</code>).</li>
+  <li>Before M7: slice 4 of Company model providers, and two fixes M7 leans on: the default-branch guard, and a teammate never approving its own work on a later review round.</li>
   <li>M7.</li>
   <li>Company model providers, slices 5 to 7: a company's own Anthropic key in use, the gateway, and Claude Code through it. M8 needs every company on an instance thinking with its own key.</li>
   <li>M8.</li>
