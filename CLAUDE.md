@@ -21,6 +21,7 @@ browser). The plan changes only in that document, never in a chat message.
 | `deploy/demo`            | The demo companies' seed drives and guides (Lighthouse, Cirrus); `deploy/scripts/demo.mjs` sets one up on a board.    |
 | `deploy/scripts`         | `smoke.sh`: a throwaway install that checks the chart answers; `local-cluster.sh`: a kind cluster that stays.         |
 | `docs/`                  | Plan, prototype, the install, operator and security guides, backlog, and the milestones' design notes.                |
+| `docs/agents`            | How the engineering agent skills are set up here: the issue tracker, the triage labels and the domain docs.           |
 
 ## Commands
 
@@ -115,6 +116,8 @@ The five default labels, each named for its role: `needs-triage`, `needs-info`, 
 
 ### Domain docs
 
-Single-context, kept in the plan: terms in Core concepts (`docs/plan.html#nouns`), decisions in the plan and in
-the milestones' `docs/m*.md`. There is no `GLOSSARY.md` or `docs/adr/`, and `domain-modeling` creates neither.
-See `docs/agents/domain.md`.
+Single-context (one vocabulary for the whole repo), kept in the plan. No skill creates `GLOSSARY.md` or
+`docs/adr/`: where `domain-modeling` or `improve-codebase-architecture` would add a term to a glossary or record an
+ADR, it adds a row to Core concepts (`docs/plan.html#nouns`) or writes the decision where its work keeps decisions
+(the current milestone's `docs/m*.md`, or the Decided table of a plan section without one). See
+`docs/agents/domain.md`.

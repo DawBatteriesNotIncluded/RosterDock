@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Tickets for this repo live as GitHub issues: one per slice of the current milestone. Specs and decisions do not: the plan holds them (`docs/plan.html` and the milestones' `docs/m*.md`), and work outside the current milestone goes in `docs/backlog.md` (`CLAUDE.md`). A ticket links to the plan section it builds. Use the `gh` CLI for all operations.
 
 ## Conventions
 
@@ -28,7 +28,7 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 ## When a skill says "publish to the issue tracker"
 
-Create a GitHub issue.
+Create a GitHub issue for a ticket. A spec goes into the plan instead (`docs/plan.html`, or the milestone's `docs/m*.md`), and its tickets link to it.
 
 ## When a skill says "fetch the relevant ticket"
 
@@ -36,7 +36,7 @@ Read it as in **Read an issue** above.
 
 ## Wayfinding operations
 
-Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
+Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets. A decision the map settles is written into the plan (the milestone's `docs/m*.md`) when it settles; the map's Decisions-so-far points there.
 
 - **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
 - **Child ticket**: an issue linked to the map as a GitHub sub-issue (see **Make an issue a sub-issue of a parent**). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
