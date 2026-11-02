@@ -101,3 +101,20 @@ Product: RosterDock. Package scope `@rosterdock/*`. Chart `rosterdock`. Images `
 `DawBatteriesNotIncluded/RosterDock`. Until 2026-10-15 the product was Pharo (settings `PHAROS_*`); nothing
 reads the old names. Teammate names (Peter, Cody, Verifier, Ricky, Brody, Archy, Reporter, Finn) are the
 built-in personas' names and stay.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `DawBatteriesNotIncluded/RosterDock`, through the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default labels, each named for its role: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context, kept in the plan: terms in Core concepts (`docs/plan.html#nouns`), decisions in the plan and in
+the milestones' `docs/m*.md`. There is no `GLOSSARY.md` or `docs/adr/`, and `domain-modeling` creates neither.
+See `docs/agents/domain.md`.
