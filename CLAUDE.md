@@ -42,7 +42,8 @@ deploy/scripts/local-cluster.sh   # a kind cluster rosterdock that stays: Postgr
 The guides: `docs/install.md` (a fresh cluster to a working board), `docs/operator.md` (the day after),
 `docs/security.md` (what the platform guarantees and what you own).
 
-`docs/m0.md` to `docs/m6.md` are the plan's milestones, each with its design notes and demo script.
+`docs/m0.md` to `docs/m6.md` are the plan's milestones, each with its design notes and demo script;
+`docs/m7.md` (full autonomy) and `docs/m8.md` (shared instances) are the next two, planned.
 
 Environment for the board lives in `apps/board/.env.example`. Copy it to `apps/board/.env` for local dev.
 Dev login is on only when `ROSTERDOCK_DEV_LOGIN=1`.

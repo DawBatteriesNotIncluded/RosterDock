@@ -271,6 +271,36 @@
   </ul>
   <p class="small"><strong>Demo:</strong> install into a clean cluster from the chart and run the M4 demo there. <strong>Done when:</strong> someone who is not you does it from the docs.</p></div>
 
+<div class="card"><div class="ms"><span class="n">M7</span><h3 style="margin:0">Full autonomy <span class="muted small">· decided 2026-11-02</span></h3></div>
+  <ul class="small">
+    <li>A real goal on Claude Code to a pull request first; what it breaks becomes slices. Runs get a shell, and files with CRLF line endings, text that is not UTF-8 and file modes survive into the pull request.</li>
+    <li>Pause and Resume per company. Budgets stop a run mid-way, from the usage its heartbeat reports.</li>
+    <li>Rules: enforced rules set in forms (tools, web domains, repositories and branches, paths, spend, hiring limits, firing thresholds, and approval rules that bring a person back for named changes), and guidance every teammate reads. Company, department and project levels, each only narrowing. A "Big changes need a person" starter set.</li>
+    <li>Tags on teammates. Reviews go to teammates tagged <code>reviewer</code>; Peter assigns by tags and load.</li>
+    <li>Peter staffs the company: work goes to the teammates it has, and for a function it lacks he adds the department and hires into it, each hire with a unique name and tags. Hires stay. He fires a teammate who goes unused or misses the owner's thresholds, which keeps the company inside its limit.</li>
+    <li>The board merges an approved pull request whose tests are green, on GitHub and GitLab; a veto after a merge opens a revert.</li>
+    <li>The autonomy switch: per company, off by default, the owner's alone. With it on, no person reviews, merges or approves a live write, except where an approval rule says so. Every write keeps its hash and its record, approved by the owner who turned it on.</li>
+  </ul>
+  <p class="small"><strong>Demo:</strong> a company with only Peter, autonomy on, one typed goal: Peter hires the team, they build and review, the board merges; a migration waits for a person; a marketing goal adds a Marketing department; a teammate who misses expectations is fired and replaced. <strong>Done when:</strong> a goal goes from typed to merged with nobody touching it, on a team Peter chose and hired. Slices and decisions: <code>docs/m7.md</code>.</p></div>
+
+<div class="card"><div class="ms"><span class="n">M8</span><h3 style="margin:0">Shared instances <span class="muted small">· decided 2026-11-02</span></h3></div>
+  <ul class="small">
+    <li>Accounts as n8n has them: a first-run screen makes the Owner (or env vars, or a Secret on Kubernetes); Owner, Admin and Member on the instance; invites and password resets by email or by a copied link; authenticator codes the Owner can require; OpenID Connect as an option.</li>
+    <li>Access per company: Owners and Admins create companies and add people with company roles, and a Member sees only their own companies. Rules at the instance above every company, and the instance's say on autonomy.</li>
+    <li>Isolation between companies: a worker database role that reaches only the queue, the endpoint seal, repository tests as another user with a fresh HOME per run, teammate tokens that can be listed and revoked, and stdio servers out of the board's process.</li>
+    <li>A Docker install for real use: <code>docker compose up</code> with accounts, secrets made on first start, and a worker built on the machine with Claude Code. The chart requires OpenID Connect or an Owner from a Secret.</li>
+  </ul>
+  <p class="small"><strong>Demo:</strong> on a fresh machine, <code>docker compose up</code>, the Owner, a Member invited by link, two companies with different owners on their own keys, an autonomous goal in each; the Member of one sees nothing of the other. <strong>Done when:</strong> someone who is not you installs it with Docker from the docs and runs a goal. Slices and decisions: <code>docs/m8.md</code>.</p></div>
+
+<h3>After M6, in this order</h3>
+<ol>
+  <li>Land what is open: the pull requests waiting on <code>main</code>, among them slice 4 of Company model providers and two that M7 leans on (#77, the default-branch guard; #80, a teammate approving its own work on a later review round), then the UI audit and the agent-skills setup (<code>docs/agents/</code>).</li>
+  <li>M7.</li>
+  <li>Company model providers, slices 5 to 7: a company's own Anthropic key in use, the gateway, and Claude Code through it. M8 needs every company on an instance thinking with its own key.</li>
+  <li>M8.</li>
+  <li>Company model providers, slices 8 to 11.</li>
+</ol>
+
 <h2 id="providers">Company model providers</h2>
 <p class="muted small">After M6 · decided 2026-10-22</p>
 <p>Until now every teammate thinks with the operator's own model keys. A company can bring its own model account instead, and choose for each teammate which account it thinks with. The board's own models stay the default: nothing about an existing teammate changes until someone picks a provider for it, and nothing is migrated.</p>
@@ -315,7 +345,7 @@
 <h3>What remains, and why we accept it</h3>
 <ul>
   <li><strong>A stolen run token</strong> spends that company's quota on the run's provider and pinned model, on the allowed paths only, until the run ends. It never reveals the key. Code in a worker pod can read a live run's token; binding a token to the pod that claimed its run is in the backlog.</li>
-  <li><strong>Every worker pod holds the worker token and <code>DATABASE_URL</code>.</strong> With them, code could claim another company's queued run, or repoint a compatible provider's endpoint so the gateway sends the key to its own host. The other kinds' hosts are fixed or derived from the region, and checked again on every request. The endpoint seal and a worker database role limited to the queue close it, both in the backlog; until then, companies that must not reach each other use separate boards, as <code>docs/security.md</code> already says.</li>
+  <li><strong>Every worker pod holds the worker token and <code>DATABASE_URL</code>.</strong> With them, code could claim another company's queued run, or repoint a compatible provider's endpoint so the gateway sends the key to its own host. The other kinds' hosts are fixed or derived from the region, and checked again on every request. The endpoint seal and a worker database role limited to the queue close it, both in M8; until then, companies that must not reach each other use separate boards, as <code>docs/security.md</code> already says.</li>
   <li><strong>The board holds every company's keys</strong>, as it holds connection secrets today, and prompts and answers pass through its memory. Neither is stored or logged.</li>
 </ul>
 
@@ -353,6 +383,7 @@
   <tr><td>Currencies</td><td>One per company; a second is refused.</td></tr>
   <tr><td>Compatible servers without the Responses API</td><td>They serve Peter only, not Codex teammates, and the form says so.</td></tr>
   <tr><td>Where Peter's brain is picked</td><td>On his page under Teammates, as every teammate's is: his engine there is what he and the department leads plan with (Automatic, the Claude Code CLI, the Codex CLI, the Anthropic API, or no model). Settings has no Peter tab. Decided 2026-10-23.</td></tr>
+  <tr><td>The order after slice 4</td><td>Slices 5 to 7 after M7 and before M8, which needs every company on an instance thinking with its own key; slices 8 to 11 after M8 (Milestones, After M6). Decided 2026-11-02.</td></tr>
 </table></div>
 
 <h2 id="decisions">Decisions needed before M0</h2>
@@ -378,6 +409,8 @@
   <li><strong>Protocol drift.</strong> v1 shipped three live-only bugs because tests echoed the adapter's assumptions. Adapters are tested against recorded real responses.</li>
   <li><strong>Scope creep.</strong> v1 grew 117 commits in one week and lost coherence. One milestone at a time; anything not in the current milestone goes on the list, not in the tree.</li>
   <li><strong>Docs rot.</strong> A route or concept lands with its doc line in the same commit, or it does not land.</li>
+  <li><strong>Unwatched autonomy.</strong> A company on full autonomy merges and writes with nobody watching. Enforced rules, approval rules that bring a person back for named changes, Pause, budgets that stop a run mid-way, and every write still bound to its hash and recorded (M7).</li>
+  <li><strong>Hiring sprawl.</strong> Peter hiring past need. A limit per company, firing on the owner's thresholds, and every hire and firing an event (M7).</li>
 </ul>
 
 <h2 id="start">The first week, concretely</h2>

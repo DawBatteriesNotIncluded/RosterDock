@@ -14,20 +14,9 @@ scheduled; delete it when it ships.
 - A run's claim reads object-store text (a review's diff, and the outputs of the tasks it depends on) inside the
   claim's transaction; with a bucket that answers slowly the transaction waits on the network. Read first, then
   claim, if it ever shows.
-- A stdio connection's server runs inside the board pod as the board, so it can read the board's environment,
-  a file secret store and the service account token (`docs/security.md`, What they can reach). Run those
-  servers as another user, or in a sidecar, without any of them.
-- The worker fleet is shared by every company on a board, and code a company controls (the repository's
-  `test` script, an engine's shell) can read the worker's environment, the board's `DATABASE_URL` included
-  (`docs/security.md`, Companies on one board). Give the worker a database role of its own that reaches
-  only the pg-boss schema (`pgboss`); run the tests as another user, so `/proc` does not show them the
-  worker's environment; give every run a fresh HOME and TMPDIR; and kill the engine's process group when it
-  ends, as the test step's is, so nothing a run starts outlives it.
 - With `worker.podMetrics.enabled` or `board.oauth.enabled`, the network policies open ports 443 and 6443 to
   any address, for the API server, in every worker pool too. Take the API server's address instead (the
   `kubernetes` Service's endpoints, or a value the operator sets).
-- A teammate token an owner or admin mints lasts up to 30 days and no route revokes it. Add a list and a
-  revoke in Settings, as events.
 - Costs' "If billed the other way" shows US$0.00 for a teammate on a seat with no price set; say the seat is
   unpriced instead.
 - Lint is not type-aware (`recommendedTypeChecked` is off, for speed), and `deploy/**` is ignored, so
@@ -63,9 +52,6 @@ scheduled; delete it when it ships.
   - A base-URL override for the Anthropic kind.
   - A budget that stops a run mid-way at the gateway, and budgets per provider.
   - The board's own model keys behind the gateway too, so no worker pod holds a model key.
-  - The endpoint seal: an HMAC, with a key only the board holds, over a provider's or a connection's company,
-    kind, endpoint, region and credential names, checked at every use, so a write to the database cannot
-    repoint where a key is sent. It belongs with the worker's own database role (the fleet line above).
   - Codex on the worker past 0.144.5 (0.157.1 adds `amazon-bedrock-runtime`), in a pull request that records
     the worker's fixtures again.
   - A price's currency is any three characters to the board (`ModelPriceInputSchema`), and a company's first
